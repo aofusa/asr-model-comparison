@@ -8,11 +8,14 @@ python-multipart>=0.0.9
 pydantic>=2.9.0
 
 # ASR Models
-faster-whisper>=1.0.3
-# Qwen3-ASR - official package (install separately if needed: pip install qwen-asr or follow official instructions)
-# transformers>=4.46.0   # For Voxtral Mini
-# torch>=2.4.0
-# torchaudio>=2.4.0
+# === Primary (start here) ===
+faster-whisper>=1.0.3          # Whisper models - best CPU support, start with this
+
+# === Future / heavier models ===
+# Qwen3-ASR (official package may differ - check https://github.com/QwenLM/Qwen3-ASR)
+# transformers>=4.46.0
+# torch>=2.5.0
+# torchaudio>=2.5.0
 
 # Audio processing
 pydub>=0.25.1
@@ -29,6 +32,6 @@ psutil>=6.0.0
 black>=24.10.0
 ruff>=0.7.0
 
-# Note: For full model support on specific hardware (AMD Radeon on ROG Ally X, Apple Silicon),
-# additional steps for torch CPU/ROCm/MPS installation may be required.
-# See README for platform-specific installation instructions.
+# Platform-specific installation instructions:
+# See INSTALL.md for CPU-only setup on ROG Ally X (AMD) and Apple Silicon.
+# The basic TDD environment (no real ASR models) is already usable without these.
