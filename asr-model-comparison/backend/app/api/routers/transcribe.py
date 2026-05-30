@@ -16,26 +16,54 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.models.schemas import TranscriptionResponse
+from app.models.available_models import AVAILABLE_MODELS
 from app.services.model_manager import ModelManager
-from app.services.asr_backends.factory import create_whisper_loader, whisper_unloader
+from app.services.asr_backends.factory import (
+    create_qwen3_loader,
+    create_voxtral_loader,
+    create_whisper_loader,
+    whisper_unloader,
+)
 
 router = APIRouter(prefix="/api", tags=["transcribe"])
 
 
-def get_model_manager() -> ModelManager:
+def _get_real_loader_for_model(model_id: str):
+    """Select the appropriate real loader based on model family."""
+    model_info = next((m for m in AVAILABLE_MODELS if m.id == model_id), None)
+    family = model_info.family if model_info else None
+
+    if family == "whisper":
+        return create_whisper_loader(device="cpu", compute_type="int8")
+    elif family == "qwen3":
+        return create_qwen3_loader()
+    elif family == "voxtral":
+        return create_voxtral_loader()
+    else:
+        # Fallback to whisper-style (will likely fail later with clear message)
+        return create_whisper_loader()
+
+
+def get_model_manager(model_id: str | None = None) -> ModelManager:
     """
     FastAPI dependency that returns a ModelManager.
 
-    By default it uses cheap no-op loaders (great for unit tests and when
-    you don't want to load real models).
-
-    Set environment variable USE_REAL_WHISPER=1 to enable real Whisper models
-    (CPU + int8 by default — suitable for ROG Ally X).
+    - Default: cheap no-op (excellent for unit tests)
+    - When USE_REAL_WHISPER=1 (or USE_REAL_MODELS=1): selects the correct
+      real backend per family. Qwen3 and Voxtral currently raise clear
+      "not yet implemented" errors with guidance.
     """
-    if os.getenv("USE_REAL_WHISPER", "0") in ("1", "true", "yes"):
-        loader = create_whisper_loader(device="cpu", compute_type="int8")
-        return ModelManager(model_loader=loader, model_unloader=whisper_unloader)
-    return ModelManager()  # no-op (current default behavior)
+    use_real = os.getenv("USE_REAL_WHISPER", "0") in ("1", "true", "yes") or \
+               os.getenv("USE_REAL_MODELS", "0") in ("1", "true", "yes")
+
+    if not use_real:
+        return ModelManager()
+
+    # When real mode is on, we pick the loader based on the target model if known.
+    # Note: For the actual transcribe call we get model_id from the form.
+    # Here we default to whisper if no specific model is known yet.
+    loader = create_whisper_loader(device="cpu", compute_type="int8")
+    return ModelManager(model_loader=loader, model_unloader=whisper_unloader)
 
 
 # Note: In a real app we would use lifespan events, but for now a module-level

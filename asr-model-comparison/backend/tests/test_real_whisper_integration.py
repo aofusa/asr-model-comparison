@@ -100,9 +100,16 @@ async def test_model_manager_can_use_real_whisper_loader():
     The ModelManager (already proven with mocks) must be able to accept
     a real faster-whisper loader and still obey the single-model rule.
     """
-    async def real_whisper_loader(internal_name: str):
-        # internal_name will be "tiny" for our mapping
-        return WhisperModel(internal_name, device="cpu", compute_type="int8")
+    _size_map = {
+        "whisper-tiny": "tiny",
+        "whisper-small": "small",
+        "whisper-medium": "medium",
+        "whisper-large-v3-turbo": "large-v3-turbo",
+    }
+
+    async def real_whisper_loader(model_id: str):
+        size = _size_map.get(model_id, model_id)
+        return WhisperModel(size, device="cpu", compute_type="int8")
 
     async def real_unloader(instance: Any):
         # faster-whisper models don't need explicit cleanup beyond GC + cache clear

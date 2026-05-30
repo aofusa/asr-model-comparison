@@ -6,6 +6,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from app.services.asr_backends.qwen3_backend import Qwen3ASRBackend
+from app.services.asr_backends.voxtral_backend import VoxtralBackend
 from app.services.asr_backends.whisper_backend import WhisperBackend
 
 
@@ -21,15 +23,13 @@ def create_whisper_loader(
         await manager.load_model("whisper-tiny")
     """
 
-    async def whisper_loader(internal_name: str) -> WhisperBackend:
-        # internal_name here is our public model_id (e.g. "whisper-tiny")
-        # because we pass the public id from load_model
+    async def whisper_loader(model_id: str) -> WhisperBackend:
+        # model_id is the public id (e.g. "whisper-tiny")
         backend = WhisperBackend(
-            model_id=internal_name,
+            model_id=model_id,
             device=device,
             compute_type=compute_type,
         )
-        # Trigger lazy load immediately so errors happen at load time
         backend._ensure_loaded()  # type: ignore[attr-defined]
         return backend
 
@@ -56,3 +56,20 @@ async def whisper_unloader(instance: Any) -> None:
             torch.cuda.empty_cache()
     except Exception:
         pass
+
+
+def create_qwen3_loader(**kwargs) -> Callable[[str], Awaitable[Any]]:
+    async def qwen_loader(model_id: str) -> Qwen3ASRBackend:
+        backend = Qwen3ASRBackend(model_id=model_id, **kwargs)
+        # This will immediately raise a clear, helpful NotImplementedError
+        backend.transcribe(b"")
+        return backend
+    return qwen_loader
+
+
+def create_voxtral_loader(**kwargs) -> Callable[[str], Awaitable[Any]]:
+    async def voxtral_loader(model_id: str) -> VoxtralBackend:
+        backend = VoxtralBackend(model_id=model_id, **kwargs)
+        backend.transcribe(b"")
+        return backend
+    return voxtral_loader

@@ -68,21 +68,24 @@ class ModelManager:
 
         If a different model is already loaded, it is unloaded first.
         Loading the same model is a no-op (idempotent).
+
+        When using real model loaders, unsupported families (Qwen3, Voxtral)
+        will raise clear NotImplementedError from their backend.
         """
         if model_id not in self._valid_model_ids:
             raise ValueError(f"Unknown model id: {model_id}. Valid: {self._valid_model_ids}")
 
         if self._current_model_id == model_id:
-            # Already loaded — do nothing (important for performance)
             return
 
-        # Must unload previous model before loading a new one (core constraint)
+        # Always unload previous before attempting new load (core constraint)
         if self._current_model_id is not None:
             await self.unload_current()
 
-        # Perform the actual (expensive) load via injected loader
-        internal_name = self.MODEL_ID_TO_INTERNAL.get(model_id, model_id)
-        self._current_instance = await self._model_loader(internal_name)
+        # Pass the public model_id to the loader. The individual backend
+        # (WhisperBackend, Qwen3ASRBackend, etc.) is responsible for mapping
+        # to the library-specific identifier.
+        self._current_instance = await self._model_loader(model_id)
         self._current_model_id = model_id
 
     async def unload_current(self) -> None:
