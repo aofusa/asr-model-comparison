@@ -1,0 +1,34 @@
+# ASR Model Comparison Platform (AMCP) - Backend Dependencies
+# Python 3.12+
+
+# Web Framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+pydantic>=2.9.0
+
+# ASR Models
+faster-whisper>=1.0.3
+# Qwen3-ASR - official package (install separately if needed: pip install qwen-asr or follow official instructions)
+# transformers>=4.46.0   # For Voxtral Mini
+# torch>=2.4.0
+# torchaudio>=2.4.0
+
+# Audio processing
+pydub>=0.25.1
+
+# Testing (required for TDD)
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
+httpx>=0.27.0
+
+# Resource monitoring (optional, for VRAM/CPU tracking)
+psutil>=6.0.0
+
+# Code quality (per CLAUDE.md)
+black>=24.10.0
+ruff>=0.7.0
+
+# Note: For full model support on specific hardware (AMD Radeon on ROG Ally X, Apple Silicon),
+# additional steps for torch CPU/ROCm/MPS installation may be required.
+# See README for platform-specific installation instructions.

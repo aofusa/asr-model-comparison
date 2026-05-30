@@ -1,0 +1,110 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+backend/.venv/
+backend/venv/
+
+# FastAPI / Uvicorn
+*.log
+
+# Testing
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# ASR / ML Model caches (very large - do not commit)
+models/
+*.bin
+*.safetensors
+huggingface/
+torch/
+whisper/
+faster-whisper/
+~/.cache/huggingface/
+~/.cache/torch/
+__pycache__/
+*.pt
+*.pth
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.cache/
+frontend/.netlify/
+frontend/.vercel/
+frontend/.output/
+frontend/public/build/
+frontend/.svelte-kit/
+frontend/.qwik/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Logs
+logs/
+*.log
+backend/logs/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Audio test files (large binary - keep only small samples or use git-lfs)
+audio_samples/*.wav
+audio_samples/*.mp3
+audio_samples/*.m4a
+audio_samples/*.flac
+# Add a few small committed samples later if needed for CI
+!audio_samples/.gitkeep
+!audio_samples/README.md
+
+# Docker
+docker-compose.override.yml
+
+# Temporary
+tmp/
+temp/
+*.tmp
