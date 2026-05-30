@@ -12,7 +12,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routers import models_router
+from app.api.routers import models_router, transcribe_router
 
 app = FastAPI(
     title="ASR Model Comparison Platform (AMCP) API",
@@ -35,6 +35,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(models_router)
+app.include_router(transcribe_router)
 
 
 @app.get("/health")

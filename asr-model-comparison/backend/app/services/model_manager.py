@@ -99,6 +99,59 @@ class ModelManager:
             raise RuntimeError("No model is currently loaded. Call load_model() first.")
         return self._current_instance
 
+    async def transcribe(
+        self,
+        audio: bytes | str,
+        model_id: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """
+        High-level transcription entry point.
+
+        Ensures the requested model (or currently loaded one) is resident,
+        then delegates to the loaded engine's transcribe method.
+
+        Returns a dict containing at minimum {"text": str, "processing_time_seconds": float}.
+        Real implementations will populate more fields (language, segments, etc.).
+        """
+        import time
+
+        if model_id and model_id != self.current_model_id:
+            await self.load_model(model_id)
+
+        if not self.is_model_loaded:
+            # Auto-load first available model as last resort (for early dev)
+            first_model = next(iter(self._valid_model_ids))
+            await self.load_model(first_model)
+
+        start = time.perf_counter()
+
+        instance = await self.get_current_instance()
+
+        # The actual engine may expose .transcribe(audio, ...) or be a callable
+        if hasattr(instance, "transcribe"):
+            result = instance.transcribe(audio, **kwargs)
+            if hasattr(result, "__await__"):
+                result = await result
+        else:
+            # Fallback for our noop mock
+            result = {"text": f"[mock transcription from {self.current_model_id}]"}
+
+        elapsed = time.perf_counter() - start
+
+        if isinstance(result, dict):
+            result.setdefault("processing_time_seconds", elapsed)
+            result.setdefault("model_id", self.current_model_id)
+        else:
+            result = {
+                "text": str(result),
+                "model_id": self.current_model_id,
+                "processing_time_seconds": elapsed,
+            }
+
+        return result
+
+
     # --- Default safe no-op implementations (used when no real loader is provided) ---
 
     async def _default_noop_loader(self, internal_name: str) -> Any:

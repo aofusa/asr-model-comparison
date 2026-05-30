@@ -43,18 +43,22 @@ coverage.xml
 .pytest_cache/
 
 # ASR / ML Model caches (very large - do not commit)
-models/
-*.bin
-*.safetensors
+# Only match cache directories, not our source app/models/
+**/model_cache/
+**/models/*.bin
+**/models/*.safetensors
 huggingface/
 torch/
 whisper/
 faster-whisper/
-~/.cache/huggingface/
-~/.cache/torch/
+**/.cache/huggingface/
+**/.cache/torch/
 __pycache__/
 *.pt
 *.pth
+# Explicitly allow our Pydantic models directory
+!asr-model-comparison/backend/app/models/
+!asr-model-comparison/backend/app/models/*.py
 
 # Node / Frontend
 node_modules/
