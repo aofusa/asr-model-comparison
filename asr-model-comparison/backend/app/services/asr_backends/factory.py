@@ -37,9 +37,22 @@ def create_whisper_loader(
 
 
 async def whisper_unloader(instance: Any) -> None:
-    """Standard unloader for WhisperBackend instances."""
+    """Standard unloader for WhisperBackend instances (with strong memory cleanup)."""
     if hasattr(instance, "unload"):
         instance.unload()
     else:
-        # fallback
-        del instance
+        # fallback for any other object
+        try:
+            del instance
+        except Exception:
+            pass
+
+    # Extra aggressive cleanup for real model usage on memory-constrained hardware
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if hasattr(torch, "cuda"):
+            torch.cuda.empty_cache()
+    except Exception:
+        pass

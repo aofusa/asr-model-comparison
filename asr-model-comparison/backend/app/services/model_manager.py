@@ -99,6 +99,40 @@ class ModelManager:
             raise RuntimeError("No model is currently loaded. Call load_model() first.")
         return self._current_instance
 
+    def get_status(self) -> dict:
+        """
+        Return lightweight status information about the currently loaded model.
+
+        Used by the /api/status endpoint for UI feedback and debugging on
+        memory-constrained devices.
+        """
+        status: dict = {
+            "current_model_id": self._current_model_id,
+            "is_model_loaded": self.is_model_loaded,
+            "family": None,
+        }
+
+        if self._current_model_id:
+            # Try to enrich with family info
+            for m in AVAILABLE_MODELS:
+                if m.id == self._current_model_id:
+                    status["family"] = m.family
+                    break
+
+        # Memory usage (best effort, using psutil if available)
+        try:
+            import psutil
+            process = psutil.Process()
+            mem = process.memory_info()
+            status["memory"] = {
+                "rss_mb": round(mem.rss / (1024 * 1024), 1),
+                "vms_mb": round(mem.vms / (1024 * 1024), 1),
+            }
+        except Exception:
+            status["memory"] = {"note": "psutil not available or failed"}
+
+        return status
+
     async def transcribe(
         self,
         audio: bytes | str,
@@ -160,6 +194,17 @@ class ModelManager:
         return mock
 
     async def _default_noop_unloader(self, instance: Any) -> None:
-        """Placeholder unloader."""
-        # In real implementation this would do model.cpu(), del model, torch.cuda.empty_cache() etc.
-        return None
+        """Placeholder unloader with best-effort memory cleanup."""
+        try:
+            del instance
+        except Exception:
+            pass
+
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if hasattr(torch, "cuda"):
+                torch.cuda.empty_cache()
+        except Exception:
+            pass

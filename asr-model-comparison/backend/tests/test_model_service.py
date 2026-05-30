@@ -121,3 +121,53 @@ async def test_load_unknown_model_raises_error():
 
     with pytest.raises(ValueError, match="Unknown model"):
         await manager.load_model("non-existent-model-xyz")
+
+
+# ------------------------------------------------------------------
+# Strengthened real-model memory management tests (TDD for reinforcement)
+# ------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_unload_is_idempotent_and_safe(mock_loaders):
+    """Calling unload multiple times must be safe and not crash."""
+    manager = ModelManager(
+        model_loader=mock_loaders["load"],
+        model_unloader=mock_loaders["unload"],
+    )
+
+    await manager.load_model("whisper-tiny")
+    await manager.unload_current()
+    await manager.unload_current()  # second call must not raise
+    await manager.unload_current()
+
+    assert manager.current_model_id is None
+    assert manager.is_model_loaded is False
+
+
+@pytest.mark.asyncio
+async def test_switching_models_always_unloads_previous_even_on_error(mock_loaders):
+    """
+    Even if loading a new model fails, the previous model must have been unloaded.
+    This protects limited memory devices (ROG Ally X 24GB, M4 24GB).
+    """
+    async def failing_loader(name: str):
+        # The manager passes internal name; simulate failure for the qwen internal id
+        if "Qwen" in name or "qwen" in name.lower():
+            raise RuntimeError("Simulated model load failure for Qwen3")
+        return await mock_loaders["load"](name)
+
+    manager = ModelManager(
+        model_loader=failing_loader,
+        model_unloader=mock_loaders["unload"],
+    )
+
+    await manager.load_model("whisper-small")
+
+    with pytest.raises(RuntimeError, match="Simulated"):
+        await manager.load_model("qwen3-asr-0.6b")
+
+    # Previous model must have been unloaded before attempting the failing load
+    unload_events = [h for h in mock_loaders["history"] if h[0] == "unload"]
+    assert any("small" in str(e) for e in unload_events)
+    assert manager.current_model_id is None
+    assert manager.is_model_loaded is False

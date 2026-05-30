@@ -126,12 +126,24 @@ class WhisperBackend:
         return result
 
     def unload(self) -> None:
-        """Release the model to free memory (important for single-model rule)."""
+        """Release the model to free memory (important for single-model rule on 24GB devices)."""
         if self._model is not None:
-            # faster-whisper models are backed by CTranslate2; best we can do is delete
-            del self._model
+            try:
+                # faster-whisper / CTranslate2 models benefit from explicit deletion
+                del self._model
+            except Exception:
+                pass
             self._model = None
-            import gc
 
+            import gc
             gc.collect()
-            print(f"[WhisperBackend] Model {self.model_id} unloaded.")
+
+            # Best-effort: clear any torch CUDA cache (harmless on CPU)
+            try:
+                import torch
+                if hasattr(torch, "cuda"):
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+            print(f"[WhisperBackend] Model {self.model_id} unloaded and memory cleaned.")
