@@ -11,11 +11,13 @@ pydantic>=2.9.0
 # === Primary (start here) ===
 faster-whisper>=1.0.3          # Whisper models - best CPU support, start with this
 
-# === Future / heavier models ===
-# Qwen3-ASR (official package may differ - check https://github.com/QwenLM/Qwen3-ASR)
+# === Heavier models (support in progress) ===
+# Qwen3-ASR and Voxtral currently have backend *skeletons* that raise clear
+# "not yet implemented" errors. Full real inference is future work.
 # transformers>=4.46.0
 # torch>=2.5.0
 # torchaudio>=2.5.0
+# (official qwen-asr package when stable)
 
 # Audio processing
 pydub>=0.25.1

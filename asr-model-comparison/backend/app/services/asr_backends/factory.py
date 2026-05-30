@@ -58,18 +58,45 @@ async def whisper_unloader(instance: Any) -> None:
         pass
 
 
-def create_qwen3_loader(**kwargs) -> Callable[[str], Awaitable[Any]]:
+def create_qwen3_loader(
+    device: str = "cpu",
+    torch_dtype: Any = None,
+    quantization: str = "none",
+    use_dedicated_class: bool = False,   # Stable pipeline by default for "minimum working like Whisper"
+    **kwargs
+) -> Callable[[str], Awaitable[Any]]:
+    """Returns a loader that creates a real Qwen3ASRBackend with advanced options."""
     async def qwen_loader(model_id: str) -> Qwen3ASRBackend:
-        backend = Qwen3ASRBackend(model_id=model_id, **kwargs)
-        # This will immediately raise a clear, helpful NotImplementedError
-        backend.transcribe(b"")
+        backend = Qwen3ASRBackend(
+            model_id=model_id,
+            device=device,
+            torch_dtype=torch_dtype,
+            quantization=quantization,
+            use_dedicated_class=use_dedicated_class,
+            **kwargs
+        )
+        backend._ensure_loaded()  # type: ignore[attr-defined]
         return backend
     return qwen_loader
 
 
-def create_voxtral_loader(**kwargs) -> Callable[[str], Awaitable[Any]]:
+def create_voxtral_loader(
+    device: str = "cpu",
+    torch_dtype: Any = None,
+    quantization: str = "none",
+    use_dedicated_class: bool = False,   # Stable pipeline by default for "minimum working like Whisper"
+    **kwargs
+) -> Callable[[str], Awaitable[Any]]:
+    """Returns a loader that creates a real VoxtralBackend with advanced options."""
     async def voxtral_loader(model_id: str) -> VoxtralBackend:
-        backend = VoxtralBackend(model_id=model_id, **kwargs)
-        backend.transcribe(b"")
+        backend = VoxtralBackend(
+            model_id=model_id,
+            device=device,
+            torch_dtype=torch_dtype,
+            quantization=quantization,
+            use_dedicated_class=use_dedicated_class,
+            **kwargs
+        )
+        backend._ensure_loaded()  # type: ignore[attr-defined]
         return backend
     return voxtral_loader

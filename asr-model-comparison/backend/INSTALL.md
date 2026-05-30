@@ -39,16 +39,23 @@ After this, you can already use all Whisper variants (tiny ~ large-v3-turbo) via
 pip install psutil
 ```
 
-## 4. For Qwen3-ASR and Voxtral (future)
+## 4. For Qwen3-ASR and Voxtral (Work in Progress)
 
-These require the full `transformers` + torch stack and are heavier:
+As of the current version:
+
+- **Whisper** (all sizes): Full real support via `faster-whisper` (recommended starting point).
+- **Qwen3-ASR** (0.6B / 1.7B): Backend skeleton exists. Loading in real mode raises a clear "not yet implemented" error with guidance.
+- **Voxtral Mini 4B**: Same status as Qwen3 — skeleton + clear error.
+
+To prepare for future implementation:
 
 ```powershell
 pip install transformers torchaudio
-# Then follow official Qwen3-ASR and Voxtral installation instructions
 ```
 
-**Warning**: Qwen3-ASR 1.7B and Voxtral 4B will use significant RAM/VRAM even on CPU. Start with Whisper only.
+When the official packages mature, the `Qwen3ASRBackend` and `VoxtralBackend` can be completed following the `ASRBackend` protocol (see `app/services/asr_backends/`).
+
+**Recommendation**: For now, use Whisper models for actual experiments on ROG Ally X. The heavier models are mainly listed for future completeness.
 
 ## 5. First-time model download
 

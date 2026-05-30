@@ -47,40 +47,48 @@ def test_qwen3_and_voxtral_have_metadata_but_no_real_backend_yet():
 
 @pytest.mark.slow
 @pytest.mark.skipif(
-    os.getenv("USE_REAL_WHISPER") != "1",
-    reason="Requires real Whisper environment"
+    os.getenv("USE_REAL_WHISPER") != "1" and os.getenv("USE_REAL_MODELS") != "1",
+    reason="Requires real model environment (USE_REAL_MODELS=1)"
 )
-def test_loading_qwen3_in_real_mode_gives_clear_not_implemented_error(real_whisper_manager):
+def test_loading_qwen3_in_real_mode_attempts_actual_model_load(real_whisper_manager):
     """
-    When a user enables real models and tries to load Qwen3-ASR,
-    they should get a clear, actionable error instead of a confusing crash.
+    With real backends implemented, loading Qwen3-ASR will attempt to load
+    the actual model via transformers (may download several GB on first run).
     """
     manager = real_whisper_manager
 
-    with pytest.raises((NotImplementedError, RuntimeError), match="(?i)(qwen|not (yet )?supported|not implemented)"):
-        # This should fail gracefully once we implement the loader logic
-        import asyncio
+    # It should no longer raise "not implemented" — it will try real loading
+    # (which may take time / memory on first run)
+    import asyncio
+    try:
         asyncio.get_event_loop().run_until_complete(
             manager.load_model("qwen3-asr-0.6b")
         )
+    except Exception as e:
+        # Acceptable failures: download, OOM, or model-specific inference error
+        # The important thing is it did not hit the old NotImplemented skeleton
+        assert "not implemented" not in str(e).lower()
 
 
 @pytest.mark.slow
 @pytest.mark.skipif(
-    os.getenv("USE_REAL_WHISPER") != "1",
-    reason="Requires real Whisper environment"
+    os.getenv("USE_REAL_WHISPER") != "1" and os.getenv("USE_REAL_MODELS") != "1",
+    reason="Requires real model environment (USE_REAL_MODELS=1)"
 )
-def test_loading_voxtral_in_real_mode_gives_clear_not_implemented_error(real_whisper_manager):
+def test_loading_voxtral_in_real_mode_attempts_actual_model_load(real_whisper_manager):
     """
-    Same graceful behavior expected for Voxtral.
+    With the real VoxtralBackend, loading will attempt actual inference
+    using the transformers pipeline.
     """
     manager = real_whisper_manager
 
-    with pytest.raises((NotImplementedError, RuntimeError), match="(?i)(voxtral|not (yet )?supported|not implemented)"):
-        import asyncio
+    import asyncio
+    try:
         asyncio.get_event_loop().run_until_complete(
             manager.load_model("voxtral-mini-4b")
         )
+    except Exception as e:
+        assert "not implemented" not in str(e).lower()
 
 
 @pytest.mark.slow

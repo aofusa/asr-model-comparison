@@ -36,12 +36,11 @@ def _get_real_loader_for_model(model_id: str):
     if family == "whisper":
         return create_whisper_loader(device="cpu", compute_type="int8")
     elif family == "qwen3":
-        return create_qwen3_loader()
+        return create_qwen3_loader(device="cpu")
     elif family == "voxtral":
-        return create_voxtral_loader()
+        return create_voxtral_loader(device="cpu")
     else:
-        # Fallback to whisper-style (will likely fail later with clear message)
-        return create_whisper_loader()
+        return create_whisper_loader(device="cpu")
 
 
 def get_model_manager(model_id: str | None = None) -> ModelManager:
@@ -74,8 +73,23 @@ def get_model_manager(model_id: str | None = None) -> ModelManager:
 async def transcribe_audio(
     audio: Annotated[UploadFile, File(description="Audio file to transcribe")],
     model_id: Annotated[str, Form(description="Model ID from /api/models")],
-    model_manager: ModelManager = Depends(get_model_manager),
 ) -> TranscriptionResponse:
+    # Select the correct manager at request time based on the requested model
+    # This allows proper support for Whisper, Qwen3, and Voxtral in real mode.
+    use_real = os.getenv("USE_REAL_WHISPER", "0") in ("1", "true", "yes") or \
+               os.getenv("USE_REAL_MODELS", "0") in ("1", "true", "yes")
+
+    if use_real:
+        loader = _get_real_loader_for_model(model_id)
+        # Choose appropriate unloader
+        if "qwen" in model_id.lower() or "voxtral" in model_id.lower():
+            unloader = whisper_unloader  # reuse the strong cleanup one
+        else:
+            unloader = whisper_unloader
+        model_manager = ModelManager(model_loader=loader, model_unloader=unloader)
+    else:
+        model_manager = ModelManager()
+
     """
     Transcribe the uploaded audio using the selected model.
 

@@ -1,43 +1,143 @@
 """
-Qwen3-ASR Backend Adapter (Skeleton / Placeholder)
+Qwen3-ASR Real Backend Implementation
 
-Full real implementation is not yet complete.
+Uses transformers pipeline for automatic speech recognition.
+This provides actual model usage for Qwen3-ASR 0.6B and 1.7B variants.
 
-When fully implemented, this will use the official Qwen3-ASR package
-or a transformers-based loader for the 0.6B / 1.7B variants.
+Note: First run will download the model (several GB). 
+Recommended on machines with at least 16-24GB RAM.
 """
 from __future__ import annotations
 
+import tempfile
+import os
 from typing import Any
+
+import torch
+from transformers import pipeline
 
 from app.services.asr_backends.base import ASRBackend
 
 
 class Qwen3ASRBackend:
     """
-    Placeholder adapter for Qwen3-ASR models.
+    Real adapter for Qwen3-ASR models using transformers.
 
-    Currently raises a clear NotImplementedError with guidance.
+    Supports:
+      - qwen3-asr-0.6b
+      - qwen3-asr-1.7b
     """
 
-    def __init__(self, model_id: str, **kwargs):
+    def __init__(
+        self,
+        model_id: str,
+        device: str = "cpu",
+        torch_dtype: torch.dtype | None = None,
+        quantization: str = "none",           # "none", "4bit", "8bit"
+        use_dedicated_class: bool = True,     # use specific Qwen audio classes when possible
+        **kwargs: Any,
+    ):
         self.model_id = model_id
         self.family = "qwen3"
+        self._device = device
+        self._quantization = quantization
+        self._use_dedicated_class = use_dedicated_class
         self._kwargs = kwargs
 
-    def _raise_not_implemented(self):
-        raise NotImplementedError(
-            f"Real-time inference for Qwen3-ASR ({self.model_id}) is not yet implemented.\n\n"
-            "Current options:\n"
-            "  1. Use Whisper models (whisper-tiny, small, medium, large-v3-turbo) which have full support.\n"
-            "  2. Install additional dependencies (transformers + qwen-asr if available) and implement this adapter.\n"
-            "  3. Contribute a Qwen3ASRBackend implementation following the ASRBackend protocol.\n\n"
-            "See docs and INSTALL.md for the current state of multi-model support."
+        if quantization == "4bit" and device != "cuda":
+            print(f"[Qwen3ASRBackend] Warning: 4-bit quantization requested on {device}. Falling back.")
+            self._quantization = "none"
+
+        default_dtype = torch.float16 if device in ("cuda", "mps") else torch.float32
+        self._torch_dtype = torch_dtype or default_dtype
+
+        self._pipe = None
+        self._hf_model_id = self._resolve_hf_model_id(model_id)
+
+    def _resolve_hf_model_id(self, model_id: str) -> str:
+        mapping = {
+            "qwen3-asr-0.6b": "Qwen/Qwen3-ASR-0.6B",
+            "qwen3-asr-1.7b": "Qwen/Qwen3-ASR-1.7B",
+        }
+        return mapping.get(model_id, model_id)
+
+    def _ensure_loaded(self) -> None:
+        if self._pipe is not None:
+            return
+
+        print(f"[Qwen3ASRBackend] Loading real model (stable pipeline mode): {self.model_id} ({self._hf_model_id}) on {self._device}...")
+
+        # For "minimum working like Whisper", we prioritize the reliable pipeline path.
+        # Dedicated class + heavy quantization are advanced options.
+        quantization_config = None
+        if self._quantization == "4bit" and self._device == "cuda":
+            from transformers import BitsAndBytesConfig
+            quantization_config = BitsAndBytesConfig(load_in_4bit=True)
+
+        device_arg = 0 if self._device == "cuda" else -1
+
+        self._pipe = pipeline(
+            "automatic-speech-recognition",
+            model=self._hf_model_id,
+            device=device_arg,
+            torch_dtype=self._torch_dtype,
+            model_kwargs={
+                "low_cpu_mem_usage": True,
+            },
         )
+        print(f"[Qwen3ASRBackend] Model {self.model_id} loaded successfully via pipeline.")
 
     def transcribe(self, audio: bytes | str, **kwargs: Any) -> dict[str, Any]:
-        self._raise_not_implemented()
+        self._ensure_loaded()
+
+        if isinstance(audio, (bytes, bytearray)):
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                tmp.write(audio)
+                tmp_path = tmp.name
+            try:
+                return self._run_pipeline(tmp_path, **kwargs)
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+        else:
+            return self._run_pipeline(str(audio), **kwargs)
+
+    def _run_pipeline(self, audio_path: str, **kwargs: Any) -> dict[str, Any]:
+        assert self._pipe is not None
+
+        generate_kwargs = kwargs.get("generate_kwargs", {})
+        if "language" in kwargs and kwargs["language"]:
+            generate_kwargs["language"] = kwargs["language"]
+
+        result = self._pipe(
+            audio_path,
+            return_timestamps=kwargs.get("return_timestamps", False),
+            generate_kwargs=generate_kwargs or None,
+        )
+
+        text = result.get("text", "").strip() if isinstance(result, dict) else str(result)
+        return {
+            "text": text,
+            "model_id": self.model_id,
+            "language": result.get("language") if isinstance(result, dict) else None,
+        }
 
     def unload(self) -> None:
-        # Nothing to unload in the placeholder
-        pass
+        if self._pipe is not None:
+            try:
+                del self._pipe
+            except Exception:
+                pass
+            self._pipe = None
+
+        import gc
+        gc.collect()
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+        print(f"[Qwen3ASRBackend] Model {self.model_id} unloaded.")
