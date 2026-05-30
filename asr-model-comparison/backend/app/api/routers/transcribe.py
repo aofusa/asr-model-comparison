@@ -10,25 +10,43 @@ Returns transcription + wall-clock processing time.
 """
 from __future__ import annotations
 
-import time
+import os
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.models.schemas import TranscriptionResponse
 from app.services.model_manager import ModelManager
+from app.services.asr_backends.factory import create_whisper_loader, whisper_unloader
 
 router = APIRouter(prefix="/api", tags=["transcribe"])
 
-# Singleton manager for the application lifetime.
-# In production this could be dependency-injected per request or via lifespan.
-_model_manager = ModelManager()
+
+def get_model_manager() -> ModelManager:
+    """
+    FastAPI dependency that returns a ModelManager.
+
+    By default it uses cheap no-op loaders (great for unit tests and when
+    you don't want to load real models).
+
+    Set environment variable USE_REAL_WHISPER=1 to enable real Whisper models
+    (CPU + int8 by default — suitable for ROG Ally X).
+    """
+    if os.getenv("USE_REAL_WHISPER", "0") in ("1", "true", "yes"):
+        loader = create_whisper_loader(device="cpu", compute_type="int8")
+        return ModelManager(model_loader=loader, model_unloader=whisper_unloader)
+    return ModelManager()  # no-op (current default behavior)
+
+
+# Note: In a real app we would use lifespan events, but for now a module-level
+# instance is acceptable for the early stages of the project.
 
 
 @router.post("/transcribe", response_model=TranscriptionResponse)
 async def transcribe_audio(
     audio: Annotated[UploadFile, File(description="Audio file to transcribe")],
     model_id: Annotated[str, Form(description="Model ID from /api/models")],
+    model_manager: ModelManager = Depends(get_model_manager),
 ) -> TranscriptionResponse:
     """
     Transcribe the uploaded audio using the selected model.
@@ -47,7 +65,7 @@ async def transcribe_audio(
         raise HTTPException(status_code=400, detail="Uploaded audio file is empty")
 
     try:
-        result = await _model_manager.transcribe(
+        result = await model_manager.transcribe(
             audio=audio_bytes,
             model_id=model_id,
             filename=audio.filename,
