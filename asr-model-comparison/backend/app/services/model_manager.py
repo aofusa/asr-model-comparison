@@ -14,8 +14,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from app.models.available_models import AVAILABLE_MODELS
 from app.models.schemas import ModelInfo
-from app.api.routers.models import AVAILABLE_MODELS
 
 # Type aliases for dependency injection (makes testing trivial)
 ModelLoader = Callable[[str], Awaitable[Any]]          # model_id -> loaded engine instance
