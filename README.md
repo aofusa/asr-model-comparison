@@ -1,15 +1,48 @@
-ASR Model Comparison
-=====
+# ASR Model Comparison Project ワークスペース
 
-以下のASRモデルについて比較実行を行うプロジェクト
-Qwen3-asr
-Voxtral
-Whisper
+このディレクトリ（`asr-model-comparison-project`）は、**ローカルワークスペースのルート**として機能します。
 
+ここには以下のものが含まれます：
 
-フォルダ構成について
-docs：仕様書や指示書などソースコード以外の成果物
-asr-model-comparison：ソースコード本体
+- コード以外の成果物（仕様書、設計ドキュメント、AIエージェント向け指示書、実行ログなど）
+- 実際のオープンソースプロジェクト（`asr-model-comparison/` サブディレクトリ内）
 
+## ディレクトリ構成
 
+```
+asr-model-comparison-project/          ← ワークスペースルート（そのまま公開はしません）
+├── README.md                          ← 本ファイル（リポジトリ構成の説明）
+├── docs/                              ← 仕様書および詳細ガイド
+├── logs/                              ← （任意）手動でログを保存したい場合に使用可能（スクリプトは標準出力に出力）
+├── AGENT.md / CLAUDE.md               ← AIコーディングエージェント向け指示書
+└── asr-model-comparison/              ← 実際のGitリポジトリルート
+    ├── backend/
+    │   └── tests/
+    │       └── audio_samples/         # テスト音声（slow/実モデル検証用）
+    ├── frontend/
+    ├── run.* ( --build-only 対応 )
+    ├── README.md                      ← アプリケーション向けドキュメント
+    ├── LICENSE                        ← Apache 2.0
+    └── ...
+```
 
+## 公開されるリポジトリ
+
+`asr-model-comparison/` ディレクトリが、**Gitで管理されGitHubなどに公開されるプロジェクト本体**です。
+
+ソースコード、ビルドスクリプト、ユーザー向けドキュメントはすべて `asr-model-comparison/` 内に配置されています。
+
+## 開発・コントリビュートについて
+
+アプリケーション本体を開発する場合は、`asr-model-comparison/` ディレクトリ内で作業してください。
+
+大規模な仕様書や設計ドキュメントは、本ワークスペースルートの `docs/` ディレクトリに配置してください。
+
+## ライセンス
+
+`asr-model-comparison/` 内のコードは Apache License 2.0 の下で提供されています。  
+詳細は `asr-model-comparison/LICENSE` を参照してください。
+
+---
+
+**著者**: Copyright aofusa. 2026

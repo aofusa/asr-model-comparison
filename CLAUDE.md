@@ -31,6 +31,7 @@ asr-model-comparison/
       services/          # ASRモデル管理と文字起こしロジック
       utils/             # 音声処理、タイミングヘルパー
     tests/               # pytest テストスイート
+      audio_samples/     # テスト音声（日本語、英語、中国語）
     requirements.txt
     pyproject.toml
   frontend/
@@ -38,7 +39,6 @@ asr-model-comparison/
     public/
     package.json
     playwright.config.ts # E2Eテスト
-  audio_samples/         # テスト音声（日本語、英語、中国語）
   logs/
   run.sh / run.bat       # 統合起動スクリプト
   docker-compose.yml     # オプション
