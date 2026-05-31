@@ -44,10 +44,12 @@ export default defineConfig({
     },
   ],
 
-  // Only run the dedicated smoke tests for production build verification.
-  // This keeps the prod E2E fast and focused on "does the static build + backend serving work?"
-  // Dynamic/full-interaction tests (reconnection, recording) belong in the dev E2E suite.
-  testMatch: ['**/smoke.prod.spec.ts'],
+  // Production E2E focuses on verifying the built artifacts + real backend integration.
+  // - smoke.prod.spec.ts: Static asset + basic UI delivery verification
+  // - ws-protocol.prod.spec.ts: Lightweight real WebSocket protocol test (whisper-tiny recommended)
+  //
+  // Heavy/dynamic UI tests remain in the regular dev E2E suite.
+  testMatch: ['**/smoke.prod.spec.ts', '**/ws-protocol.prod.spec.ts'],
 
   // No webServer here — the production app must be started manually
   // (or via the project's run scripts) before running these tests.

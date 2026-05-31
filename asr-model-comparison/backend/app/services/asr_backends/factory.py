@@ -18,6 +18,10 @@ def create_whisper_loader(
     """
     Returns an async loader function suitable for ModelManager.
 
+    For E2E protocol verification tests (lightweight), it is recommended to use
+    model_id="whisper-tiny". This provides a fast, low-resource path that still
+    exercises the real WebSocket streaming code path.
+
     Usage:
         manager = ModelManager(model_loader=create_whisper_loader())
         await manager.load_model("whisper-tiny")
