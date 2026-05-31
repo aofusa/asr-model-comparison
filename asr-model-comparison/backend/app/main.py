@@ -42,6 +42,13 @@ app.include_router(models_router)
 app.include_router(transcribe_router)
 app.include_router(status_router)
 
+# Debug print
+print("=== Registered routes (debug) ===", flush=True)
+for route in app.routes:
+    if hasattr(route, "path"):
+        methods = getattr(route, "methods", None) or ["WS" if "websocket" in str(type(route)).lower() else "GET"]
+        print(f"  {methods} {route.path}", flush=True)
+
 
 @app.get("/health")
 async def health_check():
@@ -77,23 +84,31 @@ if os.path.isdir(STATIC_DIR):
     # Serve other root-level files (manifest.json, favicon, etc.)
     app.mount("/static", StaticFiles(directory=STATIC_DIR, html=False), name="static_root")
 
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
-        """
-        SPA fallback for client-side routing.
-        Returns index.html for any path that isn't an API or WebSocket route.
-        """
-        # Let API routes and WebSocket fall through to their handlers
+# Use middleware for SPA fallback instead of a catch-all route.
+# This is more reliable with WebSocket and other non-GET protocols.
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+
+class SPAFallbackMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        # Skip API, WebSocket upgrade, health, and static paths
+        path = request.url.path
         if (
-            full_path.startswith("api/")
-            or full_path.startswith("ws/")
-            or full_path == "health"
-            or full_path.startswith("static/")
+            path.startswith("/api/")
+            or path.startswith("/ws/")
+            or path == "/health"
+            or path.startswith("/static/")
+            or path.startswith("/assets/")
+            or path.startswith("/build/")
+            or path.startswith("/chunks/")
         ):
-            raise HTTPException(status_code=404)
+            return await call_next(request)
 
-        index_file = os.path.join(STATIC_DIR, "index.html")
-        if os.path.isfile(index_file):
-            return FileResponse(index_file)
+        # For all other GET requests, serve the SPA index.html if it exists
+        if request.method == "GET" and os.path.isfile(os.path.join(STATIC_DIR, "index.html")):
+            return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
-        raise HTTPException(status_code=404, detail="Frontend not built. Run the build script first.")
+        return await call_next(request)
+
+if os.path.isdir(STATIC_DIR):
+    app.add_middleware(SPAFallbackMiddleware)

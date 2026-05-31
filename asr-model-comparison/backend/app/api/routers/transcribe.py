@@ -160,7 +160,13 @@ async def websocket_transcribe(websocket: WebSocket):
 
     Model is loaded only once per connection (critical for heavy models like Qwen3 1.7B / Voxtral 4B).
     """
-    await websocket.accept()
+    print("[WS] New connection attempt received", flush=True)
+    try:
+        await websocket.accept()
+        print("[WS] accept() succeeded", flush=True)
+    except Exception as e:
+        print(f"[WS] accept() FAILED: {e}", flush=True)
+        raise
 
     manager: ModelManager | None = None
     current_model_id = "qwen3-asr-0.6b"
