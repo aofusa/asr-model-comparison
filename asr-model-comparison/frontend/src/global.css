@@ -1,0 +1,289 @@
+/* Basic styles for the ASR comparison app */
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0;
+  padding: 0;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+h1 {
+  text-align: center;
+  color: #64748b;
+}
+
+.controls {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  margin: 2rem 0;
+}
+
+button {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 6px;
+  background: #3b82f6;
+  color: white;
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.transcript {
+  background: #1e2937;
+  padding: 1.5rem;
+  border-radius: 8px;
+  min-height: 200px;
+  white-space: pre-wrap;
+  margin-top: 2rem;
+  border: 1px solid #334155;
+}
+
+.model-selector {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  margin-bottom: 2rem;
+}
+
+.model-selector label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Detailed Reconnection UI */
+.reconnection-banner {
+  background-color: #451a03;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin: 1.5rem 0;
+  color: #fef3c7;
+}
+
+.reconnection-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 1.05rem;
+  margin-bottom: 0.5rem;
+}
+
+.reconnection-header .spinner {
+  display: inline-block;
+  animation: spin 1.2s linear infinite;
+  font-size: 1.3rem;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.reconnection-details p {
+  margin: 0.25rem 0 0.75rem;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.reconnection-meta {
+  font-size: 0.9rem;
+  margin-bottom: 0.75rem;
+  color: #fcd34d;
+}
+
+.reconnection-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.reconnection-actions button {
+  background: #78350f;
+  color: #fef3c7;
+  border: 1px solid #f59e0b;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+}
+
+.reconnection-actions button:hover {
+  background: #92400e;
+}
+
+.reconnection-note {
+  font-size: 0.8rem;
+  margin-top: 0.75rem;
+  color: #fcd34d;
+  font-style: italic;
+}
+
+/* Phase 2: Volume Meter styles */
+.volume-meter {
+  margin: 1rem 0;
+  padding: 0.5rem 0.75rem;
+  background: #1e2937;
+  border-radius: 6px;
+  border: 1px solid #334155;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.volume-label {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  min-width: 70px;
+}
+
+.volume-bar-bg {
+  flex: 1;
+  height: 10px;
+  background: #0f172a;
+  border-radius: 9999px;
+  overflow: hidden;
+  border: 1px solid #475569;
+}
+
+.volume-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #22c55e, #eab308, #f97316);
+  transition: width 60ms linear;
+  border-radius: 9999px;
+}
+
+.volume-value {
+  font-family: ui-monospace, monospace;
+  font-size: 0.7rem;
+  color: #64748b;
+  min-width: 28px;
+  text-align: right;
+}
+
+/* Phase 2: is_final visual distinction */
+.transcript .final-text {
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.transcript .final-text:hover {
+  background: #334155;
+  border-radius: 2px;
+}
+
+.transcript .partial-text {
+  color: #94a3b8;
+  font-style: italic;
+  opacity: 0.85;
+}
+
+/* C: Copy button for finalized transcript */
+.transcript-container {
+  position: relative;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: #334155;
+  border: 1px solid #475569;
+  color: #cbd5e1;
+  font-size: 0.8rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.copy-btn:hover {
+  opacity: 1;
+  background: #475569;
+}
+
+/* Phase 2: Settings Panel */
+.settings-panel {
+  background: #1e2937;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+}
+
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.settings-note {
+  font-size: 0.7rem;
+  color: #64748b;
+}
+
+.settings-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.settings-presets button {
+  background: #334155;
+  color: #e2e8f0;
+  border: 1px solid #475569;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+  border-radius: 4px;
+}
+
+.settings-presets button:hover {
+  background: #475569;
+}
+
+.settings-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.25rem;
+  align-items: center;
+}
+
+.settings-controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: #cbd5e1;
+}
+
+.settings-controls input[type="number"] {
+  width: 70px;
+  background: #0f172a;
+  border: 1px solid #475569;
+  color: #e2e8f0;
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+
+.settings-controls label.checkbox {
+  gap: 0.35rem;
+}
+
+.settings-controls input[type="checkbox"] {
+  accent-color: #3b82f6;
+}

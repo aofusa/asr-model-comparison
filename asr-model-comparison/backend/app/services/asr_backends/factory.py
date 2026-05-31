@@ -62,7 +62,7 @@ def create_qwen3_loader(
     device: str = "cpu",
     torch_dtype: Any = None,
     quantization: str = "none",
-    use_dedicated_class: bool = False,   # Stable pipeline by default for "minimum working like Whisper"
+    use_dedicated_class: bool = True,   # Prefer dedicated classes for better quality (heaviness accepted as per project direction)
     **kwargs
 ) -> Callable[[str], Awaitable[Any]]:
     """Returns a loader that creates a real Qwen3ASRBackend with advanced options."""
@@ -84,7 +84,7 @@ def create_voxtral_loader(
     device: str = "cpu",
     torch_dtype: Any = None,
     quantization: str = "none",
-    use_dedicated_class: bool = False,   # Stable pipeline by default for "minimum working like Whisper"
+    use_dedicated_class: bool = True,   # Prefer dedicated classes for better quality (heaviness accepted as per project direction)
     **kwargs
 ) -> Callable[[str], Awaitable[Any]]:
     """Returns a loader that creates a real VoxtralBackend with advanced options."""

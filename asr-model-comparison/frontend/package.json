@@ -1,21 +1,23 @@
 {
   "name": "amcp-frontend",
   "version": "0.1.0",
-  "description": "ASR Model Comparison Platform Frontend (Qwik + Qwik UI)",
+  "description": "ASR Model Comparison Platform Frontend (Qwik) - Focused on Qwen3-ASR and Voxtral real-time",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "qwik build",
-    "dev": "qwik dev",
+    "dev": "vite",
     "preview": "qwik preview",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:prod": "playwright test --config=playwright.config.prod.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",
-    "vite": "^5.4.0"
+    "ignore": "^7.0.5",
+    "vite": "^5.4.0",
+    "vite-tsconfig-paths": "^4.2.0"
   },
   "dependencies": {
-    "@builder.io/qwik": "^1.9.0",
-    "@qwikui/*": "latest"
+    "@builder.io/qwik": "^1.9.0"
   }
 }
