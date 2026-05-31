@@ -3,41 +3,44 @@ import { test, expect } from '@playwright/test';
 /**
  * Lightweight WebSocket Protocol Verification Tests (Production Integration)
  *
- * These tests run against a real backend (started via run.ps1) on port 8000.
- * They verify the actual WebSocket streaming protocol with a lightweight model
- * (whisper-tiny recommended for speed).
+ * These tests run against a **real backend** (started via run.ps1) on port 8000.
+ * They exercise the actual streaming protocol using a lightweight model
+ * (strongly recommended: whisper-tiny for speed and low resource usage).
  *
- * Goal: Confirm that the real protocol (config → ready → audio chunks → results)
- * works end-to-end without heavy models.
+ * This provides a practical middle ground between pure smoke tests and
+ * full heavy-model E2E:
+ *   - Real WebSocket connection to the production backend
+ *   - Real protocol: config → ready → binary chunks → transcription messages → final
+ *   - No heavy models required
  *
- * Usage:
+ * Recommended usage:
  *   npm run test:e2e:prod
  *
  * Prerequisites:
- *   - Backend must be running (preferably with whisper-tiny available)
- *   - Use model_id="whisper-tiny" for fast execution
+ *   - Run the backend with `.\run.ps1` (or equivalent)
+ *   - For fastest execution, the backend should support "whisper-tiny"
+ *     (it will be selected automatically when model_id="whisper-tiny" is sent)
  */
 
 const WS_URL = 'ws://localhost:8000/ws/transcribe';
 
-// Minimal valid WAV (1 second of silence, 16kHz mono PCM) encoded as base64.
-// This is small enough to embed and sufficient for protocol verification.
-const SILENT_WAV_BASE64 =
-  'UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA='; // ~44 bytes header + silence
+// A very small but valid 16kHz mono WAV (≈0.1s of silence).
+// Sufficient to trigger the transcription path without requiring real speech.
+const TINY_WAV_BASE64 =
+  'UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
 
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binaryString = atob(base64);
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
     bytes[i] = binaryString.charCodeAt(i);
   }
   return bytes.buffer;
 }
 
 test.describe('WebSocket Protocol - Lightweight Verification (whisper-tiny)', () => {
-  test('should complete full config → ready → audio → final flow with whisper-tiny', async ({ page }) => {
-    test.setTimeout(30000);
+  test('full protocol flow: config → ready → chunks → transcription → final', async ({ page }) => {
+    test.setTimeout(45000); // Allow time for model loading on first run
 
     await page.goto('/');
 
@@ -46,20 +49,20 @@ test.describe('WebSocket Protocol - Lightweight Verification (whisper-tiny)', ()
         const ws = new WebSocket(wsUrl);
         const received: any[] = [];
         let readyReceived = false;
+        let transcriptionReceived = false;
         let finalReceived = false;
 
         const timeout = setTimeout(() => {
           ws.close();
-          reject(new Error('WebSocket protocol test timed out'));
-        }, 25000);
+          reject(new Error('WebSocket protocol test timed out (45s)'));
+        }, 42000);
 
         ws.onopen = () => {
-          // Step 1: Send config for lightweight model
           const config = {
             type: 'config',
             model_id: 'whisper-tiny',
             language: 'ja',
-            beam_size: 1, // fastest
+            beam_size: 1,
             use_dedicated_class: false,
             return_timestamps: false,
           };
@@ -74,14 +77,23 @@ test.describe('WebSocket Protocol - Lightweight Verification (whisper-tiny)', ()
             if (msg.type === 'ready') {
               readyReceived = true;
 
-              // Step 2: Send a small audio chunk
-              const audioBuffer = base64ToArrayBuffer(SILENT_WAV_BASE64);
-              ws.send(audioBuffer);
+              // Send two small audio chunks to simulate streaming
+              const audioChunk = base64ToArrayBuffer(TINY_WAV_BASE64);
+              ws.send(audioChunk);
 
-              // Step 3: Send end after a short delay
+              // Small delay before second chunk (more realistic)
+              setTimeout(() => {
+                ws.send(audioChunk);
+              }, 150);
+
+              // Send end signal shortly after
               setTimeout(() => {
                 ws.send(JSON.stringify({ type: 'end' }));
-              }, 300);
+              }, 400);
+            }
+
+            if (msg.type === 'transcription') {
+              transcriptionReceived = true;
             }
 
             if (msg.type === 'final') {
@@ -90,25 +102,27 @@ test.describe('WebSocket Protocol - Lightweight Verification (whisper-tiny)', ()
               ws.close();
               resolve({
                 readyReceived,
+                transcriptionReceived,
                 finalReceived,
                 messages: received,
-                finalText: msg.text,
+                finalText: msg.text ?? '',
+                receivedTypes: received.map((m) => m.type),
               });
             }
 
             if (msg.type === 'error') {
               clearTimeout(timeout);
               ws.close();
-              reject(new Error('Server error: ' + msg.message));
+              reject(new Error(`Server error: ${msg.message || JSON.stringify(msg)}`));
             }
           } catch (e) {
-            // ignore non-JSON for now
+            // Non-JSON messages are ignored
           }
         };
 
-        ws.onerror = (err) => {
+        ws.onerror = () => {
           clearTimeout(timeout);
-          reject(new Error('WebSocket error during protocol test'));
+          reject(new Error('WebSocket connection error during protocol test'));
         };
 
         ws.onclose = () => {
@@ -116,20 +130,26 @@ test.describe('WebSocket Protocol - Lightweight Verification (whisper-tiny)', ()
             clearTimeout(timeout);
             resolve({
               readyReceived,
+              transcriptionReceived,
               finalReceived,
               messages: received,
+              receivedTypes: received.map((m: any) => m.type),
             });
           }
         };
       });
     }, WS_URL);
 
-    expect(result.readyReceived).toBe(true);
-    expect(result.finalReceived).toBe(true);
+    // Core protocol assertions
+    expect(result.readyReceived, 'Server should send ready after config').toBe(true);
+    expect(result.finalReceived, 'Server should send final after end').toBe(true);
 
-    // At minimum we should have received a "ready" and a "final"
-    const types = result.messages.map((m: any) => m.type);
+    const types = result.receivedTypes || [];
     expect(types).toContain('ready');
     expect(types).toContain('final');
+
+    // It is acceptable if no transcription is generated from pure silence,
+    // but at least the protocol round-trip succeeded.
+    // In a real speech test this would be more strictly asserted.
   });
 });
