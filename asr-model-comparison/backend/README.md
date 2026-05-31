@@ -111,6 +111,22 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - モデル切り替え時は自動で以前のモデルがアンロードされます。
 - WebSocket エンドポイント (`/api/ws/transcribe`) はリアルタイム音声ストリーミング用です。
 
+### 軽量E2E / プロトコル検証用
+
+本番E2EでWebSocketプロトコルを実際に検証したい場合は、**whisper-tiny** を推奨します。
+
+```bash
+# 通常起動（whisper-tiny が自動的に軽量CPUモードで使えます）
+.\run.ps1
+```
+
+フロントエンドの本番E2Eに `ws-protocol.prod.spec.ts` を追加しており、
+`model_id: "whisper-tiny"` を指定して実行することで、軽量かつ現実的な
+プロトコル検証（config → ready → 音声送信 → 結果受信）が可能です。
+
+重いQwen3/Voxtralモデルをロードせずに、CIや日常の統合検証で
+WebSocketストリーミングの基本動作を確認できます。
+
 ## 関連ドキュメント
 
 - プロジェクト全体の README: `../README.md`

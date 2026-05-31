@@ -61,7 +61,7 @@ Write-Host ""
 $FrontendDir = Join-Path $ProjectRoot "frontend"
 $BackendStaticDir = Join-Path $ProjectRoot "backend\static"
 
-Write-Host ">>> Building frontend..." -ForegroundColor Yellow
+Write-Host ">>> Building frontend (Qwik City static build)..." -ForegroundColor Yellow
 
 Push-Location $FrontendDir
 
@@ -71,8 +71,9 @@ try {
         npm install
     }
 
-    # Use Vite build directly (more reliable than qwik build in this custom setup)
-    npx vite build
+    # Use the project build script (Qwik City + qwik build).
+    # This ensures proper static output including index.html for backend serving.
+    npm run build
 } finally {
     Pop-Location
 }

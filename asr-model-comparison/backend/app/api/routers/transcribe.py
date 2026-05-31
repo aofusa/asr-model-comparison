@@ -160,7 +160,13 @@ async def websocket_transcribe(websocket: WebSocket):
 
     Model is loaded only once per connection (critical for heavy models like Qwen3 1.7B / Voxtral 4B).
     """
-    await websocket.accept()
+    print("[WS] New connection attempt received", flush=True)
+    try:
+        await websocket.accept()
+        print("[WS] accept() succeeded", flush=True)
+    except Exception as e:
+        print(f"[WS] accept() FAILED: {e}", flush=True)
+        raise
 
     manager: ModelManager | None = None
     current_model_id = "qwen3-asr-0.6b"
@@ -196,12 +202,18 @@ async def websocket_transcribe(websocket: WebSocket):
             return
 
         # Load model once for this connection (key practical improvement)
+        #
+        # For lightweight E2E / protocol verification tests, it is strongly recommended
+        # to use model_id="whisper-tiny" (runs fast on CPU with int8).
+        # This allows running realistic WebSocket protocol tests without loading
+        # heavy Qwen3/Voxtral models.
         if "qwen" in current_model_id.lower():
             loader = create_qwen3_loader(device="cpu", use_dedicated_class=use_dedicated_class)
         elif "voxtral" in current_model_id.lower():
             loader = create_voxtral_loader(device="cpu", use_dedicated_class=use_dedicated_class)
         else:
-            loader = create_whisper_loader(device="cpu")
+            # Default to Whisper (tiny is ideal for fast E2E protocol tests)
+            loader = create_whisper_loader(device="cpu", compute_type="int8")
 
         manager = ModelManager(model_loader=loader)
 

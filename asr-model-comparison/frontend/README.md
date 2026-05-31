@@ -113,6 +113,15 @@ npm run test:e2e:prod
 
 本番用設定ファイル `playwright.config.prod.ts` では `webServer` を無効化しており、事前に `http://localhost:8000` でアプリケーションが起動していることを前提としています。
 
+#### 本番用E2Eの構成（2026-06時点）
+
+- `smoke.prod.spec.ts`：静的ビルド成果物 + 基本UIの配信確認（高速）
+- `ws-protocol.prod.spec.ts`：**軽量実通信プロトコル検証**（推奨モデル: `whisper-tiny`）
+
+本番E2Eは「ビルドが正しく配信されているか」と「実際にバックエンドとWebSocket通信ができるか」の2軸で検証します。
+
+重いモデルを使った詳細なUI/UXテストは通常の開発用E2E（`npm run test:e2e`）で実施してください。
+
 ## 特徴・設計方針
 
 - **シングルページアプリケーション**として設計

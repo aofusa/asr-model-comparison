@@ -44,6 +44,13 @@ export default defineConfig({
     },
   ],
 
+  // Production E2E focuses on verifying the built artifacts + real backend integration.
+  // - smoke.prod.spec.ts: Static asset + basic UI delivery verification
+  // - ws-protocol.prod.spec.ts: Lightweight real WebSocket protocol test (whisper-tiny recommended)
+  //
+  // Heavy/dynamic UI tests remain in the regular dev E2E suite.
+  testMatch: ['**/smoke.prod.spec.ts', '**/ws-protocol.prod.spec.ts'],
+
   // No webServer here — the production app must be started manually
   // (or via the project's run scripts) before running these tests.
 });

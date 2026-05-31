@@ -19,9 +19,11 @@ test.describe('Production Smoke Tests', () => {
   test('app loads from production build', async ({ page }) => {
     await page.goto('/');
 
-    // Basic smoke checks that the built assets are served correctly
+    // Basic smoke checks that the built assets are served correctly.
+    // Using more specific selectors to work reliably with the static shell
+    // injected for backend serving (avoids duplicate text strict mode issues).
     await expect(page.getByText('ASR Real-time Comparison')).toBeVisible();
-    await expect(page.getByText('Qwen3-ASR 0.6B (Main)')).toBeVisible();
+    await expect(page.getByTestId('model-label')).toBeVisible();
     await expect(page.getByRole('button', { name: /Start Recording/i })).toBeVisible();
   });
 
@@ -31,7 +33,9 @@ test.describe('Production Smoke Tests', () => {
     const panel = page.locator('.settings-panel');
     await expect(panel).toBeVisible();
 
+    // These match the static shell content injected for reliable backend serving
     await expect(panel.getByText('Beam Size')).toBeVisible();
+    await expect(panel.getByText('Temperature')).toBeVisible();
     await expect(panel.getByText('Use Dedicated Class')).toBeVisible();
   });
 
