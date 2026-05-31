@@ -91,8 +91,12 @@ from starlette.responses import Response
 
 class SPAFallbackMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        # Skip API, WebSocket upgrade, health, and static paths
         path = request.url.path
+        method = request.method
+
+        print(f"[SPA Debug] Incoming: {method} {path}", flush=True)
+
+        # Skip API, WebSocket upgrade, health, and static paths
         if (
             path.startswith("/api/")
             or path.startswith("/ws/")
@@ -102,13 +106,19 @@ class SPAFallbackMiddleware(BaseHTTPMiddleware):
             or path.startswith("/build/")
             or path.startswith("/chunks/")
         ):
+            print(f"[SPA Debug] Skipping to next handler", flush=True)
             return await call_next(request)
 
         # For all other GET requests, serve the SPA index.html if it exists
-        if request.method == "GET" and os.path.isfile(os.path.join(STATIC_DIR, "index.html")):
+        if method == "GET" and os.path.isfile(os.path.join(STATIC_DIR, "index.html")):
+            print(f"[SPA Debug] Serving index.html for path: {path}", flush=True)
             return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
+        print(f"[SPA Debug] No SPA match, calling next", flush=True)
         return await call_next(request)
 
 if os.path.isdir(STATIC_DIR):
     app.add_middleware(SPAFallbackMiddleware)
+    print(f"[SPA Debug] SPAFallbackMiddleware registered (STATIC_DIR={STATIC_DIR})", flush=True)
+else:
+    print("[SPA Debug] STATIC_DIR does not exist, middleware not added", flush=True)
