@@ -10,10 +10,14 @@
 # セキュリティのため、デフォルトのホストは 127.0.0.1（localhost のみ）です。
 # 外部からアクセスしたい場合は明示的に --host 0.0.0.0 を指定してください。
 #
+# --reload / -r を付けると開発モードになります (uvicorn --reload + フロントエンドソース変更時の自動再ビルド)。
+#
 # Usage:
 #   ./run.sh
 #   ./run.sh --host 0.0.0.0 --port 8000
 #   ./run.sh --port 9000
+#   ./run.sh --reload
+#   ./run.sh --reload --host 0.0.0.0
 #
 
 set -e
@@ -24,6 +28,7 @@ PORT="8000"
 
 # 引数パース（getopts 風の堅牢版）
 BUILD_ONLY=false
+RELOAD=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -47,11 +52,16 @@ while [[ $# -gt 0 ]]; do
             BUILD_ONLY=true
             shift
             ;;
+        --reload|-r)
+            RELOAD=true
+            shift
+            ;;
         -h|--help)
-            echo "Usage: $0 [--host HOST] [--port PORT] [--build-only]"
+            echo "Usage: $0 [--host HOST] [--port PORT] [--build-only] [--reload]"
             echo "  --host        Bind address (default: 127.0.0.1)"
             echo "  --port        Port number   (default: 8000)"
             echo "  --build-only  Build frontend only (do not start server)"
+            echo "  --reload, -r  Development mode: uvicorn --reload + auto-rebuild frontend on source changes"
             echo ""
             echo "Logs are output to standard output (stdout) by default."
             echo "To save logs to a file, redirect output (e.g. ./run.sh > logs/app.log 2>&1)"
@@ -59,7 +69,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--host HOST] [--port PORT] [--build-only]"
+            echo "Usage: $0 [--host HOST] [--port PORT] [--build-only] [--reload]"
             exit 1
             ;;
     esac
@@ -105,7 +115,42 @@ fi
 
 echo ""
 echo ">>> Starting backend (serving both API and Frontend)..."
-cd "$BACKEND_DIR"
+
+# In reload mode, start a background subshell watcher that auto-rebuilds frontend on source changes.
+# We use find -newer against a marker file (portable, no inotify required).
+if [ "$RELOAD" = true ]; then
+    echo "RELOAD MODE: will use uvicorn --reload and background frontend watcher."
+    touch /tmp/.amcp_last_frontend_build 2>/dev/null || true
+
+    (
+        # watcher subshell
+        set +e
+        echo "[sh-watcher] Monitoring $FRONTEND_DIR/src and public for changes..."
+        cd "$FRONTEND_DIR" || exit 1
+        while true; do
+            sleep 2
+            CHANGED=$(find src public -type f -newer /tmp/.amcp_last_frontend_build 2>/dev/null | head -1 || true)
+            if [ -n "$CHANGED" ]; then
+                echo "[sh-watcher] Change detected ($CHANGED). Rebuilding..."
+                npm run build 2>&1 | sed 's/^/[build] /'
+                rm -rf "$BACKEND_STATIC_DIR"
+                mkdir -p "$BACKEND_STATIC_DIR"
+                cp -r "$FRONTEND_DIR/dist/"* "$BACKEND_STATIC_DIR/"
+                touch /tmp/.amcp_last_frontend_build 2>/dev/null || true
+                echo "[sh-watcher] Rebuild + copy done. Static files are live."
+            fi
+        done
+    ) &
+    WATCHER_PID=$!
+
+    # Ensure we kill the watcher when this script exits (Ctrl+C etc)
+    trap 'echo "Stopping watcher (pid $WATCHER_PID)"; kill $WATCHER_PID 2>/dev/null || true; exit' INT TERM EXIT
+fi
+
+# pushd here (matching the PowerShell version) so directory intent is clear.
+# Note: exec below replaces the process, so no matching popd is performed.
+# When run as a script (not sourced), the caller's shell pwd is unaffected anyway.
+pushd "$BACKEND_DIR" > /dev/null || exit 1
 
 # 仮想環境の検出と有効化
 if [ -f ".venv/bin/activate" ]; then
@@ -122,8 +167,16 @@ fi
 
 echo ""
 echo "Starting server on http://${HOST}:${PORT}"
+if [ "$RELOAD" = true ]; then
+    echo "(reload mode: uvicorn will auto-restart on .py changes)"
+fi
 echo "Press Ctrl+C to stop."
 echo ""
 
-# 本番向け起動（--reload は付けない）
-exec python -m uvicorn app.main:app --host "$HOST" --port "$PORT"
+RELOAD_FLAG=""
+if [ "$RELOAD" = true ]; then
+    RELOAD_FLAG="--reload"
+fi
+
+# 起動（--reload フラグが付いている場合は開発モードで uvicorn も --reload）
+exec python -m uvicorn app.main:app --host "$HOST" --port "$PORT" $RELOAD_FLAG

@@ -109,8 +109,9 @@ class SPAFallbackMiddleware(BaseHTTPMiddleware):
             print(f"[SPA Debug] Skipping to next handler", flush=True)
             return await call_next(request)
 
-        # For all other GET requests, serve the SPA index.html if it exists
-        if method == "GET" and os.path.isfile(os.path.join(STATIC_DIR, "index.html")):
+        # For all other GET/HEAD requests, serve the SPA index.html if it exists
+        # (HEAD must also be handled for proper SPA fallback; browsers/tools often issue HEAD first)
+        if method in ("GET", "HEAD") and os.path.isfile(os.path.join(STATIC_DIR, "index.html")):
             print(f"[SPA Debug] Serving index.html for path: {path}", flush=True)
             return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 

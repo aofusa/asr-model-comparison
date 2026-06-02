@@ -10,6 +10,7 @@ setlocal
 ::   run.bat
 ::   run.bat --host 0.0.0.0 --port 9000
 ::   run.bat --build-only
+::   run.bat --reload
 ::
 :: ログは標準出力に出力されます。
 :: ファイルに保存したい場合はリダイレクトしてください（例: run.bat > logs\app.log 2>&1）。
