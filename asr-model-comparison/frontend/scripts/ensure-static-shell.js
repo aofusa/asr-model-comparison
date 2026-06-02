@@ -36,12 +36,24 @@ if (!hasRoot || !html.includes('Start Recording')) {
       <div class="app-container" style="font-family: system-ui, sans-serif; max-width: 960px; margin: 0 auto; padding: 24px;">
         <h1 style="margin-bottom: 8px;">ASR Real-time Comparison</h1>
         <div style="margin-bottom: 16px; color: #555;" data-testid="model-label">
-          Qwen3-ASR 0.6B (Main) — Real-time WebSocket streaming
+          Whisper models (tiny/small/medium/large-v3-turbo) — Real-time WebSocket streaming
         </div>
 
         <div class="model-selector" style="margin: 16px 0;">
           <label style="margin-right: 12px;">
-            <input type="radio" name="model" value="qwen3-asr-0.6b" checked> Qwen3-ASR 0.6B (Main)
+            <input type="radio" name="model" value="whisper-tiny" checked> Whisper Tiny
+          </label>
+          <label style="margin-right: 12px;">
+            <input type="radio" name="model" value="whisper-small"> Whisper Small
+          </label>
+          <label style="margin-right: 12px;">
+            <input type="radio" name="model" value="whisper-medium"> Whisper Medium
+          </label>
+          <label style="margin-right: 12px;">
+            <input type="radio" name="model" value="whisper-large-v3-turbo"> Whisper Large-v3 Turbo
+          </label>
+          <label style="margin-right: 12px;">
+            <input type="radio" name="model" value="qwen3-asr-0.6b"> Qwen3-ASR 0.6B (Main)
           </label>
           <label style="margin-right: 12px;">
             <input type="radio" name="model" value="qwen3-asr-1.7b"> Qwen3-ASR 1.7B

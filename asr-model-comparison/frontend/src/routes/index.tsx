@@ -4,7 +4,7 @@ export default component$(() => {
   const isRecording = useSignal(false);
   const transcript = useSignal('');
   const previousText = useSignal('');
-  const selectedModel = useSignal('qwen3-asr-0.6b');
+  const selectedModel = useSignal('whisper-tiny');
   const status = useSignal('Idle');
   const reconnectAttempts = useSignal(0);
   const maxReconnectAttempts = 5;
@@ -65,6 +65,10 @@ export default component$(() => {
   let volumeRaf: number | null = null;
 
   const models = [
+    { id: 'whisper-tiny', label: 'Whisper Tiny' },
+    { id: 'whisper-small', label: 'Whisper Small' },
+    { id: 'whisper-medium', label: 'Whisper Medium' },
+    { id: 'whisper-large-v3-turbo', label: 'Whisper Large-v3 Turbo' },
     { id: 'qwen3-asr-0.6b', label: 'Qwen3-ASR 0.6B (Main)' },
     { id: 'qwen3-asr-1.7b', label: 'Qwen3-ASR 1.7B (High Quality)' },
     { id: 'voxtral-mini-4b', label: 'Voxtral Mini 4B' },
@@ -341,7 +345,7 @@ export default component$(() => {
     <div class="container">
       <h1>ASR Real-time Comparison</h1>
       <p style={{ textAlign: 'center', color: '#94a3b8' }}>
-        Focused on Qwen3-ASR &amp; Voxtral (Real-time Web Audio)
+        Whisper (tiny/small/medium/large-v3-turbo), Qwen3-ASR &amp; Voxtral (Real-time Web Audio)
       </p>
 
       <div class="model-selector">
