@@ -27,6 +27,18 @@ export default component$(() => {
   // A: localStorage persistence for settings
   const SETTINGS_KEY = 'asr-settings-v1';
 
+  const saveSettings = $(() => {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+        beamSize: beamSize.value,
+        temperature: temperature.value,
+        repetitionPenalty: repetitionPenalty.value,
+        useDedicatedClass: useDedicatedClass.value,
+        selectedModel: selectedModel.value,
+      }));
+    } catch {}
+  });
+
   // Hoisted $ handlers for presets (so we can also attach native fallbacks in wiring task for prod client-render path).
   const setHighAccuracy = $(() => {
     beamSize.value = 8; temperature.value = 0.0; repetitionPenalty.value = 1.12; useDedicatedClass.value = true;
@@ -55,18 +67,6 @@ export default component$(() => {
     audioContext: null as AudioContext | null,
     analyser: null as AnalyserNode | null,
     volumeRaf: null as number | null,
-  });
-
-  const saveSettings = $(() => {
-    try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-        beamSize: beamSize.value,
-        temperature: temperature.value,
-        repetitionPenalty: repetitionPenalty.value,
-        useDedicatedClass: useDedicatedClass.value,
-        selectedModel: selectedModel.value,
-      }));
-    } catch {}
   });
 
   // Load persisted settings on mount (client only)
@@ -117,6 +117,44 @@ export default component$(() => {
     }
   });
 
+  const clearCountdown = $(() => {
+    if (refs.countdownInterval) {
+      clearInterval(refs.countdownInterval);
+      refs.countdownInterval = null;
+    }
+    nextReconnectIn.value = 0;
+  });
+
+  const scheduleReconnect = $(() => {
+    clearCountdown();
+
+    if (reconnectAttempts.value >= maxReconnectAttempts) {
+      isReconnecting.value = false;
+      status.value = 'Reconnection failed after multiple attempts. Please click Reconnect manually.';
+      return;
+    }
+
+    reconnectAttempts.value++;
+    const delaySeconds = Math.min(Math.pow(2, reconnectAttempts.value), 10);
+
+    isReconnecting.value = true;
+    nextReconnectIn.value = delaySeconds;
+    status.value = `Connection lost. Reconnecting in ${delaySeconds}s... (attempt ${reconnectAttempts.value}/${maxReconnectAttempts})`;
+
+    // Visible countdown
+    refs.countdownInterval = setInterval(() => {
+      nextReconnectIn.value--;
+      if (nextReconnectIn.value > 0) {
+        status.value = `Connection lost. Reconnecting in ${nextReconnectIn.value}s... (attempt ${reconnectAttempts.value}/${maxReconnectAttempts})`;
+      }
+    }, 1000);
+
+    refs.reconnectTimeout = setTimeout(() => {
+      clearCountdown();
+      connectWebSocket(true);
+    }, delaySeconds * 1000);
+  });
+
   const connectWebSocket = $((isReconnect = false) => {
     clearReconnectTimeout();
 
@@ -125,7 +163,10 @@ export default component$(() => {
       refs.ws = null;
     }
 
-    refs.ws = new WebSocket('ws://localhost:8000/api/ws/transcribe');
+    // Dynamic WS URL so it works if served on non-8000 or via proxy (while keeping dev on :8000).
+    const wsProtocol = (typeof window !== 'undefined' && window.location.protocol === 'https:') ? 'wss:' : 'ws:';
+    const wsHost = (typeof window !== 'undefined' && window.location.host) ? window.location.host : 'localhost:8000';
+    refs.ws = new WebSocket(`${wsProtocol}//${wsHost}/api/ws/transcribe`);
 
     refs.ws.onopen = () => {
       clearCountdown();
@@ -205,14 +246,6 @@ export default component$(() => {
     };
   });
 
-  const clearCountdown = $(() => {
-    if (refs.countdownInterval) {
-      clearInterval(refs.countdownInterval);
-      refs.countdownInterval = null;
-    }
-    nextReconnectIn.value = 0;
-  });
-
   // Phase 2: Simple real-time volume meter using Web Audio API Analyser
   const startVolumeMeter = $((stream: MediaStream) => {
     try {
@@ -280,36 +313,6 @@ export default component$(() => {
       // Fallback
       alert(finalTranscript.value);
     }
-  });
-
-  const scheduleReconnect = $(() => {
-    clearCountdown();
-
-    if (reconnectAttempts.value >= maxReconnectAttempts) {
-      isReconnecting.value = false;
-      status.value = 'Reconnection failed after multiple attempts. Please click Reconnect manually.';
-      return;
-    }
-
-    reconnectAttempts.value++;
-    const delaySeconds = Math.min(Math.pow(2, reconnectAttempts.value), 10);
-
-    isReconnecting.value = true;
-    nextReconnectIn.value = delaySeconds;
-    status.value = `Connection lost. Reconnecting in ${delaySeconds}s... (attempt ${reconnectAttempts.value}/${maxReconnectAttempts})`;
-
-    // Visible countdown
-    refs.countdownInterval = setInterval(() => {
-      nextReconnectIn.value--;
-      if (nextReconnectIn.value > 0) {
-        status.value = `Connection lost. Reconnecting in ${nextReconnectIn.value}s... (attempt ${reconnectAttempts.value}/${maxReconnectAttempts})`;
-      }
-    }, 1000);
-
-    refs.reconnectTimeout = setTimeout(() => {
-      clearCountdown();
-      connectWebSocket(true);
-    }, delaySeconds * 1000);
   });
 
   const startRecording = $(async () => {
@@ -401,21 +404,24 @@ export default component$(() => {
       if (presets[1]) { const fn = await setBalanced.resolve(); presets[1].addEventListener('click', () => fn()); }
       if (presets[2]) { const fn = await setFaster.resolve(); presets[2].addEventListener('click', () => fn()); }
 
-      // Settings number inputs (equivalent to the onInput$)
+      // Settings number inputs etc: use .resolve() like the preset buttons do.
+      // This ensures no bare 'saveSettings' identifier ends up in the listener closure source
+      // that gets serialized by the Qwik optimizer into the client chunks (the root cause of the ReferenceError).
+      const saveFn = await saveSettings.resolve();
       const numInputs = document.querySelectorAll('.settings-controls input[type="number"]');
-      if (numInputs[0]) numInputs[0].addEventListener('input', (e: any) => { beamSize.value = Number((e.target as HTMLInputElement).value); saveSettings(); });
-      if (numInputs[1]) numInputs[1].addEventListener('input', (e: any) => { temperature.value = Number((e.target as HTMLInputElement).value); saveSettings(); });
-      if (numInputs[2]) numInputs[2].addEventListener('input', (e: any) => { repetitionPenalty.value = Number((e.target as HTMLInputElement).value); saveSettings(); });
+      if (numInputs[0]) numInputs[0].addEventListener('input', (e: any) => { beamSize.value = Number((e.target as HTMLInputElement).value); saveFn(); });
+      if (numInputs[1]) numInputs[1].addEventListener('input', (e: any) => { temperature.value = Number((e.target as HTMLInputElement).value); saveFn(); });
+      if (numInputs[2]) numInputs[2].addEventListener('input', (e: any) => { repetitionPenalty.value = Number((e.target as HTMLInputElement).value); saveFn(); });
 
       // Checkbox
       const cb = document.querySelector('.settings-controls input[type="checkbox"]');
-      if (cb) cb.addEventListener('change', (e: any) => { useDedicatedClass.value = (e.target as HTMLInputElement).checked; saveSettings(); });
+      if (cb) cb.addEventListener('change', (e: any) => { useDedicatedClass.value = (e.target as HTMLInputElement).checked; saveFn(); });
 
       // Model radios
       document.querySelectorAll('.model-selector input[type="radio"]').forEach((r) => {
         r.addEventListener('change', (e: any) => {
           const t = e.target as HTMLInputElement;
-          if (t.checked) { selectedModel.value = t.value; saveSettings(); }
+          if (t.checked) { selectedModel.value = t.value; saveFn(); }
         });
       });
     } catch (e) { /* non fatal for wiring fallback */ }

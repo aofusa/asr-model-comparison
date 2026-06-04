@@ -75,6 +75,21 @@ test.describe('Production Smoke Tests', () => {
     await expect(page.getByTestId('volume-meter')).toBeVisible();
   });
 
+  // TDD per 修正指示書_静的配信_manifest_QRL_WS問題.md (Phase 1):
+  // In broken state, /manifest.json returns HTML (SPA fallback) instead of JSON -> parse fails or wrong content-type.
+  // After fix (middleware file-existence priority), this must pass with valid JSON.
+  // Also guards against future regression of root static asset serving.
+  test('manifest.json is served as valid JSON (not index.html fallback)', async ({ page }) => {
+    // Use page.request to hit the backend directly (works for both dev and prod :8000)
+    const response = await page.request.get('/manifest.json');
+    expect(response.status()).toBe(200);
+    const contentType = response.headers()['content-type'] || '';
+    expect(contentType).toContain('application/json');
+    const json = await response.json();
+    expect(json.name).toContain('AMCP');
+    expect(json.short_name).toBe('AMCP');
+  });
+
   test('settings panel is functional in built version', async ({ page }) => {
     await page.goto('/');
 
@@ -93,10 +108,14 @@ test.describe('Production Smoke Tests', () => {
     await expect(dedicatedCheck).toBeVisible({ timeout: 5000 });
   });
 
-  // TDD addition per 修正指示書_FRONTEND_QWIK_STATIC_BUILD_PROD_HYDRATION.md :
+  // TDD addition per 修正指示書_FRONTEND_QWIK_STATIC_BUILD_PROD_HYDRATION.md + 修正指示書_静的配信_manifest_QRL_WS問題.md :
   // Prove that onClick$ / onInput$ handlers (Generation Settings presets + inputs) actually execute
   // in the prod static build served at 8000. Previously (broken hydration) clicks did nothing.
   // This test will FAIL before the fix (values never change from initial), PASS after.
+  //
+  // Additionally (new for QRL fix): collect pageerror events. In broken state, clicking presets/inputs
+  // triggers "Uncaught ReferenceError: saveSettings is not defined" (from native wiring + QRL capture issues).
+  // We fail hard on those strings so the bug is clearly detected by the test suite.
   test('Generation Settings presets and inputs execute handlers in prod build', async ({ page }) => {
     await page.goto('/');
 
@@ -104,6 +123,13 @@ test.describe('Production Smoke Tests', () => {
     await expect(page.getByTestId('hydrated-marker')).toBeVisible({ timeout: 15000 });
     await expect(page.locator('#root[data-hydrated="true"]')).toBeVisible({ timeout: 10000 }).catch(() => {});
     await expect(page.getByTestId('status')).toBeVisible({ timeout: 10000 });
+
+    const errors: string[] = [];
+    page.on('pageerror', (err) => {
+      errors.push(err.message);
+      // eslint-disable-next-line no-console
+      console.error('[PAGEERROR captured for QRL test]', err.message);
+    });
 
     const panel = page.locator('.settings-panel');
     await expect(panel).toBeVisible({ timeout: 10000 });
@@ -127,6 +153,10 @@ test.describe('Production Smoke Tests', () => {
     const tempInput = panel.locator('input[type="number"]').nth(1);
     await tempInput.fill('0.3');
     await expect(tempInput).toHaveValue('0.3', { timeout: 2000 });
+
+    // Fail explicitly if the known QRL ReferenceErrors were thrown during the clicks/inputs above.
+    const qrlErrors = errors.filter(m => m.includes('saveSettings') || m.includes('scheduleReconnect'));
+    expect(qrlErrors, `Unexpected QRL ReferenceErrors during settings interaction: ${qrlErrors.join('; ')}`).toHaveLength(0);
   });
 
   test('volume meter element exists in production build', async ({ page }) => {
@@ -215,9 +245,19 @@ test.describe('Production Smoke Tests', () => {
     // In the broken state (no q: event wiring), status stays 'Idle' and this times out / fails.
     // In fake-mic prod test env it quickly becomes the error string from the catch block.
     // Exercise the recording controls (state machine + mic/WS side effects covered more thoroughly in real-time.spec.ts).
+    const errors: string[] = [];
+    page.on('pageerror', (err) => {
+      errors.push(err.message);
+      console.error('[PAGEERROR captured for start recording]', err.message);
+    });
+
     await startBtn.click();
     await expect(status).toContainText(/Recording|Mic unavailable|reconnect test mode/i, { timeout: 8000 });
     await stopBtn.click({ force: true }).catch(() => {});
     await expect(status).toContainText(/Stopped|Idle|Disconnected/i, { timeout: 5000 });
+
+    // Explicit guard for the scheduleReconnect ReferenceError that was thrown from WS onerror/onclose in broken state.
+    const qrlErrors = errors.filter(m => m.includes('saveSettings') || m.includes('scheduleReconnect'));
+    expect(qrlErrors, `Unexpected QRL ReferenceErrors during Start/Stop: ${qrlErrors.join('; ')}`).toHaveLength(0);
   });
 });

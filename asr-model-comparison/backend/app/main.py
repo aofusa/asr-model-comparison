@@ -96,7 +96,23 @@ class SPAFallbackMiddleware(BaseHTTPMiddleware):
 
         print(f"[SPA Debug] Incoming: {method} {path}", flush=True)
 
-        # Skip API, WebSocket upgrade, health, and static paths
+        # 1. Explicit websocket scope + /api/ws early delegation (fixes ERR_CONNECTION_REFUSED for WS
+        #    even when using BaseHTTPMiddleware; the previous path-only check was insufficient for ASGI upgrade).
+        if request.scope.get("type") == "websocket" or path.startswith("/api/ws/"):
+            print(f"[SPA Debug] Skipping to next handler (websocket)", flush=True)
+            return await call_next(request)
+
+        # 2. Serve real files from STATIC_DIR root (manifest.json, etc.) BEFORE SPA fallback.
+        #    This is the minimal fix for "Manifest: Line: 1, column: 1, Syntax error." and similar root assets.
+        #    Only non-API paths are considered; API routes take precedence via the routers.
+        if not (path.startswith("/api/") or path.startswith("/ws/") or path == "/health"):
+            candidate = os.path.join(STATIC_DIR, path.lstrip("/"))
+            if os.path.isfile(candidate):
+                print(f"[SPA Debug] Serving real static file: {path}", flush=True)
+                media_type = "application/json" if candidate.lower().endswith((".json", ".webmanifest")) else None
+                return FileResponse(candidate, media_type=media_type)
+
+        # 3. Skip API, WebSocket upgrade (legacy paths), health, and mounted static paths
         if (
             path.startswith("/api/")
             or path.startswith("/ws/")
