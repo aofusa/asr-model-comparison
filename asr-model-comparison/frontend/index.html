@@ -9,7 +9,11 @@
   </head>
   <body>
     <div id="root"></div>
-    <!-- Qwik City + Vite will transform this during build -->
-    <script type="module" src="/src/entry.dev.tsx"></script>
+    <!-- Note: For prod static build, ensure-static-shell.js (postbuild) + client build ensures
+         <script type="module" src="/build/q-....js"> is present (robust insert).
+         entry.client.tsx does clean root.innerHTML='' + render(root, <Root/>) for full interactive takeover + Qwik $ handler wiring.
+         Minimal non-destructive root only (no big plain shell override) per 修正案/修正指示書.
+         For dev (npm run dev), Vite + qwikVite serves via entry.dev.tsx.
+         See 修正指示書_FRONTEND_QWIK_STATIC_BUILD_PROD_HYDRATION.md -->
   </body>
 </html>
