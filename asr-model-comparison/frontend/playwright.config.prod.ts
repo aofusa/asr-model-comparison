@@ -18,7 +18,7 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  workers: 2,  // Low workers to avoid model/WS contention on shared backend (whisper-tiny load + real-time tests). See E2E_TEST_ERRORS... + diagnosis. CI can be 1.
   reporter: 'html',
 
   use: {
@@ -45,11 +45,12 @@ export default defineConfig({
   ],
 
   // Production E2E focuses on verifying the built artifacts + real backend integration.
-  // - smoke.prod.spec.ts: Static asset + basic UI delivery verification
+  // - smoke.prod.spec.ts: Static asset + basic UI delivery verification (extended with whisper-tiny UI per design)
   // - ws-protocol.prod.spec.ts: Lightweight real WebSocket protocol test (whisper-tiny recommended)
+  // - real-time.spec.ts: Detailed UI components (reconnection, volume, transcript, settings) with whisper-tiny
   //
-  // Heavy/dynamic UI tests remain in the regular dev E2E suite.
-  testMatch: ['**/smoke.prod.spec.ts', '**/ws-protocol.prod.spec.ts'],
+  // Per E2E design: run with whisper-tiny only.
+  testMatch: ['**/smoke.prod.spec.ts', '**/ws-protocol.prod.spec.ts', '**/real-time.spec.ts'],
 
   // No webServer here — the production app must be started manually
   // (or via the project's run scripts) before running these tests.

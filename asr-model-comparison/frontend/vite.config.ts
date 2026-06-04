@@ -1,27 +1,23 @@
 import { defineConfig } from 'vite';
 import { qwikVite } from '@builder.io/qwik/optimizer';
-import { qwikCity } from '@builder.io/qwik-city/vite';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
 export default defineConfig(() => {
   return {
     plugins: [
-      // Qwik City must come before qwikVite()
-      qwikCity(),
+      // Pure Qwik + Vite (no Qwik City) for dev server stability on Windows + prod static SPA.
+      // See AGENT.md, CLAUDE.md, FRONTEND_QWIK_STATIC_BUILD_PROD_HYDRATION_FIX_PLAN.md
       qwikVite(),
       tsconfigPaths(),
     ],
     build: {
-      // We must explicitly specify index.html as input.
-      // Qwik City 1.20 + our custom root/routes setup does not auto-emit a
-      // usable static index.html without this.
+      // index.html input for static SPA build (SSR HTML + shell injection + postbuild ensure for client script).
+      // See FRONTEND_QWIK_STATIC_BUILD_PROD_HYDRATION_FIX_PLAN.md
       rollupOptions: {
         input: 'index.html',
       },
     },
-    // Qwik City + qwikVite() combination produces a proper static index.html
-    // during `qwik build`, which is ideal for single-app mode (FastAPI serving
-    // the built frontend from backend/static/).
+    // qwikVite produces static index.html for single-app mode (FastAPI serving backend/static).
     preview: {
       headers: {
         'Cache-Control': 'public, max-age=600',

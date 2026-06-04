@@ -31,6 +31,7 @@ export default defineConfig({
   webServer: {
     // Use Vite directly (qwik dev CLI wrapper has environment-specific module resolution issues on some Windows setups).
     // The qwikVite() plugin in vite.config.ts still gives full Qwik dev experience (HMR, optimizer).
+    // Note: --mode ssr (from package dev) can cause root JSX render errors in some setups; direct vite used for stability.
     command: 'npx vite --port 5173',
     url: 'http://localhost:5173',
     reuseExistingServer: !process.env.CI,
