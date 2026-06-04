@@ -8,7 +8,21 @@ import Root from './root';
 // This addresses the symptom where UI painted but clicks did nothing (no q: event attrs were produced).
 console.log('CLIENT ENTRY RENDER CALLED');
 
-// Render to document (standard Qwik CSR pattern) so the renderer sets up event delegation and q: attrs properly
-// for all on*$ in the initial paint. The #root is kept for some E2E waits (with .catch) and the marker inside component.
-console.log('CLIENT ENTRY RENDER CALLED (to document for full event wiring)');
-render(document, <Root />);
+// Explicitly target #root (guaranteed by ensure-static-shell.js), clear any previous content,
+// and render into it. This is required for reliable Qwik container setup, event delegation
+// (for onClick$ etc), and QRL resolution in the pure client-render static build path served by FastAPI.
+// Using render(document, ...) leaves the app in a partially hydrated state where buttons appear
+// but clicks do nothing (the core symptom reported repeatedly).
+const rootEl = document.getElementById('root');
+if (rootEl) {
+  rootEl.innerHTML = '';
+  // Remove any leftover q:container attributes from thin shells or previous renders.
+  rootEl.removeAttribute('q:container');
+  rootEl.removeAttribute('q:version');
+  render(rootEl, <Root />);
+} else {
+  console.warn('No #root found, falling back to document render');
+  render(document, <Root />);
+}
+
+console.log('CLIENT ENTRY RENDER CALLED (full client takeover into #root complete)');

@@ -435,16 +435,34 @@ export default component$(() => {
   // This makes buttons & settings work for the :8000 build while preserving $() + Qwik path for dev/SSR.
   useVisibleTask$(async () => {
     try {
+      // Give the Qwik render into #root a moment to finish inserting elements (especially after
+      // the entry.client.tsx root.innerHTML='' + render). querySelector can miss on the first tick.
+      await new Promise(r => setTimeout(r, 50));
+
       // Start / Stop (the $() QRLs)
-      const startEl = document.querySelector('[data-testid="start-recording"]');
+      let startEl = document.querySelector('[data-testid="start-recording"]');
+      if (!startEl) {
+        // Fallback search by text content (robustness)
+        startEl = Array.from(document.querySelectorAll('button')).find(b => b.textContent?.includes('Start Recording')) as HTMLElement | null;
+      }
       if (startEl) {
         const fn = await startRecording.resolve();
-        startEl.addEventListener('click', (e) => { e.preventDefault(); fn(); });
+        // Avoid duplicate listeners
+        if (!(startEl as any)._wiredStart) {
+          (startEl as any)._wiredStart = true;
+          startEl.addEventListener('click', (e) => { e.preventDefault(); fn(); });
+        }
       }
-      const stopEl = document.querySelector('[data-testid="stop-recording"]');
+      let stopEl = document.querySelector('[data-testid="stop-recording"]');
+      if (!stopEl) {
+        stopEl = Array.from(document.querySelectorAll('button')).find(b => b.textContent?.includes('Stop')) as HTMLElement | null;
+      }
       if (stopEl) {
         const fn = await stopRecording.resolve();
-        stopEl.addEventListener('click', (e) => { e.preventDefault(); fn(); });
+        if (!(stopEl as any)._wiredStop) {
+          (stopEl as any)._wiredStop = true;
+          stopEl.addEventListener('click', (e) => { e.preventDefault(); fn(); });
+        }
       }
 
       // Presets (hoisted $ QRLs)
@@ -473,7 +491,11 @@ export default component$(() => {
           if (t.checked) { selectedModel.value = t.value; saveFn(); }
         });
       });
-    } catch (e) { /* non fatal for wiring fallback */ }
+    } catch (e) {
+      console.error('WIRING TASK ERROR (non-fatal):', e);
+      /* non fatal for wiring fallback */
+    }
+    console.log('NATIVE WIRING TASK COMPLETED - start/stop listeners should be attached (or Qwik onClick$ working)');
   });
 
   return (
