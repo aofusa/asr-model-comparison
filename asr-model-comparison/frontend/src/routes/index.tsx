@@ -27,18 +27,82 @@ export default component$(() => {
   // A: localStorage persistence for settings
   const SETTINGS_KEY = 'asr-settings-v1';
 
+  // --- Plain (non-QRL) implementations for cross-QRL calls and native wiring ---
+  // Per 修正指示書: defining the real logic as plain functions avoids QRL capture/serializer
+  // issues that produced "saveSettings is not defined" and "scheduleReconnect is not defined"
+  // (and similar for clear* utils) inside extracted useVisibleTask$ listeners and on* closures
+  // in the prod static client-render bundles.
+  // The $() wrappers are kept only where Qwik event system (onClick$ etc.) needs a QRL.
+  // Native fallback wiring and internal calls inside other $() can call the Impl directly (or the QRL).
+  function saveSettingsImpl() {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+        beamSize: beamSize.value,
+        temperature: temperature.value,
+        repetitionPenalty: repetitionPenalty.value,
+        useDedicatedClass: useDedicatedClass.value,
+        selectedModel: selectedModel.value,
+      }));
+    } catch {}
+  }
+
+  function clearReconnectTimeoutImpl() {
+    if (refs.reconnectTimeout) {
+      clearTimeout(refs.reconnectTimeout);
+      refs.reconnectTimeout = null;
+    }
+  }
+
+  function clearCountdownImpl() {
+    if (refs.countdownInterval) {
+      clearInterval(refs.countdownInterval);
+      refs.countdownInterval = null;
+    }
+    nextReconnectIn.value = 0;
+  }
+
+  function scheduleReconnectImpl() {
+    clearCountdownImpl();
+
+    if (reconnectAttempts.value >= maxReconnectAttempts) {
+      isReconnecting.value = false;
+      status.value = 'Reconnection failed after multiple attempts. Please click Reconnect manually.';
+      return;
+    }
+
+    reconnectAttempts.value++;
+    const delaySeconds = Math.min(Math.pow(2, reconnectAttempts.value), 10);
+
+    isReconnecting.value = true;
+    nextReconnectIn.value = delaySeconds;
+    status.value = `Connection lost. Reconnecting in ${delaySeconds}s... (attempt ${reconnectAttempts.value}/${maxReconnectAttempts})`;
+
+    // Visible countdown
+    refs.countdownInterval = setInterval(() => {
+      nextReconnectIn.value--;
+      if (nextReconnectIn.value > 0) {
+        status.value = `Connection lost. Reconnecting in ${nextReconnectIn.value}s... (attempt ${reconnectAttempts.value}/${maxReconnectAttempts})`;
+      }
+    }, 1000);
+
+    refs.reconnectTimeout = setTimeout(() => {
+      clearCountdownImpl();
+      connectWebSocket(true);
+    }, delaySeconds * 1000);
+  }
+
   // Hoisted $ handlers for presets (so we can also attach native fallbacks in wiring task for prod client-render path).
   const setHighAccuracy = $(() => {
     beamSize.value = 8; temperature.value = 0.0; repetitionPenalty.value = 1.12; useDedicatedClass.value = true;
-    saveSettings();
+    saveSettingsImpl();
   });
   const setBalanced = $(() => {
     beamSize.value = 6; temperature.value = 0.0; repetitionPenalty.value = 1.15; useDedicatedClass.value = true;
-    saveSettings();
+    saveSettingsImpl();
   });
   const setFaster = $(() => {
     beamSize.value = 3; temperature.value = 0.2; repetitionPenalty.value = 1.10; useDedicatedClass.value = true;
-    saveSettings();
+    saveSettingsImpl();
   });
 
   // Fix for Qwik static build / prod hydration + optimizer warnings:
@@ -57,17 +121,9 @@ export default component$(() => {
     volumeRaf: null as number | null,
   });
 
-  const saveSettings = $(() => {
-    try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-        beamSize: beamSize.value,
-        temperature: temperature.value,
-        repetitionPenalty: repetitionPenalty.value,
-        useDedicatedClass: useDedicatedClass.value,
-        selectedModel: selectedModel.value,
-      }));
-    } catch {}
-  });
+  // QRL wrapper kept for any on$ that Qwik optimizer expects to see as serializable QRL.
+  // The real work is in the plain saveSettingsImpl above (called from other $() and native listeners).
+  const saveSettings = $(saveSettingsImpl);
 
   // Load persisted settings on mount (client only)
   useVisibleTask$(() => {
@@ -110,25 +166,23 @@ export default component$(() => {
     { id: 'voxtral-mini-4b', label: 'Voxtral Mini 4B' },
   ];
 
-  const clearReconnectTimeout = $(() => {
-    if (refs.reconnectTimeout) {
-      clearTimeout(refs.reconnectTimeout);
-      refs.reconnectTimeout = null;
-    }
-  });
+  const clearReconnectTimeout = $(clearReconnectTimeoutImpl);
 
   const connectWebSocket = $((isReconnect = false) => {
-    clearReconnectTimeout();
+    clearReconnectTimeoutImpl();
 
     if (refs.ws) {
       try { refs.ws.close(); } catch {}
       refs.ws = null;
     }
 
-    refs.ws = new WebSocket('ws://localhost:8000/api/ws/transcribe');
+    // Dynamic WS URL so it works if served on non-8000 or via proxy (while keeping dev on :8000).
+    const wsProtocol = (typeof window !== 'undefined' && window.location.protocol === 'https:') ? 'wss:' : 'ws:';
+    const wsHost = (typeof window !== 'undefined' && window.location.host) ? window.location.host : 'localhost:8000';
+    refs.ws = new WebSocket(`${wsProtocol}//${wsHost}/api/ws/transcribe`);
 
     refs.ws.onopen = () => {
-      clearCountdown();
+      clearCountdownImpl();
       reconnectAttempts.value = 0;
       isReconnecting.value = false;
       status.value = isReconnect ? 'Reconnected - Resuming context...' : 'Connected';
@@ -178,7 +232,7 @@ export default component$(() => {
       if (data.type === 'error') {
         status.value = `Error: ${data.message || data.code}`;
         if (isRecording.value) {
-          scheduleReconnect();
+          scheduleReconnectImpl();
         }
       }
 
@@ -190,7 +244,7 @@ export default component$(() => {
     refs.ws.onerror = () => {
       status.value = 'Connection error';
       if (isRecording.value) {
-        scheduleReconnect();
+        scheduleReconnectImpl();
       }
     };
 
@@ -200,18 +254,12 @@ export default component$(() => {
       refs.ws = null;
 
       if (wasRecording) {
-        scheduleReconnect();
+        scheduleReconnectImpl();
       }
     };
   });
 
-  const clearCountdown = $(() => {
-    if (refs.countdownInterval) {
-      clearInterval(refs.countdownInterval);
-      refs.countdownInterval = null;
-    }
-    nextReconnectIn.value = 0;
-  });
+  const clearCountdown = $(clearCountdownImpl);
 
   // Phase 2: Simple real-time volume meter using Web Audio API Analyser
   const startVolumeMeter = $((stream: MediaStream) => {
@@ -282,35 +330,7 @@ export default component$(() => {
     }
   });
 
-  const scheduleReconnect = $(() => {
-    clearCountdown();
-
-    if (reconnectAttempts.value >= maxReconnectAttempts) {
-      isReconnecting.value = false;
-      status.value = 'Reconnection failed after multiple attempts. Please click Reconnect manually.';
-      return;
-    }
-
-    reconnectAttempts.value++;
-    const delaySeconds = Math.min(Math.pow(2, reconnectAttempts.value), 10);
-
-    isReconnecting.value = true;
-    nextReconnectIn.value = delaySeconds;
-    status.value = `Connection lost. Reconnecting in ${delaySeconds}s... (attempt ${reconnectAttempts.value}/${maxReconnectAttempts})`;
-
-    // Visible countdown
-    refs.countdownInterval = setInterval(() => {
-      nextReconnectIn.value--;
-      if (nextReconnectIn.value > 0) {
-        status.value = `Connection lost. Reconnecting in ${nextReconnectIn.value}s... (attempt ${reconnectAttempts.value}/${maxReconnectAttempts})`;
-      }
-    }, 1000);
-
-    refs.reconnectTimeout = setTimeout(() => {
-      clearCountdown();
-      connectWebSocket(true);
-    }, delaySeconds * 1000);
-  });
+  const scheduleReconnect = $(scheduleReconnectImpl);
 
   const startRecording = $(async () => {
     if (isRecording.value) return;
@@ -348,8 +368,8 @@ export default component$(() => {
   });
 
   const stopRecording = $(() => {
-    clearReconnectTimeout();
-    clearCountdown();
+    clearReconnectTimeoutImpl();
+    clearCountdownImpl();
 
     if (refs.mediaRecorder) {
       refs.mediaRecorder.stop();
@@ -402,20 +422,22 @@ export default component$(() => {
       if (presets[2]) { const fn = await setFaster.resolve(); presets[2].addEventListener('click', () => fn()); }
 
       // Settings number inputs (equivalent to the onInput$)
+      // Use plain Impl directly (no .resolve needed) - this eliminates the bare 'saveSettings' identifier
+      // in the serialized listener source that caused ReferenceError in prod bundles.
       const numInputs = document.querySelectorAll('.settings-controls input[type="number"]');
-      if (numInputs[0]) numInputs[0].addEventListener('input', (e: any) => { beamSize.value = Number((e.target as HTMLInputElement).value); saveSettings(); });
-      if (numInputs[1]) numInputs[1].addEventListener('input', (e: any) => { temperature.value = Number((e.target as HTMLInputElement).value); saveSettings(); });
-      if (numInputs[2]) numInputs[2].addEventListener('input', (e: any) => { repetitionPenalty.value = Number((e.target as HTMLInputElement).value); saveSettings(); });
+      if (numInputs[0]) numInputs[0].addEventListener('input', (e: any) => { beamSize.value = Number((e.target as HTMLInputElement).value); saveSettingsImpl(); });
+      if (numInputs[1]) numInputs[1].addEventListener('input', (e: any) => { temperature.value = Number((e.target as HTMLInputElement).value); saveSettingsImpl(); });
+      if (numInputs[2]) numInputs[2].addEventListener('input', (e: any) => { repetitionPenalty.value = Number((e.target as HTMLInputElement).value); saveSettingsImpl(); });
 
       // Checkbox
       const cb = document.querySelector('.settings-controls input[type="checkbox"]');
-      if (cb) cb.addEventListener('change', (e: any) => { useDedicatedClass.value = (e.target as HTMLInputElement).checked; saveSettings(); });
+      if (cb) cb.addEventListener('change', (e: any) => { useDedicatedClass.value = (e.target as HTMLInputElement).checked; saveSettingsImpl(); });
 
       // Model radios
       document.querySelectorAll('.model-selector input[type="radio"]').forEach((r) => {
         r.addEventListener('change', (e: any) => {
           const t = e.target as HTMLInputElement;
-          if (t.checked) { selectedModel.value = t.value; saveSettings(); }
+          if (t.checked) { selectedModel.value = t.value; saveSettingsImpl(); }
         });
       });
     } catch (e) { /* non fatal for wiring fallback */ }
@@ -437,7 +459,7 @@ export default component$(() => {
               name="model"
               value={model.id}
               checked={selectedModel.value === model.id}
-              onChange$={() => { selectedModel.value = model.id; saveSettings(); }}
+              onChange$={() => { selectedModel.value = model.id; saveSettingsImpl(); }}
             />
             {model.label}
           </label>
@@ -461,24 +483,24 @@ export default component$(() => {
           <label>
             Beam Size
             <input type="number" min="1" max="10" value={beamSize.value}
-                   onInput$={(e) => { beamSize.value = Number((e.target as HTMLInputElement).value); saveSettings(); }} />
+                   onInput$={(e) => { beamSize.value = Number((e.target as HTMLInputElement).value); saveSettingsImpl(); }} />
           </label>
 
           <label>
             Temperature
             <input type="number" step="0.1" min="0" max="1" value={temperature.value}
-                   onInput$={(e) => { temperature.value = Number((e.target as HTMLInputElement).value); saveSettings(); }} />
+                   onInput$={(e) => { temperature.value = Number((e.target as HTMLInputElement).value); saveSettingsImpl(); }} />
           </label>
 
           <label>
             Repetition Penalty
             <input type="number" step="0.01" min="1" max="1.5" value={repetitionPenalty.value}
-                   onInput$={(e) => { repetitionPenalty.value = Number((e.target as HTMLInputElement).value); saveSettings(); }} />
+                   onInput$={(e) => { repetitionPenalty.value = Number((e.target as HTMLInputElement).value); saveSettingsImpl(); }} />
           </label>
 
           <label class="checkbox">
             <input type="checkbox" checked={useDedicatedClass.value}
-                   onChange$={(e) => { useDedicatedClass.value = (e.target as HTMLInputElement).checked; saveSettings(); }} />
+                   onChange$={(e) => { useDedicatedClass.value = (e.target as HTMLInputElement).checked; saveSettingsImpl(); }} />
             Use Dedicated Class (recommended)
           </label>
         </div>
@@ -496,7 +518,7 @@ export default component$(() => {
           <button 
             data-testid="reconnect-button"
             onClick$={() => {
-              clearCountdown();
+              clearCountdownImpl();
               reconnectAttempts.value = 0;
               connectWebSocket(true);
             }} 
@@ -529,7 +551,7 @@ export default component$(() => {
           <div class="reconnection-actions">
             <button 
               onClick$={() => {
-                clearCountdown();
+                clearCountdownImpl();
                 reconnectAttempts.value = 0;
                 connectWebSocket(true);
               }}
