@@ -116,6 +116,13 @@ test.describe('WebSocket Protocol - Lightweight Verification (whisper-tiny)', ()
 
             if (msg.type === 'transcription') {
               transcriptionReceived = true;
+              // TDD Phase 1 marker (per 修正指示書): record that we received a chunk response.
+              // For real-time mic UX we want the response to always carry processing_time_seconds
+              // (and later had_speech) so UI can show "chunk processed" even if text=="".
+              // Currently the server may send empty text for short mic chunks.
+              if (typeof msg.processing_time_seconds === 'number') {
+                // good, at least time is there in some paths
+              }
             }
 
             if (msg.type === 'final') {

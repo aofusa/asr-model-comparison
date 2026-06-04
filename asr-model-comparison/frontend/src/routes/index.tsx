@@ -18,6 +18,17 @@ export default component$(() => {
   const finalTranscript = useSignal('');
   const partialTranscript = useSignal('');
 
+  // Phase 2 extension (TDD per 修正指示書): per-chunk processing feedback
+  // so user sees activity even when a 2s chunk yields empty text from ASR.
+  const currentChunkStatus = useSignal<'idle' | 'processing' | 'received'>('idle');
+  const lastChunkInfo = useSignal<{
+    text: string;
+    processingTime: number;
+    hadSpeech: boolean;
+    ts: number;
+  } | null>(null);
+  const chunkCount = useSignal(0);
+
   // Phase 2: Generation settings (sent on connect / reconnect)
   const beamSize = useSignal(6);
   const temperature = useSignal(0.0);
@@ -200,20 +211,45 @@ export default component$(() => {
         status.value = `Ready - ${data.model_id}`;
       }
 
-      if (data.type === 'transcription' && data.text) {
-        const isFinal = data.is_final === true;
+      if (data.type === 'transcription') {
+        const hadSpeech = data.had_speech !== false;
+        const proc = data.processing_time_seconds || 0;
 
-        if (isFinal) {
-          // 確定した結果 → finalTranscript に蓄積
-          finalTranscript.value = (finalTranscript.value + ' ' + data.text).trim();
-          partialTranscript.value = ''; // partial をクリア
-          previousText.value = finalTranscript.value;
-          transcript.value = finalTranscript.value; // 後方互換
+        // Always record chunk activity so the user sees "something happened"
+        // even when data.text is empty (the previous root cause of "話しかけても何も起きない").
+        lastChunkInfo.value = {
+          text: data.text || '',
+          processingTime: proc,
+          hadSpeech,
+          ts: Date.now(),
+        };
+        currentChunkStatus.value = 'received';
+
+        // Only accumulate when there is actual text (preserves existing behavior exactly).
+        if (data.text) {
+          const isFinal = data.is_final === true;
+
+          if (isFinal) {
+            // 確定した結果 → finalTranscript に蓄積
+            finalTranscript.value = (finalTranscript.value + ' ' + data.text).trim();
+            partialTranscript.value = ''; // partial をクリア
+            previousText.value = finalTranscript.value;
+            transcript.value = finalTranscript.value; // 後方互換
+          } else {
+            // 部分結果 → partialTranscript で一時表示
+            partialTranscript.value = data.text;
+            transcript.value = (finalTranscript.value + ' ' + data.text).trim();
+          }
         } else {
-          // 部分結果 → partialTranscript で一時表示
-          partialTranscript.value = data.text;
-          transcript.value = (finalTranscript.value + ' ' + data.text).trim();
+          // Empty text but chunk was processed: give subtle feedback in partial area
+          // (keeps the transcript container "alive" for the user).
+          partialTranscript.value = hadSpeech
+            ? '(speech detected in chunk)'
+            : '(no speech detected in this 2s chunk)';
         }
+
+        // Update status with last chunk info (visible processing time feedback).
+        status.value = `Ready - ${data.model_id} (last chunk: ${proc.toFixed(2)}s${hadSpeech ? ', speech' : ''})`;
       }
 
       if (data.type === 'error') {
@@ -327,6 +363,11 @@ export default component$(() => {
     partialTranscript.value = '';
     transcript.value = '';
 
+    // Phase 2 chunk feedback reset
+    currentChunkStatus.value = 'idle';
+    lastChunkInfo.value = null;
+    chunkCount.value = 0;
+
     await connectWebSocket(false);
 
     try {
@@ -335,6 +376,9 @@ export default component$(() => {
 
       refs.mediaRecorder.ondataavailable = async (event) => {
         if (event.data.size > 0 && refs.ws && refs.ws.readyState === WebSocket.OPEN) {
+          chunkCount.value++;
+          currentChunkStatus.value = 'processing';
+          status.value = `Recording... (processing chunk #${chunkCount.value})`;
           refs.ws.send(event.data);
         }
       };
@@ -378,6 +422,11 @@ export default component$(() => {
     partialTranscript.value = '';
     transcript.value = '';
     stopVolumeMeter();
+
+    // Phase 2 chunk feedback reset
+    currentChunkStatus.value = 'idle';
+    lastChunkInfo.value = null;
+    chunkCount.value = 0;
   });
 
   // Native event wiring fallback for prod static client-render path (where Qwik's on*$ + q: attrs may not attach
@@ -576,6 +625,17 @@ export default component$(() => {
           />
         </div>
         <div class="volume-value">{volumeLevel.value}</div>
+      </div>
+
+      {/* Phase 2 extension: per-chunk processing feedback (addresses "話しかけても何も起きない") */}
+      <div class="chunk-feedback" data-testid="chunk-feedback" style={{ textAlign: 'center', margin: '0.5rem 0', fontSize: '0.9em', color: '#64748b' }}>
+        {currentChunkStatus.value === 'processing' && '⏳ Processing latest 2s chunk...'}
+        {lastChunkInfo.value && (
+          <div>
+            Last chunk #{chunkCount.value}: {lastChunkInfo.value.processingTime.toFixed(2)}s
+            {lastChunkInfo.value.hadSpeech ? ' (speech)' : ' (no speech)'} — {lastChunkInfo.value.text || '(empty result)'}
+          </div>
+        )}
       </div>
 
       {/* Phase 2: Transcript with is_final visual distinction + copy (C) */}

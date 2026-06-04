@@ -26,6 +26,9 @@ from app.services.asr_backends.factory import (
     whisper_unloader,
 )
 
+# Realtime audio chunk normalization (addresses empty-text problem from browser mic blobs)
+from app.utils.audio import normalize_to_wav_pcm_16k_mono
+
 router = APIRouter(prefix="/api", tags=["transcribe"])
 
 
@@ -229,13 +232,24 @@ async def websocket_transcribe(websocket: WebSocket):
             message = await websocket.receive()
 
             if "bytes" in message:
-                audio_chunk = message["bytes"]
-                if not audio_chunk:
+                raw_chunk = message["bytes"]
+                if not raw_chunk:
                     continue
+
+                # === Key fix for "話しかけても何も起きない" ===
+                # Browser MediaRecorder sends webm/opus (or other) containers.
+                # We normalize to proper 16kHz mono WAV so the ASR backend
+                # (faster-whisper etc.) + its VAD can actually see speech.
+                # Without this, short 2s chunks frequently decode to empty after VAD.
+                audio_for_model = normalize_to_wav_pcm_16k_mono(raw_chunk)
+
+                # Optional: allow clients to request milder VAD for streaming
+                # (default False for realtime so we don't drop short utterances).
+                use_vad = False  # realtime-friendly default; can be sent in future "update" messages
 
                 try:
                     result = await manager.transcribe(
-                        audio=audio_chunk,
+                        audio=audio_for_model,
                         model_id=current_model_id,
                         language=language,
                         beam_size=beam_size,
@@ -243,11 +257,23 @@ async def websocket_transcribe(websocket: WebSocket):
                         return_timestamps=return_timestamps,
                         temperature=0.0,
                         repetition_penalty=1.15 if language == "ja" else 1.0,
+                        vad_filter=use_vad,
                     )
 
                     new_text = result.get("text", "").strip()
                     if new_text:
                         previous_text = (previous_text + " " + new_text).strip()
+
+                    # had_speech heuristic: if the backend returned segments/chunks or we got text
+                    had_speech = bool(new_text or result.get("chunks") or result.get("segments"))
+
+                    # Diagnostic log (very useful when user reports "nothing happens")
+                    print(
+                        f"[WS Chunk] model={current_model_id} raw={len(raw_chunk)}B "
+                        f"norm={len(audio_for_model)}B text_len={len(new_text)} "
+                        f"had_speech={had_speech} proc={result.get('processing_time_seconds', 0):.3f}s",
+                        flush=True,
+                    )
 
                     await websocket.send_json({
                         "type": "transcription",
@@ -257,6 +283,7 @@ async def websocket_transcribe(websocket: WebSocket):
                         "chunks": result.get("chunks", []),
                         "language": result.get("language"),
                         "processing_time_seconds": result.get("processing_time_seconds", 0.0),
+                        "had_speech": had_speech,
                     })
 
                 except Exception as e:
