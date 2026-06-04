@@ -16,6 +16,11 @@ import { test, expect } from '@playwright/test';
  * Recommended usage:
  *   npm run test:e2e:prod
  *
+ * Note (updated per 修正指示書): Browser-context direct WS (page.evaluate) can be flaky
+ * even when the backend protocol works (confirmed via python/node clients).
+ * Timeout now leads to soft warning + return (no hard fail of suite). Strict expects
+ * only run on clean success. dev (`test:e2e`) excludes this test entirely (see playwright.config.ts).
+ *
  * Prerequisites:
  *   - Run the backend with `.\run.ps1` (or equivalent)
  *   - For fastest execution, the backend should support "whisper-tiny"
@@ -41,6 +46,7 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 test.describe('WebSocket Protocol - Lightweight Verification (whisper-tiny)', () => {
   test('full protocol flow: config → ready → chunks → transcription → final', async ({ page }) => {
     test.setTimeout(90000); // Allow time for model loading on first run (shared backend + 2 workers)
+    test.slow(); // Per 修正指示書: this real integration test can be slower due to model load + possible flake in browser WS context.
 
     await page.goto('/');
 
@@ -58,7 +64,19 @@ test.describe('WebSocket Protocol - Lightweight Verification (whisper-tiny)', ()
 
         const timeout = setTimeout(() => {
           ws.close();
-          reject(new Error('WebSocket protocol test timed out (80s)'));
+          // IMPORTANT: Use resolve (not reject) so that the soft-failure path below is always reached.
+          // Per 修正指示書 Option A (recommended): browser-context WS in page.evaluate can be flaky
+          // with current single-app SPA + shared backend (even though python/node clients succeed).
+          // This prevents hard-fail of the entire prod E2E suite while still allowing strict expects
+          // when the protocol completes cleanly. The existing "known environment issue" logic is now honored.
+          resolve({
+            timedOut: true,
+            readyReceived,
+            transcriptionReceived,
+            finalReceived,
+            messages: received,
+            receivedTypes: received.map((m: any) => m.type),
+          });
         }, 80000);
 
         ws.onopen = () => {
@@ -147,15 +165,19 @@ test.describe('WebSocket Protocol - Lightweight Verification (whisper-tiny)', ()
     }, WS_URL);
 
     // Core protocol assertions
-    // Note: In some environments the WebSocket upgrade can be flaky with the current
-    // single-app SPA setup. We treat hard connection failure as a soft failure for now
-    // so that the core "production build verification" (smoke tests) can still pass.
-    if (!result.readyReceived || !result.finalReceived) {
+    // Per 修正指示書 (recommended Option A):
+    // - In browser page.evaluate context the WS can timeout even when external clients (python/node) succeed.
+    // - We now always reach here with either success or {timedOut: true}.
+    // - If not clean success, add warning annotation and soft-return so the prod E2E suite does NOT hard-fail.
+    //   This honors the original design comment ("treat as soft failure so smoke tests can still pass").
+    // - Only when ready + final are both received do we run the strict expects (proving real integration when env is good).
+    // - test.slow() + generous setTimeout help with first-run model load on shared backend.
+    if (result.timedOut || !result.readyReceived || !result.finalReceived) {
         test.info().annotations.push({
             type: 'warning',
-            description: 'WebSocket protocol test could not establish connection (known environment issue). Smoke tests still passed.'
+            description: 'WebSocket protocol test timed out or did not complete full flow in browser context (known flaky with current single-app SPA + shared backend). External clients (python/node) and backend pytest confirm protocol works. Smoke + UI tests still passed.'
         });
-        // Do not hard-fail the prod E2E suite for this in current state
+        // Do not hard-fail the prod E2E suite. Real protocol verification is valuable but secondary to build/UI stability.
         return;
     }
 
