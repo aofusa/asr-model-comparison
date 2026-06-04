@@ -26,7 +26,8 @@ def normalize_to_wav_pcm_16k_mono(raw_audio: bytes) -> bytes:
     Falls back to returning the original bytes if conversion fails
     (preserves backward compat for tests that send fake data).
 
-    Requires pydub (already in requirements.txt) + ffmpeg in PATH for full support.
+    Requires pydub + ffmpeg in PATH (and on py>=3.13: `pip install audioop-lts`).
+    See run logs for [audio] messages when it falls back.
     """
     if not raw_audio:
         return raw_audio
@@ -46,8 +47,9 @@ def normalize_to_wav_pcm_16k_mono(raw_audio: bytes) -> bytes:
     except Exception as exc:
         # Do not break the pipeline for fake data or unusual environments.
         # Log at call site (WS handler) for diagnostics.
-        # In production one might want to raise or return a sentinel.
-        print(f"[audio] normalize_to_wav_pcm_16k_mono failed, returning raw bytes: {exc}")
+        # Common on Python 3.13 (needs `pip install audioop-lts`) or when ffmpeg not in PATH.
+        # For full real-time mic support on Windows: install ffmpeg (gyan.dev) + audioop-lts + pydub.
+        print(f"[audio] normalize_to_wav_pcm_16k_mono failed (raw bytes passed through; may cause empty ASR results for webm chunks), error: {exc}")
         return raw_audio
 
 
