@@ -177,9 +177,12 @@ export default component$(() => {
     // Dynamic WS URL so it works if served on non-8000 or via proxy (while keeping dev on :8000).
     const wsProtocol = (typeof window !== 'undefined' && window.location.protocol === 'https:') ? 'wss:' : 'ws:';
     const wsHost = (typeof window !== 'undefined' && window.location.host) ? window.location.host : 'localhost:8000';
-    refs.ws = new WebSocket(`${wsProtocol}//${wsHost}/api/ws/transcribe`);
+    const wsUrl = `${wsProtocol}//${wsHost}/api/ws/transcribe`;
+    console.log('[connectWebSocket] creating WS to', wsUrl);
+    refs.ws = new WebSocket(wsUrl);
 
     refs.ws.onopen = () => {
+      console.log('[connectWebSocket] WS onopen - connected to server');
       clearCountdown();
       reconnectAttempts.value = 0;
       isReconnecting.value = false;
@@ -208,6 +211,7 @@ export default component$(() => {
       const data = JSON.parse(event.data);
 
       if (data.type === 'ready') {
+        console.log('[WS] received ready from server, model:', data.model_id);
         status.value = `Ready - ${data.model_id}`;
       }
 
@@ -352,11 +356,21 @@ export default component$(() => {
   });
 
   const startRecording = $(async () => {
+    console.log('[StartRecording] handler called, isRecording was:', isRecording.value);
     if (isRecording.value) return;
 
     reconnectAttempts.value = 0;
     isRecording.value = true;
     status.value = 'Recording...';
+
+    // Belt-and-suspenders for flaky Qwik reactivity in static client-render:
+    // Directly mutate DOM for critical feedback elements.
+    try {
+      const statusEl = document.querySelector('[data-testid="status"]');
+      if (statusEl) statusEl.textContent = 'Status: Recording...';
+      const startBtn = document.querySelector('[data-testid="start-recording"]') as HTMLButtonElement | null;
+      if (startBtn) startBtn.disabled = true;
+    } catch {}
 
     // Phase 2: Reset transcripts for new session
     finalTranscript.value = '';
@@ -371,7 +385,9 @@ export default component$(() => {
     await connectWebSocket(false);
 
     try {
+      console.log('[StartRecording] calling getUserMedia...');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log('[StartRecording] getUserMedia succeeded, starting MediaRecorder');
       refs.mediaRecorder = new MediaRecorder(stream);
 
       refs.mediaRecorder.ondataavailable = async (event) => {
@@ -388,9 +404,14 @@ export default component$(() => {
       // Phase 2: Start live volume visualization
       startVolumeMeter(stream);
     } catch (err) {
+      console.error('[StartRecording] getUserMedia or recorder error:', err);
       // Mic permission / device error is non-fatal for the reconnect test flow;
       // the WS failure will still trigger the banner via the isRecording flag we already set.
       status.value = 'Mic unavailable (reconnect test mode)';
+      try {
+        const statusEl = document.querySelector('[data-testid="status"]');
+        if (statusEl) statusEl.textContent = 'Status: Mic unavailable (reconnect test mode)';
+      } catch {}
     }
   });
 
@@ -450,7 +471,12 @@ export default component$(() => {
         // Avoid duplicate listeners
         if (!(startEl as any)._wiredStart) {
           (startEl as any)._wiredStart = true;
-          startEl.addEventListener('click', (e) => { e.preventDefault(); fn(); });
+          startEl.addEventListener('click', (e) => { 
+            console.log('[NativeWiring] start button clicked via native listener');
+            e.preventDefault(); 
+            fn(); 
+          });
+          console.log('[NativeWiring] attached native click to start-recording button');
         }
       }
       let stopEl = document.querySelector('[data-testid="stop-recording"]');
@@ -461,7 +487,12 @@ export default component$(() => {
         const fn = await stopRecording.resolve();
         if (!(stopEl as any)._wiredStop) {
           (stopEl as any)._wiredStop = true;
-          stopEl.addEventListener('click', (e) => { e.preventDefault(); fn(); });
+          stopEl.addEventListener('click', (e) => { 
+            console.log('[NativeWiring] stop button clicked via native listener');
+            e.preventDefault(); 
+            fn(); 
+          });
+          console.log('[NativeWiring] attached native click to stop-recording button');
         }
       }
 
@@ -495,7 +526,7 @@ export default component$(() => {
       console.error('WIRING TASK ERROR (non-fatal):', e);
       /* non fatal for wiring fallback */
     }
-    console.log('NATIVE WIRING TASK COMPLETED - start/stop listeners should be attached (or Qwik onClick$ working)');
+    console.log('NATIVE WIRING TASK COMPLETED - start/stop listeners should be attached (or Qwik onClick$ working). Check for [NativeWiring] logs on click.');
   });
 
   return (
