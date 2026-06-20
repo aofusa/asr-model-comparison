@@ -19,6 +19,8 @@ transformers>=4.46.0
 torch>=2.5.0
 torchaudio>=2.5.0
 mistral-common>=1.8.0
+sentencepiece>=0.2.0
+sacremoses>=0.1.1
 
 # Audio processing
 pydub>=0.25.1

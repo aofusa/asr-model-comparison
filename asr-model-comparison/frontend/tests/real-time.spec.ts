@@ -864,6 +864,129 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
     });
   });
 
+  for (const scenario of [
+    { modelId: 'qwen3-asr-0.6b', expectedText: 'Qwen3の翻訳結果です' },
+    { modelId: 'voxtral-mini-4b', expectedText: 'Voxtralの翻訳結果です' },
+  ]) {
+    test(`${scenario.modelId} shows translated transcription when translation is enabled`, async ({ page }) => {
+      await page.addInitScript(({ modelId, expectedText }) => {
+        class MockWebSocket {
+          static CONNECTING = 0;
+          static OPEN = 1;
+          static CLOSING = 2;
+          static CLOSED = 3;
+
+          readyState = MockWebSocket.CONNECTING;
+          onopen: ((ev: any) => void) | null = null;
+          onclose: ((ev: any) => void) | null = null;
+          onmessage: ((ev: any) => void) | null = null;
+          private chunkIndex = 0;
+
+          constructor(public url: string) {
+            setTimeout(() => {
+              this.readyState = MockWebSocket.OPEN;
+              this.onopen?.(new Event('open'));
+            }, 0);
+          }
+
+          send(data: any) {
+            if (typeof data === 'string') {
+              const parsed = JSON.parse(data);
+              if (parsed.type === 'config') {
+                (window as any).__lastWsConfig = parsed;
+                setTimeout(() => {
+                  this.onmessage?.(new MessageEvent('message', {
+                    data: JSON.stringify({
+                      type: 'ready',
+                      model_id: parsed.model_id,
+                      target_language: parsed.target_language,
+                    }),
+                  }));
+                }, 0);
+              }
+              return;
+            }
+
+            this.chunkIndex += 1;
+            setTimeout(() => {
+              this.onmessage?.(new MessageEvent('message', {
+                data: JSON.stringify({
+                  type: 'transcription',
+                  model_id: modelId,
+                  text: expectedText,
+                  accumulated_text: expectedText,
+                  is_final: false,
+                  processing_time_seconds: 0.42,
+                  had_speech: true,
+                  chunk_index: this.chunkIndex,
+                  chunk_size_bytes: typeof data?.size === 'number' ? data.size : 128,
+                  target_language: 'ja',
+                }),
+              }));
+            }, 10);
+          }
+
+          close() {
+            this.readyState = MockWebSocket.CLOSED;
+            this.onclose?.(new CloseEvent('close'));
+          }
+
+          addEventListener() {}
+          removeEventListener() {}
+          dispatchEvent() { return true; }
+        }
+
+        class MockMediaRecorder {
+          ondataavailable: ((ev: any) => void) | null = null;
+          stream: any;
+          constructor(stream: any) {
+            this.stream = stream;
+          }
+          start() {
+            setTimeout(() => {
+              this.ondataavailable?.({
+                data: new Blob(['speech chunk'], { type: 'audio/webm' }),
+              });
+            }, 25);
+          }
+          stop() {}
+        }
+
+        // @ts-ignore
+        (window as any).WebSocket = MockWebSocket;
+        // @ts-ignore
+        (window as any).MediaRecorder = MockMediaRecorder;
+        Object.defineProperty(navigator, 'mediaDevices', {
+          configurable: true,
+          value: {
+            getUserMedia: async () => ({
+              getTracks: () => [{ stop: () => {} }],
+            }),
+          },
+        });
+      }, scenario);
+
+      await page.goto('/');
+      await page.getByTestId('hydrated-marker').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+      await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
+
+      await page.locator(`input[value="${scenario.modelId}"]`).check();
+      await page.getByTestId('language-select').selectOption('en');
+      await page.getByTestId('translation-target-select').selectOption('ja');
+      await page.getByTestId('start-recording').click();
+
+      await expect.poll(async () => page.evaluate(() => (window as any).__lastWsConfig), {
+        timeout: 10000,
+      }).toMatchObject({
+        model_id: scenario.modelId,
+        language: 'en',
+        target_language: 'ja',
+      });
+      await expect(page.locator('.transcript')).toContainText(scenario.expectedText, { timeout: 10000 });
+      await expect(page.getByTestId('chunk-feedback')).toContainText(/0\.42s/, { timeout: 10000 });
+    });
+  }
+
   test('Qwen3 reconnect sends latest transcript as previous_text after first chunk', async ({ page }) => {
     await page.addInitScript(() => {
       class MockWebSocket {

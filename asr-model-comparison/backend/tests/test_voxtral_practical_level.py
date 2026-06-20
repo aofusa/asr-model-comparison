@@ -79,6 +79,43 @@ def test_voxtral_dedicated_class_supports_realtime_chunking():
     backend._processor.apply_transcription_request.assert_called_once()
 
 
+def test_voxtral_translation_uses_audio_chat_instruction():
+    """
+    When translation is enabled, Voxtral should use its audio+text chat path so
+    the target language is an output instruction, not an input-language hint.
+    """
+    backend = VoxtralBackend(
+        model_id="voxtral-mini-4b",
+        use_dedicated_class=True,
+    )
+
+    backend._model = MagicMock(device="cpu")
+    backend._processor = MagicMock()
+    fake_inputs = MagicMock()
+    fake_inputs.to.return_value = fake_inputs
+    fake_inputs.input_ids.shape = [1, 3]
+    backend._processor.apply_chat_template.return_value = fake_inputs
+    backend._model.generate.return_value = [[10, 20, 30, 40]]
+    backend._processor.batch_decode.return_value = ["これは翻訳結果です"]
+
+    result = backend.transcribe(
+        b"english-audio",
+        language="en",
+        target_language="ja",
+        previous_text="Hello",
+        beam_size=5,
+    )
+
+    assert result["text"] == "これは翻訳結果です"
+    assert result["target_language"] == "ja"
+    backend._processor.apply_transcription_request.assert_not_called()
+    backend._processor.apply_chat_template.assert_called_once()
+    conversation = backend._processor.apply_chat_template.call_args.args[0]
+    prompt = conversation[0]["content"][1]["text"]
+    assert "translate it into Japanese" in prompt
+    assert "Previous transcript context: Hello" in prompt
+
+
 def test_voxtral_dedicated_class_returns_structured_timestamps():
     """
     When return_timestamps=True in dedicated class, Voxtral should return

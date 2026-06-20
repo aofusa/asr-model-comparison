@@ -41,6 +41,10 @@ def _language_name(code: str | None) -> str:
     return LANGUAGE_NAMES.get(code or "", "the detected language")
 
 
+def _is_translation_enabled(target_language: str | None) -> bool:
+    return target_language not in (None, "", "none", "auto")
+
+
 class VoxtralBackend:
     """
     Real adapter for Voxtral models using transformers.
@@ -166,6 +170,66 @@ class VoxtralBackend:
             # Deepened dedicated class path for practical real-time Japanese use
             language = kwargs.get("language")
             target_language = kwargs.get("target_language")
+            translation_enabled = _is_translation_enabled(target_language)
+
+            if translation_enabled:
+                previous_text = str(kwargs.get("previous_text", "") or "").strip()
+                target_name = _language_name(target_language)
+                source_hint = (
+                    f"The source speech language is {_language_name(language)}. "
+                    if language not in (None, "", "auto")
+                    else ""
+                )
+                context_hint = (
+                    f"Previous transcript context: {previous_text}\n"
+                    if previous_text
+                    else ""
+                )
+                prompt = (
+                    f"{source_hint}{context_hint}"
+                    f"Transcribe the audio and translate it into {target_name}. "
+                    "Return only the translated text."
+                )
+                conversation = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "audio", "path": audio_path},
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ]
+
+                inputs = self._processor.apply_chat_template(conversation)
+                inputs = inputs.to(self._model.device)
+
+                gen_kwargs = {
+                    "max_new_tokens": 512,
+                    "num_beams": kwargs.get("beam_size", 5),
+                    "temperature": kwargs.get("temperature", 0.0),
+                    "repetition_penalty": kwargs.get("repetition_penalty", 1.12),
+                    "do_sample": False,
+                }
+
+                import torch
+                with torch.no_grad():
+                    generated_ids = self._model.generate(**inputs, **gen_kwargs)
+
+                try:
+                    generated_ids = generated_ids[:, inputs.input_ids.shape[1]:]
+                except Exception:
+                    pass
+
+                text = self._processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
+                result = {
+                    "text": text,
+                    "model_id": self.model_id,
+                    "language": language,
+                    "target_language": target_language,
+                }
+                if kwargs.get("return_timestamps"):
+                    result["chunks"] = [{"text": text, "timestamp": (0.0, None)}]
+                return result
 
             # VoxtralProcessor does not accept raw audio through __call__.
             # Use the official transcription request helper for ASR mode.

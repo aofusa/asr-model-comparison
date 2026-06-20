@@ -14,6 +14,7 @@ import tempfile
 from typing import Any
 
 from app.services.asr_backends.base import ASRBackend
+from app.services.translation import translate_text
 from app.utils.server_logging import server_log
 
 
@@ -42,6 +43,15 @@ LANGUAGE_NAMES = {
 
 def _language_name(code: str | None) -> str:
     return LANGUAGE_NAMES.get(code or "", "the detected language")
+
+
+def _translation_target_language(language: str | None, target_language: str | None) -> str | None:
+    """Qwen3-ASR uses the language argument to force the output text language."""
+    if target_language not in (None, "", "none", "auto"):
+        return _language_name(target_language)
+    if language in (None, "", "auto"):
+        return None
+    return _language_name(language)
 
 
 class Qwen3ASRBackend:
@@ -208,12 +218,13 @@ class Qwen3ASRBackend:
             language = kwargs.get("language")
             target_language = kwargs.get("target_language")
             previous_text = kwargs.get("previous_text", "")
+            output_language = _translation_target_language(language, target_language)
 
             try:
                 result = self._qwen_asr_model.transcribe(
                     audio=audio_path,
                     context=previous_text or "",
-                    language=None if language in (None, "", "auto") else _language_name(language),
+                    language=output_language,
                     return_time_stamps=kwargs.get("return_timestamps", False),
                 )
             except ValueError as exc:
@@ -226,7 +237,7 @@ class Qwen3ASRBackend:
                 result = self._qwen_asr_model.transcribe(
                     audio=audio_path,
                     context=previous_text or "",
-                    language=None if language in (None, "", "auto") else _language_name(language),
+                    language=output_language,
                     return_time_stamps=False,
                 )
 
@@ -239,6 +250,12 @@ class Qwen3ASRBackend:
                 text = str(getattr(item, "text", "")).strip()
                 detected_language = getattr(item, "language", None) or language
                 time_stamps = getattr(item, "time_stamps", None)
+
+            if target_language not in (None, "", "none", "auto") and text:
+                source_language = language or detected_language
+                translated = translate_text(text, source_language, target_language)
+                if translated:
+                    text = translated
 
             normalized = {
                 "text": text,
