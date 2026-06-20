@@ -18,6 +18,7 @@ qwen-asr
 transformers>=4.46.0
 torch>=2.5.0
 torchaudio>=2.5.0
+mistral-common>=1.8.0
 
 # Audio processing
 pydub>=0.25.1
