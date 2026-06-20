@@ -5,7 +5,7 @@ These tests are intended for Qwen3-ASR and Voxtral as the main models in this pr
 
 Requirements to run:
 - Set environment variable USE_REAL_MODELS=1
-- Place a real Japanese audio file at: backend/tests/audio_samples/ja_01.wav (or configure via JA_TEST_AUDIO env var)
+- Place a real Japanese audio file at: backend/tests/audio_samples/ja_01.mp3 (or configure via JA_TEST_AUDIO env var)
 - The audio should be short (5-30 seconds) spoken Japanese.
 
 The goal is not unit testing, but practical accuracy verification on real Japanese speech.
@@ -22,7 +22,7 @@ import pytest
 
 # Audio samples are now located next to the tests for better organization
 AUDIO_SAMPLES_DIR = Path(__file__).parent / "audio_samples"
-DEFAULT_JA_AUDIO = AUDIO_SAMPLES_DIR / "ja_01.wav"
+DEFAULT_JA_AUDIO = AUDIO_SAMPLES_DIR / "ja_01.mp3"
 
 
 def _find_japanese_test_audio() -> Path | None:
@@ -51,7 +51,7 @@ def test_japanese_accuracy_qwen3_with_real_audio():
     if audio_path is None:
         pytest.skip(
             "No Japanese test audio found. "
-            "Place a file at backend/tests/audio_samples/ja_01.wav or set JA_TEST_AUDIO environment variable."
+            "Place a file at backend/tests/audio_samples/ja_01.mp3 or set JA_TEST_AUDIO environment variable."
         )
 
     from app.services.asr_backends.qwen3_backend import Qwen3ASRBackend
@@ -140,7 +140,7 @@ def test_japanese_audio_file_exists_or_skip():
             "No Japanese test audio present.\n"
             "To run real Japanese accuracy verification tests:\n"
             "1. Record or obtain a short Japanese speech clip (5-30s).\n"
-            "2. Save it as backend/tests/audio_samples/ja_01.wav (16kHz mono WAV recommended).\n"
+            "2. Save it as backend/tests/audio_samples/ja_01.mp3.\n"
             "3. Run with: USE_REAL_MODELS=1 pytest -m slow -s tests/test_japanese_accuracy_real_audio.py"
         )
 

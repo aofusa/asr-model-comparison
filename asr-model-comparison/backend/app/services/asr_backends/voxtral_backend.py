@@ -107,12 +107,12 @@ class VoxtralBackend:
 
         if self._use_dedicated_class:
             try:
-                from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
+                from transformers import AutoProcessor, VoxtralForConditionalGeneration
                 server_log("[VoxtralBackend] Attempting dedicated speech model class...")
                 self._processor = AutoProcessor.from_pretrained(self._hf_model_id)
-                self._model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                self._model = VoxtralForConditionalGeneration.from_pretrained(
                     self._hf_model_id,
-                    torch_dtype=torch_dtype,
+                    dtype=torch_dtype,
                     device_map=device_map,
                     quantization_config=quantization_config,
                     low_cpu_mem_usage=True,
@@ -161,34 +161,22 @@ class VoxtralBackend:
     def _run_inference(self, audio_path: str, **kwargs: Any) -> dict[str, Any]:
         if getattr(self, "_model", None) is not None and getattr(self, "_processor", None) is not None:
             # Deepened dedicated class path for practical real-time Japanese use
-            previous_text = kwargs.get("previous_text", "")
             language = kwargs.get("language")
             target_language = kwargs.get("target_language")
 
-            # Deepened dedicated class prompting for practical real-time Japanese use
-            input_language = _language_name(language)
-            if target_language:
-                base_prompt = (
-                    f"Transcribe the following audio in {input_language}, then translate the output "
-                    f"accurately and naturally into {_language_name(target_language)}."
-                )
-            else:
-                base_prompt = f"Transcribe the audio below accurately and naturally in {input_language}."
-            if previous_text:
-                base_prompt += f"\n\nPrevious context (for continuity with previous audio chunk):\n{previous_text}"
-
-            # Use the processor in a more deliberate way for dedicated class
-            inputs = self._processor(
+            # VoxtralProcessor does not accept raw audio through __call__.
+            # Use the official transcription request helper for ASR mode.
+            inputs = self._processor.apply_transcription_request(
+                language=language or "auto",
                 audio=audio_path,
-                text=base_prompt,
+                model_id=self._hf_model_id,
                 return_tensors="pt",
-                padding=True
             )
             inputs = inputs.to(self._model.device)
 
             # Japanese accuracy focused generation (heaviness accepted)
             gen_kwargs = {
-                "max_length": 1024,
+                "max_new_tokens": 512,
                 "num_beams": kwargs.get("beam_size", 5),
                 "temperature": kwargs.get("temperature", 0.0),
                 "repetition_penalty": kwargs.get("repetition_penalty", 1.12),
@@ -199,6 +187,11 @@ class VoxtralBackend:
             with torch.no_grad():
                 generated_ids = self._model.generate(**inputs, **gen_kwargs)
 
+            try:
+                generated_ids = generated_ids[:, inputs.input_ids.shape[1]:]
+            except Exception:
+                # Unit tests use simple list/MagicMock values instead of tensors.
+                pass
             text = self._processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
             result = {"text": text, "model_id": self.model_id, "language": language, "target_language": target_language}

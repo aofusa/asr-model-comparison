@@ -21,6 +21,21 @@ class _FakeQwen3ASRModel:
         return [SimpleNamespace(text="テストです", language="Japanese", time_stamps=(0.0, 1.0))]
 
 
+class _FakeQwen3ASRModelWithoutAligner:
+    calls: list[dict] = []
+
+    @classmethod
+    def from_pretrained(cls, model_id: str, **kwargs):
+        cls.calls.append({"model_id": model_id, "kwargs": kwargs})
+        return cls()
+
+    def transcribe(self, **kwargs):
+        self.calls.append({"transcribe": kwargs})
+        if kwargs.get("return_time_stamps") is True:
+            raise ValueError("return_time_stamps=True requires `forced_aligner` to be provided at initialization.")
+        return [SimpleNamespace(text="テストです", language="Japanese")]
+
+
 def _install_fake_torch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(
         __import__("sys").modules,
@@ -79,3 +94,22 @@ def test_qwen3_missing_qwen_asr_does_not_fallback_to_generic_pipeline(
     message = str(excinfo.value)
     assert "qwen-asr" in message
     assert "generic transformers ASR pipeline cannot load Qwen3-ASR" in message
+
+
+def test_qwen3_retries_without_timestamps_when_forced_aligner_is_missing(monkeypatch: pytest.MonkeyPatch):
+    _FakeQwen3ASRModelWithoutAligner.calls = []
+    _install_fake_torch(monkeypatch)
+
+    fake_qwen3_module = types.ModuleType("qwen_asr.inference.qwen3_asr")
+    fake_qwen3_module.Qwen3ASRModel = _FakeQwen3ASRModelWithoutAligner
+
+    monkeypatch.setitem(__import__("sys").modules, "qwen_asr", types.ModuleType("qwen_asr"))
+    monkeypatch.setitem(__import__("sys").modules, "qwen_asr.inference", types.ModuleType("qwen_asr.inference"))
+    monkeypatch.setitem(__import__("sys").modules, "qwen_asr.inference.qwen3_asr", fake_qwen3_module)
+
+    backend = Qwen3ASRBackend("qwen3-asr-0.6b", device="cpu")
+    result = backend.transcribe(b"fake-wav", language="ja", return_timestamps=True)
+
+    transcribe_calls = [call["transcribe"] for call in _FakeQwen3ASRModelWithoutAligner.calls if "transcribe" in call]
+    assert result["text"] == "テストです"
+    assert [call["return_time_stamps"] for call in transcribe_calls] == [True, False]

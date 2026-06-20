@@ -209,12 +209,26 @@ class Qwen3ASRBackend:
             target_language = kwargs.get("target_language")
             previous_text = kwargs.get("previous_text", "")
 
-            result = self._qwen_asr_model.transcribe(
-                audio=audio_path,
-                context=previous_text or "",
-                language=None if language in (None, "", "auto") else _language_name(language),
-                return_time_stamps=kwargs.get("return_timestamps", False),
-            )
+            try:
+                result = self._qwen_asr_model.transcribe(
+                    audio=audio_path,
+                    context=previous_text or "",
+                    language=None if language in (None, "", "auto") else _language_name(language),
+                    return_time_stamps=kwargs.get("return_timestamps", False),
+                )
+            except ValueError as exc:
+                if "return_time_stamps=True requires `forced_aligner`" not in str(exc):
+                    raise
+                server_log(
+                    "[Qwen3ASRBackend] forced_aligner is not configured; "
+                    "retrying transcription without timestamps."
+                )
+                result = self._qwen_asr_model.transcribe(
+                    audio=audio_path,
+                    context=previous_text or "",
+                    language=None if language in (None, "", "auto") else _language_name(language),
+                    return_time_stamps=False,
+                )
 
             item = result[0] if isinstance(result, list) and result else result
             if isinstance(item, dict):

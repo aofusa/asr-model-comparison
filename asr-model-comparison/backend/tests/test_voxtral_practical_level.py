@@ -46,6 +46,7 @@ def test_voxtral_dedicated_class_uses_japanese_optimized_prompting():
     # should contain Japanese-focused instructions + previous context.
     # For now we at least verify it doesn't crash and returns structure.
     assert result["model_id"] == "voxtral-mini-4b"
+    backend._processor.apply_transcription_request.assert_called_once()
 
 
 def test_voxtral_dedicated_class_supports_realtime_chunking():
@@ -72,6 +73,7 @@ def test_voxtral_dedicated_class_supports_realtime_chunking():
 
     assert "text" in result
     assert result["model_id"] == "voxtral-mini-4b"
+    backend._processor.apply_transcription_request.assert_called_once()
 
 
 def test_voxtral_dedicated_class_returns_structured_timestamps():
