@@ -184,6 +184,7 @@ export default component$(() => {
     pcmChunks: null as NoSerialize<Float32Array[]> | null,
     pcmSampleCount: 0,
     volumeRaf: null as number | null,
+    reconnectNow: null as NoSerialize<((isReconnect?: boolean) => void | Promise<void>)> | null,
   });
 
   // Load persisted settings on mount (client only)
@@ -274,16 +275,23 @@ export default component$(() => {
 
     refs.reconnectTimeout = setTimeout(() => {
       clearCountdown();
-      connectWebSocket(true);
+      const reconnectNow = refs.reconnectNow;
+      if (reconnectNow) {
+        void reconnectNow(true);
+      } else {
+        isReconnecting.value = false;
+        status.value = 'Reconnect is not ready yet. Please click Reconnect manually.';
+      }
     }, delaySeconds * 1000);
   });
 
   const connectWebSocket = $((isReconnect = false) => {
     clearReconnectTimeout();
 
-    if (refs.ws) {
-      try { refs.ws.close(); } catch {}
+    const previousWs = refs.ws;
+    if (previousWs) {
       refs.ws = null;
+      try { previousWs.close(); } catch {}
     }
 
     // Dynamic WS URL so it works if served on non-8000 or via proxy (while keeping dev on :8000).
@@ -291,9 +299,13 @@ export default component$(() => {
     const wsHost = (typeof window !== 'undefined' && window.location.host) ? window.location.host : 'localhost:8000';
     const wsUrl = `${wsProtocol}//${wsHost}/api/ws/transcribe`;
     console.log('[connectWebSocket] creating WS to', wsUrl);
-    refs.ws = noSerialize(new WebSocket(wsUrl));
+    const ws = new WebSocket(wsUrl);
+    refs.ws = noSerialize(ws);
 
-    refs.ws.onopen = () => {
+    ws.onopen = () => {
+      if (refs.ws !== ws || ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
       console.log('[connectWebSocket] WS onopen - connected to server');
       clearCountdown();
       reconnectAttempts.value = 0;
@@ -319,10 +331,13 @@ export default component$(() => {
         config.previous_text = previousText.value;
       }
 
-      refs.ws!.send(JSON.stringify(config));
+      ws.send(JSON.stringify(config));
     };
 
-    refs.ws.onmessage = (event) => {
+    ws.onmessage = (event) => {
+      if (refs.ws !== ws) {
+        return;
+      }
       const data = JSON.parse(event.data);
 
       if (data.type === 'ready') {
@@ -389,14 +404,20 @@ export default component$(() => {
       }
     };
 
-    refs.ws.onerror = () => {
+    ws.onerror = () => {
+      if (refs.ws !== ws) {
+        return;
+      }
       status.value = 'Connection error';
       if (isRecording.value) {
         scheduleReconnect();
       }
     };
 
-    refs.ws.onclose = () => {
+    ws.onclose = () => {
+      if (refs.ws !== ws) {
+        return;
+      }
       const wasRecording = isRecording.value;
       status.value = 'Disconnected';
       refs.ws = null;
@@ -405,6 +426,17 @@ export default component$(() => {
         scheduleReconnect();
       }
     };
+  });
+
+  const reconnectNow = $(() => {
+    clearCountdown();
+    reconnectAttempts.value = 0;
+    const reconnect = refs.reconnectNow;
+    if (reconnect) {
+      void reconnect(true);
+    } else {
+      status.value = 'Reconnect is not ready yet. Please try again.';
+    }
   });
 
   // Phase 2: Simple real-time volume meter using Web Audio API Analyser
@@ -642,6 +674,8 @@ export default component$(() => {
   const stopRecording = $(() => {
     clearReconnectTimeout();
     clearCountdown();
+    isRecording.value = false;
+    isReconnecting.value = false;
 
     if (refs.mediaRecorder) {
       refs.mediaRecorder.stop();
@@ -662,8 +696,6 @@ export default component$(() => {
       refs.ws = null;
     }
 
-    isRecording.value = false;
-    isReconnecting.value = false;
     status.value = 'Stopped';
     try {
       const statusEl = document.querySelector('[data-testid="status"]');
@@ -707,6 +739,7 @@ export default component$(() => {
       const startFn = await startRecording.resolve();
       const stopFn = await stopRecording.resolve();
       const connectFn = await connectWebSocket.resolve();
+      refs.reconnectNow = noSerialize(connectFn);
       const startVolumeFn = await startVolumeMeter.resolve();
       const stopVolumeFn = await stopVolumeMeter.resolve();
       const startPcmFn = await startPcmChunkStreaming.resolve();
@@ -804,6 +837,8 @@ export default component$(() => {
           } catch {}
           refs.mediaRecorder = null;
         }
+        isRecording.value = false;
+        isReconnecting.value = false;
         stopPcmFn();
         if (refs.micStream) {
           try { refs.micStream.getTracks().forEach(track => track.stop()); } catch {}
@@ -814,8 +849,6 @@ export default component$(() => {
           try { refs.ws.close(); } catch {}
           refs.ws = null;
         }
-        isRecording.value = false;
-        isReconnecting.value = false;
         reconnectAttempts.value = 0;
         setStatusDom('Stopped');
         const startBtn = document.querySelector('[data-testid="start-recording"]') as HTMLButtonElement | null;
@@ -1089,11 +1122,7 @@ export default component$(() => {
         {(status.value.includes('Disconnected') || status.value.includes('error') || status.value.includes('failed') || isReconnecting.value) ? (
           <button 
             data-testid="reconnect-button"
-            onClick$={() => {
-              clearCountdown();
-              reconnectAttempts.value = 0;
-              connectWebSocket(true);
-            }} 
+            onClick$={reconnectNow}
             disabled={isRecording.value}
           >
             🔄 {isReconnecting.value ? 'Retry Now' : 'Reconnect Now'}
@@ -1122,11 +1151,7 @@ export default component$(() => {
           </div>
           <div class="reconnection-actions">
             <button 
-              onClick$={() => {
-                clearCountdown();
-                reconnectAttempts.value = 0;
-                connectWebSocket(true);
-              }}
+              onClick$={reconnectNow}
               disabled={isRecording.value}
             >
               Retry Immediately

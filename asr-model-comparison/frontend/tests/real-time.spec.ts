@@ -661,6 +661,114 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
       target_language: 'ja',
     });
   });
+
+  test('rapid model switches and reconnects do not throw stale WebSocket errors', async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on('pageerror', (err) => {
+      pageErrors.push(err.message);
+    });
+
+    await page.addInitScript(() => {
+      class MockWebSocket {
+        static CONNECTING = 0;
+        static OPEN = 1;
+        static CLOSING = 2;
+        static CLOSED = 3;
+
+        readyState = MockWebSocket.CONNECTING;
+        onopen: ((ev: any) => void) | null = null;
+        onclose: ((ev: any) => void) | null = null;
+        onerror: ((ev: any) => void) | null = null;
+        onmessage: ((ev: any) => void) | null = null;
+        sentConfigs: any[] = [];
+
+        constructor(public url: string) {
+          (window as any).__mockSockets = ((window as any).__mockSockets || []);
+          (window as any).__mockSockets.push(this);
+          setTimeout(() => {
+            this.readyState = MockWebSocket.OPEN;
+            this.onopen?.(new Event('open'));
+          }, 30);
+        }
+
+        send(data: any) {
+          if (this.readyState !== MockWebSocket.OPEN) {
+            throw new Error('Cannot send unless socket is open');
+          }
+          if (typeof data === 'string') {
+            const parsed = JSON.parse(data);
+            if (parsed.type === 'config') {
+              this.sentConfigs.push(parsed);
+              (window as any).__lastWsConfig = parsed;
+              setTimeout(() => {
+                this.onmessage?.(new MessageEvent('message', {
+                  data: JSON.stringify({ type: 'ready', model_id: parsed.model_id }),
+                }));
+              }, 0);
+            }
+          }
+        }
+
+        close() {
+          this.readyState = MockWebSocket.CLOSED;
+          this.onclose?.(new CloseEvent('close'));
+        }
+
+        addEventListener() {}
+        removeEventListener() {}
+        dispatchEvent() { return true; }
+      }
+
+      class MockMediaRecorder {
+        ondataavailable: ((ev: any) => void) | null = null;
+        stream: any;
+        constructor(stream: any) {
+          this.stream = stream;
+        }
+        start() {}
+        stop() {}
+      }
+
+      // @ts-ignore
+      (window as any).WebSocket = MockWebSocket;
+      // @ts-ignore
+      (window as any).MediaRecorder = MockMediaRecorder;
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: {
+          getUserMedia: async () => ({
+            getTracks: () => [{ stop: () => {} }],
+          }),
+        },
+      });
+    });
+
+    await page.goto('/');
+    await page.getByTestId('hydrated-marker').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+    await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
+
+    await page.locator('input[value="whisper-tiny"]').check();
+    await page.getByTestId('start-recording').click();
+    await page.locator('input[value="whisper-small"]').check();
+    await page.getByTestId('stop-recording').click({ force: true }).catch(() => {});
+    await page.getByTestId('start-recording').click();
+    await page.locator('input[value="qwen3-asr-0.6b"]').check();
+    await page.getByTestId('stop-recording').click({ force: true }).catch(() => {});
+    await page.getByTestId('start-recording').click();
+
+    await page.waitForTimeout(120);
+
+    expect(
+      pageErrors.filter((message) =>
+        message.includes('connectWebSocket') ||
+        message.includes("Cannot read properties of null") ||
+        message.includes('Cannot send unless socket is open')
+      ),
+    ).toHaveLength(0);
+    await expect.poll(async () => page.evaluate(() => (window as any).__lastWsConfig?.model_id), {
+      timeout: 5000,
+    }).toBe('qwen3-asr-0.6b');
+  });
 });
 
 

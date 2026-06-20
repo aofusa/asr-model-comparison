@@ -174,6 +174,26 @@ def test_websocket_graceful_disconnect():
     assert True
 
 
+def test_websocket_client_disconnect_during_model_load_does_not_log_unexpected_send_error(caplog):
+    """
+    If the browser switches models quickly, the previous WebSocket can disappear
+    while the server is still loading. Cleanup should not try to send an error
+    frame after a close frame has already been sent.
+    """
+    client = TestClient(app)
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
+    patcher, _fake_backend, loaded_model_ids = _mock_loader_for("create_qwen3_loader", text="")
+
+    with patcher:
+        with client.websocket_connect("/api/ws/transcribe") as websocket:
+            websocket.send_json({"type": "config", "model_id": "qwen3-asr-0.6b"})
+            websocket.close()
+
+    assert loaded_model_ids == ["qwen3-asr-0.6b"]
+    assert 'Cannot call "send" once a close message has been sent' not in caplog.text
+    assert "[WebSocket] Unexpected error:" not in caplog.text
+
+
 def test_websocket_chunk_provides_useful_feedback_for_realtime_mic_use_case():
     """
     TDD Phase 1 (per 修正指示書_リアルタイムASR_WS...):

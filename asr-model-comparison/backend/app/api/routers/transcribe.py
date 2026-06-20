@@ -194,18 +194,39 @@ async def websocket_transcribe(websocket: WebSocket):
     vad_filter = False
     chunk_index = 0
 
+    def _is_closed_send_error(exc: Exception) -> bool:
+        message = str(exc)
+        return (
+            'Cannot call "send" once a close message has been sent' in message
+            or "Cannot call \"receive\" once a disconnect message has been received" in message
+            or "WebSocket is not connected" in message
+        )
+
+    async def safe_send_json(payload: dict) -> bool:
+        try:
+            await websocket.send_json(payload)
+            return True
+        except WebSocketDisconnect:
+            server_log("[WebSocket] Client disconnected before send")
+            return False
+        except RuntimeError as exc:
+            if _is_closed_send_error(exc):
+                server_log("[WebSocket] Client disconnected before send")
+                return False
+            raise
+
     try:
         # Wait for initial config
         first_message = await websocket.receive()
         if "text" not in first_message:
-            await websocket.send_json({"type": "error", "message": "First message must be config JSON"})
+            await safe_send_json({"type": "error", "message": "First message must be config JSON"})
             await websocket.close()
             return
 
         try:
             config = json.loads(first_message["text"])
             if config.get("type") != "config":
-                await websocket.send_json({"type": "error", "message": "First message must have type 'config'"})
+                await safe_send_json({"type": "error", "message": "First message must have type 'config'"})
                 await websocket.close()
                 return
 
@@ -226,7 +247,7 @@ async def websocket_transcribe(websocket: WebSocket):
                 f"return_timestamps={return_timestamps} vad_filter={vad_filter}"
             )
         except Exception:
-            await websocket.send_json({"type": "error", "message": "Invalid config JSON"})
+            await safe_send_json({"type": "error", "message": "Invalid config JSON"})
             await websocket.close()
             return
 
@@ -252,13 +273,14 @@ async def websocket_transcribe(websocket: WebSocket):
         await manager.load_model(current_model_id)
         server_log(f"[WS Ready] model loaded and ready model={current_model_id}")
 
-        await websocket.send_json({
+        if not await safe_send_json({
             "type": "ready",
             "model_id": current_model_id,
             "language": language,
             "target_language": target_language,
             "return_timestamps": return_timestamps
-        })
+        }):
+            return
 
         # Main streaming loop
         while True:
@@ -311,7 +333,7 @@ async def websocket_transcribe(websocket: WebSocket):
                         f"had_speech={had_speech} proc={result.get('processing_time_seconds', 0):.3f}s"
                     )
 
-                    await websocket.send_json({
+                    if not await safe_send_json({
                         "type": "transcription",
                         "model_id": current_model_id,
                         "text": new_text,
@@ -323,7 +345,8 @@ async def websocket_transcribe(websocket: WebSocket):
                         "had_speech": had_speech,
                         "chunk_index": chunk_index,
                         "chunk_size_bytes": len(audio_for_model),
-                    })
+                    }):
+                        break
 
                 except Exception as e:
                     server_log(
@@ -331,11 +354,12 @@ async def websocket_transcribe(websocket: WebSocket):
                         f"raw={len(raw_chunk)}B norm={len(audio_for_model)}B "
                         f"error={type(e).__name__}: {e}"
                     )
-                    await websocket.send_json({
+                    if not await safe_send_json({
                         "type": "error",
                         "code": "transcription_failed",
                         "message": str(e)
-                    })
+                    }):
+                        break
 
             elif "text" in message:
                 try:
@@ -350,7 +374,7 @@ async def websocket_transcribe(websocket: WebSocket):
                         vad_filter = data.get("vad_filter", vad_filter)
 
                     elif msg_type == "end":
-                        await websocket.send_json({
+                        await safe_send_json({
                             "type": "final",
                             "model_id": current_model_id,
                             "text": previous_text,
@@ -358,24 +382,25 @@ async def websocket_transcribe(websocket: WebSocket):
                         break
 
                 except Exception:
-                    await websocket.send_json({
+                    if not await safe_send_json({
                         "type": "error",
                         "code": "invalid_message",
                         "message": "Could not parse control message"
-                    })
+                    }):
+                        break
 
     except WebSocketDisconnect:
         server_log("[WebSocket] Client disconnected")
     except Exception as e:
-        server_log(f"[WebSocket] Unexpected error: {e}")
-        try:
-            await websocket.send_json({
+        if _is_closed_send_error(e):
+            server_log("[WebSocket] Client disconnected")
+        else:
+            server_log(f"[WebSocket] Unexpected error: {e}")
+            await safe_send_json({
                 "type": "error",
                 "code": "unexpected_error",
                 "message": str(e)
             })
-        except:
-            pass
     finally:
         if manager is not None:
             try:
