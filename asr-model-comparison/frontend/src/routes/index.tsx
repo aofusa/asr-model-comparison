@@ -1,5 +1,77 @@
 import { component$, useSignal, useStore, $, useVisibleTask$, noSerialize, type NoSerialize } from '@builder.io/qwik';
 
+function getMicrophoneUnavailableStatus(error?: unknown): string {
+  const errorName = error && typeof error === 'object' && 'name' in error
+    ? String((error as { name?: unknown }).name)
+    : '';
+
+  if (typeof window !== 'undefined' && !window.isSecureContext) {
+    return 'Mic unavailable: browser blocks microphone on insecure remote HTTP. Use HTTPS or open this app on localhost.';
+  }
+
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+    return 'Mic unavailable: this browser does not expose getUserMedia for this page.';
+  }
+
+  if (errorName === 'NotAllowedError' || errorName === 'SecurityError') {
+    return 'Mic unavailable: microphone permission was blocked. Allow microphone access in the browser.';
+  }
+
+  if (errorName === 'NotFoundError' || errorName === 'DevicesNotFoundError') {
+    return 'Mic unavailable: no microphone device was found.';
+  }
+
+  return `Mic unavailable${errorName ? ` (${errorName})` : ''}.`;
+}
+
+function encodePcm16Wav(samples: Float32Array, sampleRate: number): Blob {
+  const bytesPerSample = 2;
+  const blockAlign = bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = samples.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  const writeString = (offset: number, value: string) => {
+    for (let i = 0; i < value.length; i++) {
+      view.setUint8(offset + i, value.charCodeAt(i));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeString(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const sample = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+function mergeFloatChunks(chunks: Float32Array[], totalLength: number): Float32Array {
+  const merged = new Float32Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return merged;
+}
+
 export default component$(() => {
   const isRecording = useSignal(false);
   const transcript = useSignal('');
@@ -79,6 +151,11 @@ export default component$(() => {
     countdownInterval: null as any,
     audioContext: null as NoSerialize<AudioContext> | null,
     analyser: null as NoSerialize<AnalyserNode> | null,
+    micStream: null as NoSerialize<MediaStream> | null,
+    pcmSource: null as NoSerialize<MediaStreamAudioSourceNode> | null,
+    pcmProcessor: null as NoSerialize<ScriptProcessorNode> | null,
+    pcmChunks: null as NoSerialize<Float32Array[]> | null,
+    pcmSampleCount: 0,
     volumeRaf: null as number | null,
   });
 
@@ -349,6 +426,76 @@ export default component$(() => {
     volumeLevel.value = 0;
   });
 
+  const startPcmChunkStreaming = $((stream: MediaStream) => {
+    try {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      const sampleRate = audioContext.sampleRate;
+      const targetSamples = sampleRate * 2;
+
+      refs.micStream = noSerialize(stream);
+      refs.pcmSource = noSerialize(source);
+      refs.pcmProcessor = noSerialize(processor);
+      refs.pcmChunks = noSerialize([] as Float32Array[]);
+      refs.pcmSampleCount = 0;
+
+      processor.onaudioprocess = (event) => {
+        if (!isRecording.value || !refs.ws || refs.ws.readyState !== WebSocket.OPEN) {
+          return;
+        }
+
+        const input = event.inputBuffer.getChannelData(0);
+        const copy = new Float32Array(input.length);
+        copy.set(input);
+        refs.pcmChunks?.push(copy);
+        refs.pcmSampleCount += copy.length;
+
+        if (refs.pcmSampleCount < targetSamples) {
+          return;
+        }
+
+        const chunks = refs.pcmChunks || [];
+        const merged = mergeFloatChunks(chunks, refs.pcmSampleCount);
+        refs.pcmChunks = noSerialize([] as Float32Array[]);
+        refs.pcmSampleCount = 0;
+
+        chunkCount.value++;
+        currentChunkStatus.value = 'processing';
+        status.value = `Recording... (processing chunk #${chunkCount.value})`;
+        try {
+          const statusEl = document.querySelector('[data-testid="status"]');
+          if (statusEl) statusEl.textContent = `Status: ${status.value}`;
+        } catch {}
+
+        refs.ws.send(encodePcm16Wav(merged, sampleRate));
+      };
+
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+      return true;
+    } catch (err) {
+      console.warn('[Audio] PCM chunk streaming unavailable, falling back to MediaRecorder:', err);
+      return false;
+    }
+  });
+
+  const stopPcmChunkStreaming = $(() => {
+    if (refs.pcmProcessor) {
+      try {
+        refs.pcmProcessor.disconnect();
+        refs.pcmProcessor.onaudioprocess = null;
+      } catch {}
+      refs.pcmProcessor = null;
+    }
+    if (refs.pcmSource) {
+      try { refs.pcmSource.disconnect(); } catch {}
+      refs.pcmSource = null;
+    }
+    refs.pcmChunks = null;
+    refs.pcmSampleCount = 0;
+  });
+
   // C: Copy finalized transcript to clipboard
   const copyFinalTranscript = $(async () => {
     if (!finalTranscript.value) return;
@@ -372,16 +519,44 @@ export default component$(() => {
     if (isRecording.value) return;
 
     reconnectAttempts.value = 0;
-    isRecording.value = true;
-    status.value = 'Recording...';
+    status.value = 'Requesting microphone...';
 
     // Belt-and-suspenders for flaky Qwik reactivity in static client-render:
     // Directly mutate DOM for critical feedback elements.
     try {
       const statusEl = document.querySelector('[data-testid="status"]');
-      if (statusEl) statusEl.textContent = 'Status: Recording...';
+      if (statusEl) statusEl.textContent = 'Status: Requesting microphone...';
       const startBtn = document.querySelector('[data-testid="start-recording"]') as HTMLButtonElement | null;
       if (startBtn) startBtn.disabled = true;
+    } catch {}
+
+    let stream: MediaStream;
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('getUserMedia unavailable');
+      }
+      console.log('[StartRecording] calling getUserMedia...');
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log('[StartRecording] getUserMedia succeeded, starting MediaRecorder');
+    } catch (err) {
+      const message = getMicrophoneUnavailableStatus(err);
+      console.error('[StartRecording] getUserMedia error:', err);
+      isRecording.value = false;
+      status.value = message;
+      try {
+        const statusEl = document.querySelector('[data-testid="status"]');
+        if (statusEl) statusEl.textContent = `Status: ${message}`;
+        const startBtn = document.querySelector('[data-testid="start-recording"]') as HTMLButtonElement | null;
+        if (startBtn) startBtn.disabled = false;
+      } catch {}
+      return;
+    }
+
+    isRecording.value = true;
+    status.value = 'Recording...';
+    try {
+      const statusEl = document.querySelector('[data-testid="status"]');
+      if (statusEl) statusEl.textContent = 'Status: Recording...';
     } catch {}
 
     // Phase 2: Reset transcripts for new session
@@ -397,32 +572,37 @@ export default component$(() => {
     await connectWebSocket(false);
 
     try {
-      console.log('[StartRecording] calling getUserMedia...');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      console.log('[StartRecording] getUserMedia succeeded, starting MediaRecorder');
-      refs.mediaRecorder = noSerialize(new MediaRecorder(stream));
-
-      refs.mediaRecorder.ondataavailable = async (event) => {
-        if (event.data.size > 0 && refs.ws && refs.ws.readyState === WebSocket.OPEN) {
-          chunkCount.value++;
-          currentChunkStatus.value = 'processing';
-          status.value = `Recording... (processing chunk #${chunkCount.value})`;
-          refs.ws.send(event.data);
-        }
-      };
-
-      refs.mediaRecorder.start(2000);
+      const usingPcm = startPcmChunkStreaming(stream);
+      if (!usingPcm) {
+        refs.mediaRecorder = noSerialize(new MediaRecorder(stream));
+        refs.mediaRecorder.ondataavailable = async (event) => {
+          if (event.data.size > 0 && refs.ws && refs.ws.readyState === WebSocket.OPEN) {
+            chunkCount.value++;
+            currentChunkStatus.value = 'processing';
+            status.value = `Recording... (processing chunk #${chunkCount.value})`;
+            refs.ws.send(event.data);
+          }
+        };
+        refs.mediaRecorder.start(2000);
+      }
 
       // Phase 2: Start live volume visualization
       startVolumeMeter(stream);
     } catch (err) {
-      console.error('[StartRecording] getUserMedia or recorder error:', err);
-      // Mic permission / device error is non-fatal for the reconnect test flow;
-      // the WS failure will still trigger the banner via the isRecording flag we already set.
-      status.value = 'Mic unavailable (reconnect test mode)';
+      const message = `Recording unavailable: ${err instanceof Error ? err.message : 'MediaRecorder failed'}`;
+      console.error('[StartRecording] recorder error:', err);
+      status.value = message;
+      isRecording.value = false;
+      try { stream.getTracks().forEach(track => track.stop()); } catch {}
+      if (refs.ws) {
+        try { refs.ws.close(); } catch {}
+        refs.ws = null;
+      }
       try {
         const statusEl = document.querySelector('[data-testid="status"]');
-        if (statusEl) statusEl.textContent = 'Status: Mic unavailable (reconnect test mode)';
+        if (statusEl) statusEl.textContent = `Status: ${message}`;
+        const startBtn = document.querySelector('[data-testid="start-recording"]') as HTMLButtonElement | null;
+        if (startBtn) startBtn.disabled = false;
       } catch {}
     }
   });
@@ -435,6 +615,11 @@ export default component$(() => {
       refs.mediaRecorder.stop();
       refs.mediaRecorder.stream.getTracks().forEach(track => track.stop());
       refs.mediaRecorder = null;
+    }
+    stopPcmChunkStreaming();
+    if (refs.micStream) {
+      try { refs.micStream.getTracks().forEach(track => track.stop()); } catch {}
+      refs.micStream = null;
     }
 
     if (refs.ws) {
@@ -488,6 +673,8 @@ export default component$(() => {
       const connectFn = await connectWebSocket.resolve();
       const startVolumeFn = await startVolumeMeter.resolve();
       const stopVolumeFn = await stopVolumeMeter.resolve();
+      const startPcmFn = await startPcmChunkStreaming.resolve();
+      const stopPcmFn = await stopPcmChunkStreaming.resolve();
       const highFn = await setHighAccuracy.resolve();
       const balancedFn = await setBalanced.resolve();
       const fasterFn = await setFaster.resolve();
@@ -501,11 +688,29 @@ export default component$(() => {
       const startFallback = async () => {
         if (isRecording.value) return;
         reconnectAttempts.value = 0;
-        isRecording.value = true;
-        setStatusDom('Recording...');
+        setStatusDom('Requesting microphone...');
         const startBtn = document.querySelector('[data-testid="start-recording"]') as HTMLButtonElement | null;
         if (startBtn) startBtn.disabled = true;
         const stopBtn = document.querySelector('[data-testid="stop-recording"]') as HTMLButtonElement | null;
+        if (stopBtn) stopBtn.disabled = true;
+
+        let stream: MediaStream;
+        try {
+          if (!navigator.mediaDevices?.getUserMedia) {
+            throw new Error('getUserMedia unavailable');
+          }
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (err) {
+          const message = getMicrophoneUnavailableStatus(err);
+          isRecording.value = false;
+          setStatusDom(message);
+          if (startBtn) startBtn.disabled = false;
+          if (stopBtn) stopBtn.disabled = true;
+          return;
+        }
+
+        isRecording.value = true;
+        setStatusDom('Recording...');
         if (stopBtn) stopBtn.disabled = false;
 
         finalTranscript.value = '';
@@ -518,20 +723,31 @@ export default component$(() => {
         await connectFn(false);
 
         try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          refs.mediaRecorder = noSerialize(new MediaRecorder(stream));
-          refs.mediaRecorder.ondataavailable = async (event) => {
-            if (event.data.size > 0 && refs.ws && (refs.ws.readyState === WebSocket.OPEN || refs.ws.readyState === 1)) {
-              chunkCount.value++;
-              currentChunkStatus.value = 'processing';
-              setStatusDom(`Recording... (processing chunk #${chunkCount.value})`);
-              refs.ws.send(event.data);
-            }
-          };
-          refs.mediaRecorder.start(2000);
+          const usingPcm = startPcmFn(stream);
+          if (!usingPcm) {
+            refs.mediaRecorder = noSerialize(new MediaRecorder(stream));
+            refs.mediaRecorder.ondataavailable = async (event) => {
+              if (event.data.size > 0 && refs.ws && (refs.ws.readyState === WebSocket.OPEN || refs.ws.readyState === 1)) {
+                chunkCount.value++;
+                currentChunkStatus.value = 'processing';
+                setStatusDom(`Recording... (processing chunk #${chunkCount.value})`);
+                refs.ws.send(event.data);
+              }
+            };
+            refs.mediaRecorder.start(2000);
+          }
           startVolumeFn(stream);
-        } catch {
-          setStatusDom('Mic unavailable (reconnect test mode)');
+        } catch (err) {
+          const message = `Recording unavailable: ${err instanceof Error ? err.message : 'MediaRecorder failed'}`;
+          isRecording.value = false;
+          setStatusDom(message);
+          try { stream.getTracks().forEach(track => track.stop()); } catch {}
+          if (refs.ws) {
+            try { refs.ws.close(); } catch {}
+            refs.ws = null;
+          }
+          if (startBtn) startBtn.disabled = false;
+          if (stopBtn) stopBtn.disabled = true;
         }
       };
 
@@ -550,6 +766,11 @@ export default component$(() => {
             refs.mediaRecorder.stream.getTracks().forEach(track => track.stop());
           } catch {}
           refs.mediaRecorder = null;
+        }
+        stopPcmFn();
+        if (refs.micStream) {
+          try { refs.micStream.getTracks().forEach(track => track.stop()); } catch {}
+          refs.micStream = null;
         }
         if (refs.ws) {
           try { refs.ws.send(JSON.stringify({ type: 'end' })); } catch {}
@@ -608,6 +829,7 @@ export default component$(() => {
           }
         }, true);
       }
+      document.documentElement.setAttribute('data-amcp-controls-wired', 'true');
 
       // Give the Qwik render into #root a moment to finish inserting elements (especially after
       // the entry.client.tsx root.innerHTML='' + render). querySelector can miss on the first tick.
@@ -620,14 +842,13 @@ export default component$(() => {
         startEl = Array.from(document.querySelectorAll('button')).find(b => b.textContent?.includes('Start Recording')) as HTMLElement | null;
       }
       if (startEl) {
-        const fn = await startRecording.resolve();
         // Avoid duplicate listeners
         if (!(startEl as any)._wiredStart) {
           (startEl as any)._wiredStart = true;
           startEl.addEventListener('click', (e) => { 
             console.log('[NativeWiring] start button clicked via native listener');
             e.preventDefault(); 
-            fn(); 
+            void startFallback(); 
           });
           console.log('[NativeWiring] attached native click to start-recording button');
         }
@@ -637,13 +858,12 @@ export default component$(() => {
         stopEl = Array.from(document.querySelectorAll('button')).find(b => b.textContent?.includes('Stop')) as HTMLElement | null;
       }
       if (stopEl) {
-        const fn = await stopRecording.resolve();
         if (!(stopEl as any)._wiredStop) {
           (stopEl as any)._wiredStop = true;
           stopEl.addEventListener('click', (e) => { 
             console.log('[NativeWiring] stop button clicked via native listener');
             e.preventDefault(); 
-            fn(); 
+            stopFallback(); 
           });
           console.log('[NativeWiring] attached native click to stop-recording button');
         }

@@ -392,6 +392,41 @@ test.describe('Phase 2 - Visual Feedback (volume meter etc.)', () => {
 // =====================================================
 
 test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realtime)', () => {
+  test('insecure remote HTTP clearly reports microphone blocking before opening WebSocket', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, 'isSecureContext', {
+        configurable: true,
+        value: false,
+      });
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: undefined,
+      });
+      (window as any).__wsCreated = false;
+      class MockWebSocket {
+        constructor(_url: string) {
+          (window as any).__wsCreated = true;
+        }
+      }
+      // @ts-ignore - track accidental WS creation when mic is unavailable
+      (window as any).WebSocket = MockWebSocket;
+    });
+
+    await page.goto('/');
+    await page.getByTestId('hydrated-marker').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+    await page.getByTestId('status').waitFor({ timeout: 8000 }).catch(() => {});
+    await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
+
+    await page.evaluate(() => {
+      (window as any).__wsCreated = false;
+    });
+    await page.getByTestId('start-recording').click();
+
+    await expect(page.getByTestId('status')).toContainText(/insecure remote HTTP|HTTPS|localhost/i, { timeout: 5000 });
+    const wsCreated = await page.evaluate(() => (window as any).__wsCreated);
+    expect(wsCreated).toBe(false);
+  });
+
   test('transcription chunk responses should update visible feedback (last chunk time / status)', async ({ page }) => {
     await page.goto('/');
 
@@ -530,7 +565,7 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
 
     // The app attaches a native fallback listener shortly after hydration for
     // static/prod parity. Wait a tick so this test exercises the same path.
-    await page.waitForTimeout(150);
+    await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
     await page.getByTestId('start-recording').click();
     await expect(page.getByTestId('status')).toContainText(/Recording|Ready|last chunk/i, { timeout: 5000 });
 
