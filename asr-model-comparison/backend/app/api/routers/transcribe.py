@@ -28,7 +28,7 @@ from app.services.asr_backends.factory import (
 from app.utils.server_logging import server_log
 
 # Realtime audio chunk normalization (addresses empty-text problem from browser mic blobs)
-from app.utils.audio import normalize_to_wav_pcm_16k_mono
+from app.utils.audio import is_likely_speech, normalize_to_wav_pcm_16k_mono
 
 router = APIRouter(prefix="/api", tags=["transcribe"])
 
@@ -321,6 +321,29 @@ async def websocket_transcribe(websocket: WebSocket):
                     f"[WS Audio] normalized model={current_model_id} chunk={chunk_index} "
                     f"raw_bytes={len(raw_chunk)} normalized_bytes={len(audio_for_model)}"
                 )
+
+                if not is_likely_speech(audio_for_model):
+                    server_log(
+                        f"[WS Chunk] model={current_model_id} raw={len(raw_chunk)}B "
+                        f"norm={len(audio_for_model)}B chunk={chunk_index} text_len=0 "
+                        "had_speech=False proc=0.000s skipped=silence"
+                    )
+                    if not await safe_send_json({
+                        "type": "transcription",
+                        "model_id": current_model_id,
+                        "text": "",
+                        "is_final": False,
+                        "chunks": [],
+                        "language": None if language in (None, "", "auto") else language,
+                        "target_language": None if target_language in (None, "", "none") else target_language,
+                        "processing_time_seconds": 0.0,
+                        "had_speech": False,
+                        "chunk_index": chunk_index,
+                        "chunk_size_bytes": len(audio_for_model),
+                        "accumulated_text": previous_text,
+                    }):
+                        break
+                    continue
 
                 try:
                     asr_language = None if language in (None, "", "auto") else language

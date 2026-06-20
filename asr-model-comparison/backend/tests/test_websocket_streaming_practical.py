@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.api.routers.transcribe import _merge_realtime_context
+from app.utils.audio import is_likely_speech
 
 
 def _mock_whisper_loader(text: str = ""):
@@ -60,6 +61,17 @@ def _mock_loader_for(router_factory_name: str, text: str = ""):
         fake_backend,
         loaded_model_ids,
     )
+
+
+def _tiny_silent_wav() -> bytes:
+    return base64.b64decode(
+        'UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA='
+    )
+
+
+def test_is_likely_speech_treats_empty_wav_as_silence_but_keeps_fake_bytes():
+    assert is_likely_speech(_tiny_silent_wav()) is False
+    assert is_likely_speech(b"fake browser mic chunk") is True
 
 
 def test_websocket_practical_connection_and_config():
@@ -330,6 +342,41 @@ def test_websocket_chunk_response_includes_chunk_index_and_size_for_ui_feedback(
     assert "[WS Model] loader selected model=whisper-tiny" in server_logs
     assert "[WS Audio] normalized model=whisper-tiny chunk=1" in server_logs
     assert "[WS Chunk] model=whisper-tiny" in server_logs
+
+
+def test_websocket_voxtral_silent_wav_returns_no_speech_without_inference():
+    """
+    Playwright fake microphones can produce valid but empty/silent WAV chunks.
+    Voxtral should not receive those chunks because the real backend raises a
+    zero-length feature error for them; the UI still needs a normal chunk reply.
+    """
+    client = TestClient(app)
+    patcher, fake_backend, loaded_model_ids = _mock_loader_for("create_voxtral_loader", text="unexpected")
+
+    with patcher:
+        with client.websocket_connect("/api/ws/transcribe") as websocket:
+            websocket.send_json({
+                "type": "config",
+                "model_id": "voxtral-mini-4b",
+                "language": "ja",
+                "beam_size": 5,
+                "return_timestamps": True,
+            })
+            ready = websocket.receive_json()
+
+            websocket.send_bytes(_tiny_silent_wav())
+            response = websocket.receive_json()
+
+    assert ready["type"] == "ready"
+    assert ready["model_id"] == "voxtral-mini-4b"
+    assert loaded_model_ids == ["voxtral-mini-4b"]
+    assert response["type"] == "transcription"
+    assert response["model_id"] == "voxtral-mini-4b"
+    assert response["text"] == ""
+    assert response["had_speech"] is False
+    assert response["processing_time_seconds"] == 0.0
+    assert response["chunk_index"] == 1
+    fake_backend.transcribe.assert_not_called()
 
 
 @pytest.mark.parametrize(

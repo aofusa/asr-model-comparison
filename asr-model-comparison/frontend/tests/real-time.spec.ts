@@ -667,6 +667,95 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
     });
   });
 
+  test('Voxtral Mini 4B selection sends Voxtral config through browser flow', async ({ page }) => {
+    await page.addInitScript(() => {
+      class MockWebSocket {
+        static CONNECTING = 0;
+        static OPEN = 1;
+        static CLOSING = 2;
+        static CLOSED = 3;
+
+        readyState = MockWebSocket.CONNECTING;
+        onopen: ((ev: any) => void) | null = null;
+        onclose: ((ev: any) => void) | null = null;
+        onmessage: ((ev: any) => void) | null = null;
+
+        constructor(public url: string) {
+          setTimeout(() => {
+            this.readyState = MockWebSocket.OPEN;
+            this.onopen?.(new Event('open'));
+          }, 0);
+        }
+
+        send(data: any) {
+          if (typeof data === 'string') {
+            const parsed = JSON.parse(data);
+            if (parsed.type === 'config') {
+              (window as any).__lastWsConfig = parsed;
+              setTimeout(() => {
+                this.onmessage?.(new MessageEvent('message', {
+                  data: JSON.stringify({ type: 'ready', model_id: parsed.model_id }),
+                }));
+              }, 0);
+            }
+          }
+        }
+
+        close() {
+          this.readyState = MockWebSocket.CLOSED;
+          this.onclose?.(new CloseEvent('close'));
+        }
+
+        addEventListener() {}
+        removeEventListener() {}
+        dispatchEvent() { return true; }
+      }
+
+      class MockMediaRecorder {
+        ondataavailable: ((ev: any) => void) | null = null;
+        stream: any;
+        constructor(stream: any) {
+          this.stream = stream;
+        }
+        start() {}
+        stop() {}
+      }
+
+      // @ts-ignore
+      (window as any).WebSocket = MockWebSocket;
+      // @ts-ignore
+      (window as any).MediaRecorder = MockMediaRecorder;
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: {
+          getUserMedia: async () => ({
+            getTracks: () => [{ stop: () => {} }],
+          }),
+        },
+      });
+    });
+
+    await page.goto('/');
+    await page.getByTestId('hydrated-marker').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+    await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
+
+    await page.locator('input[value="voxtral-mini-4b"]').check();
+    await page.getByTestId('language-select').selectOption('ja');
+    await expect(page.getByTestId('translation-target-select')).toBeVisible({ timeout: 5000 });
+    await page.getByTestId('translation-target-select').selectOption('none');
+    await page.getByTestId('start-recording').click();
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__lastWsConfig), {
+      timeout: 10000,
+    }).toMatchObject({
+      model_id: 'voxtral-mini-4b',
+      language: 'ja',
+      target_language: 'none',
+      use_dedicated_class: true,
+      return_timestamps: true,
+    });
+  });
+
   test('Qwen3 reconnect sends latest transcript as previous_text after first chunk', async ({ page }) => {
     await page.addInitScript(() => {
       class MockWebSocket {

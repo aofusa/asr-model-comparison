@@ -12,7 +12,7 @@ MediaRecorder chunks in the WS /api/ws/transcribe flow.
 from __future__ import annotations
 
 import io
-from typing import Optional
+import wave
 
 from app.utils.server_logging import server_log
 
@@ -69,13 +69,28 @@ def is_likely_speech(audio: bytes, threshold: int = 500) -> bool:
 
     This is a lightweight complement to the model's own VAD.
     """
-    if not audio or len(audio) < 100:
+    if not audio:
         return False
     try:
-        # If it's a WAV, we could parse header, but for speed just look at amplitude bytes.
-        # Treat last 1k bytes as rough proxy for energy.
-        tail = audio[-1024:]
-        energy = sum(abs(b - 128) for b in tail)  # rough for 8-bit, good enough as heuristic
-        return energy > threshold
+        with wave.open(io.BytesIO(audio), "rb") as wav:
+            frames = wav.readframes(wav.getnframes())
+            sample_width = wav.getsampwidth()
+
+        if not frames:
+            return False
+
+        if sample_width == 1:
+            # 8-bit PCM is unsigned.
+            peak = max(abs(sample - 128) for sample in frames)
+        elif sample_width == 2:
+            samples = memoryview(frames).cast("h")
+            peak = max(abs(sample) for sample in samples) if samples else 0
+        else:
+            # Valid but uncommon in this app. Avoid expensive parsing and let
+            # the backend decide rather than dropping potentially useful speech.
+            return True
+
+        return peak > threshold
     except Exception:
+        # Non-WAV/fake test bytes should continue through the model path.
         return True  # when in doubt, let the model decide

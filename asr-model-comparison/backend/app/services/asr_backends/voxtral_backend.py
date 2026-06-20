@@ -94,8 +94,11 @@ class VoxtralBackend:
                 "Install them before loading Voxtral models."
             ) from exc
 
+        # Voxtral is large enough that CPU float32 loading can crash the host
+        # process on 16-24GB machines. The model cards recommend reduced
+        # precision; bfloat16 is the safest CPU default when available.
         torch_dtype = self._torch_dtype or (
-            torch.float16 if self._device in ("cuda", "mps") else torch.float32
+            torch.float16 if self._device in ("cuda", "mps") else torch.bfloat16
         )
 
         quantization_config = None

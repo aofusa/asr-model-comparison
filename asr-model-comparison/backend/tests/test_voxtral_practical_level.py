@@ -7,8 +7,11 @@ Focus areas:
 - High-quality timestamp output
 - Japanese accuracy generation parameters
 """
+
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -30,7 +33,7 @@ def test_voxtral_dedicated_class_uses_japanese_optimized_prompting():
     backend._model = MagicMock()
     backend._processor = MagicMock()
     backend._processor.return_tensors = "pt"
-    backend._model.generate.return_value = [[1,2,3]]
+    backend._model.generate.return_value = [[1, 2, 3]]
     backend._processor.batch_decode.return_value = ["日本語のテスト結果"]
 
     result = backend.transcribe(
@@ -62,7 +65,7 @@ def test_voxtral_dedicated_class_supports_realtime_chunking():
     backend._model = MagicMock()
     backend._processor = MagicMock()
     backend._processor.return_tensors = "pt"
-    backend._model.generate.return_value = [[10,20]]
+    backend._model.generate.return_value = [[10, 20]]
     backend._processor.batch_decode.return_value = ["続きの認識"]
 
     result = backend.transcribe(
@@ -89,7 +92,7 @@ def test_voxtral_dedicated_class_returns_structured_timestamps():
     backend._model = MagicMock()
     backend._processor = MagicMock()
     backend._processor.return_tensors = "pt"
-    backend._model.generate.return_value = [[5,6,7]]
+    backend._model.generate.return_value = [[5, 6, 7]]
     backend._processor.batch_decode.return_value = ["タイムスタンプ付きテキスト"]
 
     result = backend.transcribe(
@@ -114,7 +117,7 @@ def test_voxtral_applies_japanese_generation_parameters():
     backend._model = MagicMock()
     backend._processor = MagicMock()
     backend._processor.return_tensors = "pt"
-    backend._model.generate.return_value = [[8,9]]
+    backend._model.generate.return_value = [[8, 9]]
 
     # Call with Japanese settings
     backend.transcribe(
@@ -128,3 +131,37 @@ def test_voxtral_applies_japanese_generation_parameters():
     call_kwargs = backend._model.generate.call_args[1]
     assert call_kwargs.get("num_beams", 1) >= 4
     assert call_kwargs.get("temperature", 1.0) <= 0.2
+
+
+def test_voxtral_cpu_default_uses_reduced_precision_for_memory(monkeypatch):
+    """
+    Voxtral Mini is too large for safe CPU float32 loading on 16-24GB machines.
+    The dedicated loader should default to bfloat16 unless the caller overrides it.
+    """
+    import torch
+
+    fake_processor_cls = MagicMock()
+    fake_processor_cls.from_pretrained.return_value = MagicMock()
+    fake_model_cls = MagicMock()
+    fake_model_cls.from_pretrained.return_value = MagicMock(device="cpu")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        SimpleNamespace(
+            AutoProcessor=fake_processor_cls,
+            VoxtralForConditionalGeneration=fake_model_cls,
+            pipeline=MagicMock(),
+        ),
+    )
+
+    backend = VoxtralBackend(
+        model_id="voxtral-mini-4b",
+        device="cpu",
+        use_dedicated_class=True,
+    )
+
+    backend._ensure_loaded()
+
+    _, kwargs = fake_model_cls.from_pretrained.call_args
+    assert kwargs["dtype"] is torch.bfloat16
