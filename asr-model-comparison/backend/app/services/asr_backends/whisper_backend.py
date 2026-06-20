@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.asr_backends.base import ASRBackend
+from app.utils.server_logging import server_log
 
 
 class WhisperBackend:
@@ -52,14 +53,14 @@ class WhisperBackend:
 
         from faster_whisper import WhisperModel
 
-        print(f"[WhisperBackend] Loading real model: {self.model_id} ({self._internal_size}) on {self._device}...")
+        server_log(f"[WhisperBackend] Loading real model: {self.model_id} ({self._internal_size}) on {self._device}...")
         self._model = WhisperModel(
             self._internal_size,
             device=self._device,
             compute_type=self._compute_type,
             download_root=self._download_root,
         )
-        print(f"[WhisperBackend] Model {self.model_id} loaded successfully.")
+        server_log(f"[WhisperBackend] Model {self.model_id} loaded successfully.")
 
     def transcribe(self, audio: bytes | str, **kwargs: Any) -> dict[str, Any]:
         """
@@ -146,4 +147,4 @@ class WhisperBackend:
             except Exception:
                 pass
 
-            print(f"[WhisperBackend] Model {self.model_id} unloaded and memory cleaned.")
+            server_log(f"[WhisperBackend] Model {self.model_id} unloaded and memory cleaned.")

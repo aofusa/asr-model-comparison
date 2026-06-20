@@ -25,6 +25,7 @@ from app.services.asr_backends.factory import (
     create_whisper_loader,
     whisper_unloader,
 )
+from app.utils.server_logging import server_log
 
 # Realtime audio chunk normalization (addresses empty-text problem from browser mic blobs)
 from app.utils.audio import normalize_to_wav_pcm_16k_mono
@@ -115,11 +116,10 @@ async def transcribe_audio(
         raise HTTPException(status_code=400, detail="Uploaded audio file is empty")
 
     try:
-        print(
+        server_log(
             f"[HTTP Transcribe] request model={model_id} filename={audio.filename} "
             f"bytes={len(audio_bytes)} language={language} beam_size={beam_size} "
-            f"return_timestamps={return_timestamps} previous_text_len={len(previous_text or '')}",
-            flush=True,
+            f"return_timestamps={return_timestamps} previous_text_len={len(previous_text or '')}"
         )
         result = await model_manager.transcribe(
             audio=audio_bytes,
@@ -137,16 +137,15 @@ async def transcribe_audio(
         raise HTTPException(status_code=503, detail=f"Model temporarily unavailable: {exc}") from exc
     except Exception as exc:
         # Log the full error in production
-        print(f"[Transcribe Error] model={model_id} error={exc}")
+        server_log(f"[Transcribe Error] model={model_id} error={exc}")
         raise HTTPException(status_code=500, detail="Transcription failed due to an internal error.") from exc
 
     # Ensure we always return the required shape
     text = result.get("text", "") if isinstance(result, dict) else str(result)
     proc_time = float(result.get("processing_time_seconds", 0.0)) if isinstance(result, dict) else 0.0
-    print(
+    server_log(
         f"[HTTP Transcribe] complete model={model_id} text_len={len(text)} "
-        f"processing_time={proc_time:.3f}s",
-        flush=True,
+        f"processing_time={proc_time:.3f}s"
     )
 
     return TranscriptionResponse(
@@ -174,12 +173,12 @@ async def websocket_transcribe(websocket: WebSocket):
 
     Model is loaded only once per connection (critical for heavy models like Qwen3 1.7B / Voxtral 4B).
     """
-    print("[WS] New connection attempt received", flush=True)
+    server_log("[WS] New connection attempt received")
     try:
         await websocket.accept()
-        print("[WS] accept() succeeded", flush=True)
+        server_log("[WS] accept() succeeded")
     except Exception as e:
-        print(f"[WS] accept() FAILED: {e}", flush=True)
+        server_log(f"[WS] accept() FAILED: {e}")
         raise
 
     manager: ModelManager | None = None
@@ -219,13 +218,12 @@ async def websocket_transcribe(websocket: WebSocket):
             use_dedicated_class = config.get("use_dedicated_class", use_dedicated_class)
             return_timestamps = config.get("return_timestamps", return_timestamps)
             vad_filter = config.get("vad_filter", vad_filter)
-            print(
+            server_log(
                 f"[WS Config] model={current_model_id} language={language} "
                 f"target_language={target_language} beam_size={beam_size} "
                 f"temperature={temperature} repetition_penalty={repetition_penalty} "
                 f"use_dedicated_class={use_dedicated_class} "
-                f"return_timestamps={return_timestamps} vad_filter={vad_filter}",
-                flush=True,
+                f"return_timestamps={return_timestamps} vad_filter={vad_filter}"
             )
         except Exception:
             await websocket.send_json({"type": "error", "message": "Invalid config JSON"})
@@ -247,10 +245,9 @@ async def websocket_transcribe(websocket: WebSocket):
             loader = create_whisper_loader(device="cpu", compute_type="int8")
 
         manager = ModelManager(model_loader=loader)
-        print(
+        server_log(
             f"[WS Model] loader selected model={current_model_id} "
-            f"use_dedicated_class={use_dedicated_class}",
-            flush=True,
+            f"use_dedicated_class={use_dedicated_class}"
         )
 
         await websocket.send_json({
@@ -277,10 +274,9 @@ async def websocket_transcribe(websocket: WebSocket):
                 # (faster-whisper etc.) + its VAD can actually see speech.
                 # Without this, short 2s chunks frequently decode to empty after VAD.
                 audio_for_model = normalize_to_wav_pcm_16k_mono(raw_chunk)
-                print(
+                server_log(
                     f"[WS Audio] normalized model={current_model_id} chunk={chunk_index} "
-                    f"raw_bytes={len(raw_chunk)} normalized_bytes={len(audio_for_model)}",
-                    flush=True,
+                    f"raw_bytes={len(raw_chunk)} normalized_bytes={len(audio_for_model)}"
                 )
 
                 try:
@@ -307,11 +303,10 @@ async def websocket_transcribe(websocket: WebSocket):
                     had_speech = bool(new_text or result.get("chunks") or result.get("segments"))
 
                     # Diagnostic log (very useful when user reports "nothing happens")
-                    print(
+                    server_log(
                         f"[WS Chunk] model={current_model_id} raw={len(raw_chunk)}B "
                         f"norm={len(audio_for_model)}B chunk={chunk_index} text_len={len(new_text)} "
-                        f"had_speech={had_speech} proc={result.get('processing_time_seconds', 0):.3f}s",
-                        flush=True,
+                        f"had_speech={had_speech} proc={result.get('processing_time_seconds', 0):.3f}s"
                     )
 
                     await websocket.send_json({
@@ -329,11 +324,10 @@ async def websocket_transcribe(websocket: WebSocket):
                     })
 
                 except Exception as e:
-                    print(
+                    server_log(
                         f"[WS Chunk Error] model={current_model_id} chunk={chunk_index} "
                         f"raw={len(raw_chunk)}B norm={len(audio_for_model)}B "
-                        f"error={type(e).__name__}: {e}",
-                        flush=True,
+                        f"error={type(e).__name__}: {e}"
                     )
                     await websocket.send_json({
                         "type": "error",
@@ -369,9 +363,9 @@ async def websocket_transcribe(websocket: WebSocket):
                     })
 
     except WebSocketDisconnect:
-        print("[WebSocket] Client disconnected")
+        server_log("[WebSocket] Client disconnected")
     except Exception as e:
-        print(f"[WebSocket] Unexpected error: {e}")
+        server_log(f"[WebSocket] Unexpected error: {e}")
         try:
             await websocket.send_json({
                 "type": "error",

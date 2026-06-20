@@ -11,6 +11,7 @@ import os
 from typing import Any
 
 from app.services.asr_backends.base import ASRBackend
+from app.utils.server_logging import server_log
 
 
 LANGUAGE_NAMES = {
@@ -64,7 +65,7 @@ class VoxtralBackend:
         self._kwargs = kwargs
 
         if quantization == "4bit" and device != "cuda":
-            print(f"[VoxtralBackend] Warning: 4-bit requested on {device}. Falling back.")
+            server_log(f"[VoxtralBackend] Warning: 4-bit requested on {device}. Falling back.")
             self._quantization = "none"
 
         self._torch_dtype = torch_dtype
@@ -82,7 +83,7 @@ class VoxtralBackend:
         if self._pipe is not None or getattr(self, "_model", None) is not None:
             return
 
-        print(f"[VoxtralBackend] Loading real model: {self.model_id} ({self._hf_model_id}) on {self._device}...")
+        server_log(f"[VoxtralBackend] Loading real model: {self.model_id} ({self._hf_model_id}) on {self._device}...")
 
         try:
             import torch
@@ -107,7 +108,7 @@ class VoxtralBackend:
         if self._use_dedicated_class:
             try:
                 from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
-                print(f"[VoxtralBackend] Attempting dedicated speech model class...")
+                server_log("[VoxtralBackend] Attempting dedicated speech model class...")
                 self._processor = AutoProcessor.from_pretrained(self._hf_model_id)
                 self._model = AutoModelForSpeechSeq2Seq.from_pretrained(
                     self._hf_model_id,
@@ -116,10 +117,10 @@ class VoxtralBackend:
                     quantization_config=quantization_config,
                     low_cpu_mem_usage=True,
                 )
-                print(f"[VoxtralBackend] Loaded using dedicated class.")
+                server_log("[VoxtralBackend] Loaded using dedicated class.")
                 return
             except Exception as e:
-                print(f"[VoxtralBackend] Dedicated class failed ({type(e).__name__}). Falling back to pipeline...")
+                server_log(f"[VoxtralBackend] Dedicated class failed ({type(e).__name__}). Falling back to pipeline...")
 
         self._pipe = pipeline(
             "automatic-speech-recognition",
@@ -128,7 +129,7 @@ class VoxtralBackend:
             torch_dtype=torch_dtype,
             model_kwargs={"low_cpu_mem_usage": True},
         )
-        print(f"[VoxtralBackend] Model {self.model_id} loaded via pipeline (fallback).")
+        server_log(f"[VoxtralBackend] Model {self.model_id} loaded via pipeline (fallback).")
 
     def transcribe(self, audio: bytes | str, **kwargs: Any) -> dict[str, Any]:
         try:
@@ -255,4 +256,4 @@ class VoxtralBackend:
                 torch.cuda.empty_cache()
         except Exception:
             pass
-        print(f"[VoxtralBackend] Model {self.model_id} unloaded.")
+        server_log(f"[VoxtralBackend] Model {self.model_id} unloaded.")

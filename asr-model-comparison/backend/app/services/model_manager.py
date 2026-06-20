@@ -18,6 +18,7 @@ from typing import Any
 
 from app.models.available_models import AVAILABLE_MODELS
 from app.models.schemas import ModelInfo
+from app.utils.server_logging import server_log
 
 # Type aliases for dependency injection (makes testing trivial)
 ModelLoader = Callable[[str], Awaitable[Any]]          # model_id -> loaded engine instance
@@ -87,21 +88,17 @@ class ModelManager:
         if model_id not in self._valid_model_ids:
             raise ValueError(f"Unknown model id: {model_id}. Valid: {self._valid_model_ids}")
 
-        print(
-            f"[ModelManager] load requested model={model_id} current={self._current_model_id}",
-            flush=True,
-        )
+        server_log(f"[ModelManager] load requested model={model_id} current={self._current_model_id}")
 
         if self._current_model_id == model_id:
-            print(f"[ModelManager] model reuse model={model_id}", flush=True)
+            server_log(f"[ModelManager] model reuse model={model_id}")
             return
 
         # Always unload previous before attempting new load (core constraint)
         if self._current_model_id is not None:
-            print(
+            server_log(
                 f"[ModelManager] switching model unload_previous={self._current_model_id} "
-                f"load_next={model_id}",
-                flush=True,
+                f"load_next={model_id}"
             )
             await self.unload_current()
 
@@ -109,39 +106,38 @@ class ModelManager:
         # (WhisperBackend, Qwen3ASRBackend, etc.) is responsible for mapping
         # to the library-specific identifier.
         start = time.perf_counter()
-        print(f"[ModelManager] loading start model={model_id}", flush=True)
+        server_log(f"[ModelManager] loading start model={model_id}")
         try:
             self._current_instance = await self._model_loader(model_id)
         except Exception as exc:
             elapsed = time.perf_counter() - start
-            print(
+            server_log(
                 f"[ModelManager] loading failed model={model_id} elapsed={elapsed:.3f}s "
-                f"error={type(exc).__name__}: {exc}",
-                flush=True,
+                f"error={type(exc).__name__}: {exc}"
             )
             raise
 
         self._current_model_id = model_id
         elapsed = time.perf_counter() - start
-        print(f"[ModelManager] loading complete model={model_id} elapsed={elapsed:.3f}s", flush=True)
+        server_log(f"[ModelManager] loading complete model={model_id} elapsed={elapsed:.3f}s")
 
     async def unload_current(self) -> None:
         """Explicitly unload whatever model is currently resident (if any)."""
         if self._current_instance is None:
-            print("[ModelManager] unload skipped current=None", flush=True)
+            server_log("[ModelManager] unload skipped current=None")
             self._current_model_id = None
             return
 
         model_id = self._current_model_id
         start = time.perf_counter()
-        print(f"[ModelManager] unload start model={model_id}", flush=True)
+        server_log(f"[ModelManager] unload start model={model_id}")
         if self._current_instance is not None:
             await self._model_unloader(self._current_instance)
 
         self._current_instance = None
         self._current_model_id = None
         elapsed = time.perf_counter() - start
-        print(f"[ModelManager] unload complete model={model_id} elapsed={elapsed:.3f}s", flush=True)
+        server_log(f"[ModelManager] unload complete model={model_id} elapsed={elapsed:.3f}s")
 
     async def get_current_instance(self) -> Any:
         """Return the raw loaded engine (for transcription service to use)."""
@@ -210,10 +206,9 @@ class ModelManager:
 
         instance = await self.get_current_instance()
         audio_desc = self._describe_audio(audio)
-        print(
+        server_log(
             f"[ModelManager] transcribe start model={self.current_model_id} {audio_desc} "
-            f"options={sorted(kwargs.keys())}",
-            flush=True,
+            f"options={sorted(kwargs.keys())}"
         )
 
         # The actual engine may expose .transcribe(audio, ...) or be a callable
@@ -227,10 +222,9 @@ class ModelManager:
                 result = {"text": f"[mock transcription from {self.current_model_id}]"}
         except Exception as exc:
             elapsed = time.perf_counter() - start
-            print(
+            server_log(
                 f"[ModelManager] transcribe failed model={self.current_model_id} "
-                f"elapsed={elapsed:.3f}s error={type(exc).__name__}: {exc}",
-                flush=True,
+                f"elapsed={elapsed:.3f}s error={type(exc).__name__}: {exc}"
             )
             raise
 
@@ -250,10 +244,9 @@ class ModelManager:
             text_len = len(result["text"])
             chunk_count = 0
 
-        print(
+        server_log(
             f"[ModelManager] transcribe complete model={self.current_model_id} "
-            f"elapsed={elapsed:.3f}s text_len={text_len} chunks={chunk_count}",
-            flush=True,
+            f"elapsed={elapsed:.3f}s text_len={text_len} chunks={chunk_count}"
         )
 
         return result

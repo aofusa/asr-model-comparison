@@ -14,6 +14,7 @@ import tempfile
 from typing import Any
 
 from app.services.asr_backends.base import ASRBackend
+from app.utils.server_logging import server_log
 
 
 LANGUAGE_NAMES = {
@@ -69,7 +70,7 @@ class Qwen3ASRBackend:
         self._kwargs = kwargs
 
         if quantization == "4bit" and device != "cuda":
-            print(f"[Qwen3ASRBackend] Warning: 4-bit quantization requested on {device}. Falling back.")
+            server_log(f"[Qwen3ASRBackend] Warning: 4-bit quantization requested on {device}. Falling back.")
             self._quantization = "none"
 
         self._torch_dtype = torch_dtype
@@ -94,7 +95,7 @@ class Qwen3ASRBackend:
             return
 
         try:
-            print(f"[Qwen3ASRBackend] Loading real model: {self.model_id} ({self._hf_model_id}) on {self._device}...")
+            server_log(f"[Qwen3ASRBackend] Loading real model: {self.model_id} ({self._hf_model_id}) on {self._device}...")
         except Exception:
             pass
 
@@ -145,7 +146,7 @@ class Qwen3ASRBackend:
                 model_kwargs["dtype"] = torch_dtype
 
             try:
-                print("[Qwen3ASRBackend] Attempting official qwen_asr Qwen3ASRModel...")
+                server_log("[Qwen3ASRBackend] Attempting official qwen_asr Qwen3ASRModel...")
                 try:
                     self._qwen_asr_model = qwen3_asr_model_cls.from_pretrained(
                         self._hf_model_id,
@@ -161,7 +162,7 @@ class Qwen3ASRBackend:
                         max_new_tokens=self._kwargs.get("max_new_tokens", 512),
                         **model_kwargs,
                     )
-                print("[Qwen3ASRBackend] Successfully loaded using official qwen_asr backend.")
+                server_log("[Qwen3ASRBackend] Successfully loaded using official qwen_asr backend.")
                 return
             except Exception as e:
                 raise RuntimeError(
@@ -294,4 +295,4 @@ class Qwen3ASRBackend:
         except Exception:
             pass
 
-        print(f"[Qwen3ASRBackend] Model {self.model_id} unloaded.")
+        server_log(f"[Qwen3ASRBackend] Model {self.model_id} unloaded.")

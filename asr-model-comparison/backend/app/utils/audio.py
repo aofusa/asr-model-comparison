@@ -14,6 +14,8 @@ from __future__ import annotations
 import io
 from typing import Optional
 
+from app.utils.server_logging import server_log
+
 
 def normalize_to_wav_pcm_16k_mono(raw_audio: bytes) -> bytes:
     """
@@ -49,7 +51,11 @@ def normalize_to_wav_pcm_16k_mono(raw_audio: bytes) -> bytes:
         # Log at call site (WS handler) for diagnostics.
         # Common on Python 3.13 (needs `pip install audioop-lts`) or when ffmpeg not in PATH.
         # For full real-time mic support on Windows: install ffmpeg (gyan.dev) + audioop-lts + pydub.
-        print(f"[audio] normalize_to_wav_pcm_16k_mono failed (raw bytes passed through; may cause empty ASR results for webm chunks), error: {exc}")
+        server_log(
+            "[audio] normalize_to_wav_pcm_16k_mono failed "
+            "(raw bytes passed through; may cause empty ASR results for webm chunks), "
+            f"error: {exc}"
+        )
         return raw_audio
 
 

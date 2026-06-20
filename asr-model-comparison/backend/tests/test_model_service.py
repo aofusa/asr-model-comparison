@@ -11,6 +11,7 @@ are required during unit testing.
 """
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -115,8 +116,9 @@ async def test_unload_clears_state(mock_loaders):
 
 
 @pytest.mark.asyncio
-async def test_model_manager_logs_model_load_and_audio_processing(mock_loaders, capsys):
+async def test_model_manager_logs_model_load_and_audio_processing(mock_loaders, caplog):
     """Operational logs should show model lifecycle and audio processing status."""
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
     manager = ModelManager(
         model_loader=mock_loaders["load"],
         model_unloader=mock_loaders["unload"],
@@ -130,14 +132,15 @@ async def test_model_manager_logs_model_load_and_audio_processing(mock_loaders, 
     )
     await manager.unload_current()
 
-    captured = capsys.readouterr().out
     assert result["model_id"] == "whisper-tiny"
-    assert "[ModelManager] load requested model=whisper-tiny" in captured
-    assert "[ModelManager] loading start model=whisper-tiny" in captured
-    assert "[ModelManager] loading complete model=whisper-tiny" in captured
-    assert "[ModelManager] transcribe start model=whisper-tiny bytes=16" in captured
-    assert "[ModelManager] transcribe complete model=whisper-tiny" in captured
-    assert "[ModelManager] unload complete model=whisper-tiny" in captured
+
+    server_logs = caplog.text
+    assert "[ModelManager] load requested model=whisper-tiny" in server_logs
+    assert "[ModelManager] loading start model=whisper-tiny" in server_logs
+    assert "[ModelManager] loading complete model=whisper-tiny" in server_logs
+    assert "[ModelManager] transcribe start model=whisper-tiny bytes=16" in server_logs
+    assert "[ModelManager] transcribe complete model=whisper-tiny" in server_logs
+    assert "[ModelManager] unload complete model=whisper-tiny" in server_logs
 
 
 @pytest.mark.asyncio
