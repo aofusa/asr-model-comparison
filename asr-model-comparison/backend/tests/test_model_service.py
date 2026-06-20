@@ -1,7 +1,7 @@
 """
 TDD Tests for the core ModelManager service.
 
-Critical requirement (CLAUDE.md + specs):
+Critical requirement (AGENTS.md + specs):
 - NEVER keep more than one ASR model in memory at the same time.
 - Switching models MUST unload the previous model before loading the new one.
 

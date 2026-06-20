@@ -1,7 +1,7 @@
 """
 AMCP Backend - FastAPI entry point.
 
-Design principles (per CLAUDE.md & specs):
+Design principles (per AGENTS.md & specs):
 - Only ONE ASR model loaded in memory at any time.
 - All heavy model loading is delegated to the model service.
 - Processing time is measured for every transcription request.

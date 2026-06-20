@@ -25,7 +25,7 @@ backend/
 │   └── utils/                # ユーティリティ
 ├── tests/                    # pytest テスト
 │   └── audio_samples/        # 実音声テスト用ファイル
-├── static/                   # 本番ビルド時のフロントエンド静的ファイル (シングルアプリモード用)
+├── static/                   # 本番ビルド時に生成される静的ファイル (Git管理外)
 ├── requirements.txt
 └── pyproject.toml
 ```
@@ -92,7 +92,7 @@ pytest -m slow          # 実モデルを使った重いテスト
 
 ## 本番ビルド（シングルアプリモード）
 
-プロジェクトルートから以下を実行すると、フロントエンドをビルドして `backend/static/` に配置します：
+プロジェクトルートから以下を実行すると、フロントエンドをビルドして `backend/static/` に配置します。`backend/static/` は生成物のため Git 管理対象には含めません。
 
 ```bash
 ./run.sh --build-only     # macOS/Linux

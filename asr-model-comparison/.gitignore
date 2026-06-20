@@ -1,9 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+backend/.venv/
+backend/venv/
+
+# ASR / ML model caches and large local model files
+**/model_cache/
+**/models/*.bin
+**/models/*.safetensors
+**/.cache/huggingface/
+**/.cache/torch/
+huggingface/
+torch/
+whisper/
+faster-whisper/
+*.pt
+*.pth
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.cache/
+frontend/.qwik/
+frontend/.output/
+frontend/public/build/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
 # Playwright generated artifacts
 frontend/playwright-report/
 frontend/test-results/
 
 # Generated frontend build copied for backend serving
 backend/static/
+
+# Logs and runtime scratch files
+logs/
+backend/logs/
+*.log
+tmp/
+temp/
+*.tmp
+
+# Environment variables and local config
+.env
+.env.local
+.env.*.local
+*.local
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
 
 # Workspace-level/generated documents should stay outside the app source tree
 docs/

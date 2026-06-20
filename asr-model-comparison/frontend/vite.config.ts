@@ -6,7 +6,7 @@ export default defineConfig(() => {
   return {
     plugins: [
       // Pure Qwik + Vite (no Qwik City) for dev server stability on Windows + prod static SPA.
-      // See AGENT.md, CLAUDE.md, FRONTEND_QWIK_STATIC_BUILD_PROD_HYDRATION_FIX_PLAN.md
+      // See AGENTS.md for repository-wide implementation guidance.
       qwikVite(),
       tsconfigPaths(),
     ],

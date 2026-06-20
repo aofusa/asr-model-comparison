@@ -1,6 +1,6 @@
-# AGENT.md
+# AGENTS.md
 
-このファイルは、AIコーディングエージェント（Grok, Cursor, Claude Code など）がこのリポジトリ内のコードを扱う際のガイドラインを提供します。
+このファイルは、AIコーディングエージェント（Cursor, Claude Code, Codex など）がこのリポジトリ内のコードを扱う際のガイドラインを提供します。
 
 ## プロジェクト概要
 
@@ -17,11 +17,13 @@ ASR Model Comparison Platform (AMCP) — 同一の音声サンプルに対して
 
 ## 現在の状態
 
-プロジェクトは初期計画段階です。すべてのドキュメントは `docs/` に日本語で格納されています。実装コードは `asr-model-comparison/` ディレクトリ内に配置します。
+プロジェクト本体は `asr-model-comparison/` にあります。FastAPI バックエンド、Pure Qwik + Vite フロントエンド、WebSocket リアルタイム文字起こし、再接続UX、Qwen3-ASR / Voxtral / Whisper の単一モデル運用が実装済みです。
+
+ワークスペース側の `docs/` には仕様・バックログ・利用ガイドを置きます。AI生成の修正指示書、調査メモ、実行ログ、ビルド成果物は Git 管理外にしてください。
 
 ## 目標フォルダ構造
 
-```
+```text
 asr-model-comparison/
   backend/
     app/
@@ -44,20 +46,28 @@ asr-model-comparison/
   docker-compose.yml     # オプション
 ```
 
-## コマンド（実装後）
+## コマンド
 
 ```bash
-# Backend
-cd asr-model-comparison/backend
-uvicorn app.main:app --reload
+# 推奨: フロントエンドをビルドしてバックエンドから配信
+cd asr-model-comparison
+./run.sh                 # macOS/Linux
+.\run.ps1                # Windows
+./run.sh --build-only    # ビルドのみ
+.\run.ps1 -BuildOnly     # Windows ビルドのみ
+
+# Backend 単独
+cd backend
+python -m uvicorn app.main:app --reload
 pytest
-pytest tests/test_specific.py::test_name   # 単一テスト
+pytest tests/test_specific.py::test_name
 
 # Frontend
-cd asr-model-comparison/frontend
+cd ../frontend
 npm install
 npm run dev
-npx playwright test                        # E2Eテスト
+npm run test:e2e
+npm run test:e2e:prod
 
 # コード品質
 black .
@@ -131,4 +141,4 @@ Frontend: `qwik`, `playwright` (Vite)
 - 複数モデル同時ロード/比較は行わない。
 - 実用的リアルタイム日本語精度向上（previous_text + 専用クラス + 生成パラメータ自動調整）を最優先。
 
-AGENT.md / CLAUDE.md を参照しながら作業すること。実装前にテスト、テスト後に実行確認を徹底。
+`AGENTS.md` を参照しながら作業すること。実装前にテスト、テスト後に実行確認を徹底。
