@@ -9,13 +9,31 @@ Current broken state:
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
+import app.main as main_module
 from app.main import app
 
 
-def test_manifest_json_served_correctly():
+@pytest.fixture()
+def static_dir(tmp_path, monkeypatch):
+    """Provide a minimal built frontend so static tests do not depend on generated files."""
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"name": "AMCP - Real-time ASR", "short_name": "AMCP"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "index.html").write_text(
+        "<!DOCTYPE html><html><body>ASR Real-time Comparison</body></html>",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(main_module, "STATIC_DIR", str(tmp_path))
+    return tmp_path
+
+
+def test_manifest_json_served_correctly(static_dir):
     """The manifest must be served as valid JSON at root, not as HTML fallback.
 
     This directly catches the 'Manifest: Line: 1, column: 1, Syntax error.' root cause.
@@ -30,7 +48,7 @@ def test_manifest_json_served_correctly():
     assert data.get("short_name") == "AMCP"
 
 
-def test_spa_fallback_for_unknown_path_still_works():
+def test_spa_fallback_for_unknown_path_still_works(static_dir):
     """Unknown paths (for SPA routing) must still return index.html."""
     client = TestClient(app)
     r = client.get("/this-path-does-not-exist-xyz-123")
@@ -40,7 +58,7 @@ def test_spa_fallback_for_unknown_path_still_works():
     assert "ASR Real-time Comparison" in r.text or "root" in r.text.lower()
 
 
-def test_root_static_files_like_manifest_not_overridden_by_spa_for_known_assets():
+def test_root_static_files_like_manifest_not_overridden_by_spa_for_known_assets(static_dir):
     """Ensure known root assets like manifest are preferred over SPA fallback."""
     client = TestClient(app)
     r = client.get("/manifest.json")

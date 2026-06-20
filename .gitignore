@@ -57,8 +57,8 @@ __pycache__/
 *.pt
 *.pth
 # Explicitly allow our Pydantic models directory
-!asr-model-comparison/backend/app/models/
-!asr-model-comparison/backend/app/models/*.py
+!backend/app/models/
+!backend/app/models/*.py
 
 # Node / Frontend
 node_modules/
@@ -84,14 +84,13 @@ backend/logs/
 
 # Local AI/generated documents
 docs/artifact/
-asr-model-comparison/docs/
 
-# Playwright generated artifacts in the app workspace
-asr-model-comparison/frontend/playwright-report/
-asr-model-comparison/frontend/test-results/
+# Playwright generated artifacts
+frontend/playwright-report/
+frontend/test-results/
 
 # Generated frontend build copied for backend serving
-asr-model-comparison/backend/static/
+backend/static/
 
 # OS / Editor
 .DS_Store
@@ -107,14 +106,13 @@ Thumbs.db
 .env.local
 .env.*.local
 
-# Audio test files (large binary - keep only small samples or use git-lfs)
-audio_samples/*.wav
-audio_samples/*.mp3
-audio_samples/*.m4a
-audio_samples/*.flac
-# Add a few small committed samples later if needed for CI
-!audio_samples/.gitkeep
-!audio_samples/README.md
+# Audio test files (large binary - keep only curated small samples or use git-lfs)
+backend/tests/audio_samples/*.wav
+backend/tests/audio_samples/*.mp3
+backend/tests/audio_samples/*.m4a
+backend/tests/audio_samples/*.flac
+!backend/tests/audio_samples/.gitkeep
+!backend/tests/audio_samples/README.md
 
 # Docker
 docker-compose.override.yml

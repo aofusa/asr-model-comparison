@@ -71,7 +71,7 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 ### 推奨：プロジェクト全体を起動する場合
 
-プロジェクトルート (`asr-model-comparison/`) から以下のコマンドを実行してください：
+リポジトリルートから以下のコマンドを実行してください：
 
 ```bash
 # Windows

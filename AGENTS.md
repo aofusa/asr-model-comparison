@@ -17,14 +17,14 @@ ASR Model Comparison Platform (AMCP) — 同一の音声サンプルに対して
 
 ## 現在の状態
 
-プロジェクト本体は `asr-model-comparison/` にあります。FastAPI バックエンド、Pure Qwik + Vite フロントエンド、WebSocket リアルタイム文字起こし、再接続UX、Qwen3-ASR / Voxtral / Whisper の単一モデル運用が実装済みです。
+プロジェクト本体はリポジトリルートにあります。FastAPI バックエンド、Pure Qwik + Vite フロントエンド、WebSocket リアルタイム文字起こし、再接続UX、Qwen3-ASR / Voxtral / Whisper の単一モデル運用が実装済みです。
 
 ワークスペース側の `docs/` には仕様・バックログ・利用ガイドを置きます。AI生成の修正指示書、調査メモ、実行ログ、ビルド成果物は Git 管理外にしてください。
 
 ## 目標フォルダ構造
 
 ```text
-asr-model-comparison/
+repository root/
   backend/
     app/
       main.py            # FastAPI エントリポイント
@@ -50,7 +50,6 @@ asr-model-comparison/
 
 ```bash
 # 推奨: フロントエンドをビルドしてバックエンドから配信
-cd asr-model-comparison
 ./run.sh                 # macOS/Linux
 .\run.ps1                # Windows
 ./run.sh --build-only    # ビルドのみ

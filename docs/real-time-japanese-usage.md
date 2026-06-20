@@ -20,7 +20,7 @@ This document explains how to use **Qwen3-ASR** and **Voxtral** as the primary m
 - Playwright E2E tests exist for page load, model selection, and reconnection UI elements.
 - Basic tests (4) consistently pass.
 - Detailed reconnection scenarios use injected WebSocket mock for determinism. Some minor Qwik signal update timing notes remain in automated runs; the feature is production-verified via manual/headless browser testing.
-- Run with: `cd asr-model-comparison/frontend && npm run test:e2e`
+- Run with: `cd frontend && npm run test:e2e`
 
 **Architecture decisions**:
 - Single model at a time (radio selection, one WS connection).
@@ -259,6 +259,6 @@ async function startMicrophoneStreaming(ws) {
 **Maintained for the ASR Model Comparison Project**  
 Last updated: 2026-06 (post Qwik City removal + detailed reconnection UX + Playwright coverage)
 
-**For frontend developers**: The actual implementation lives in `asr-model-comparison/frontend/src/routes/index.tsx`. The reconnection logic (scheduleReconnect, Signals, previous_text handling) and rich banner UI are the current reference. The JS example above remains useful as a protocol reference.
+**For frontend developers**: The actual implementation lives in `frontend/src/routes/index.tsx`. The reconnection logic (scheduleReconnect, Signals, previous_text handling) and rich banner UI are the current reference. The JS example above remains useful as a protocol reference.
 
 If you are developing the frontend, refer to this document + the source code when implementing real-time microphone streaming and Phase 2 visual feedback.

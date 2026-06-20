@@ -134,8 +134,8 @@ class SPAFallbackMiddleware(BaseHTTPMiddleware):
         print(f"[SPA Debug] No SPA match, calling next", flush=True)
         return await call_next(request)
 
+app.add_middleware(SPAFallbackMiddleware)
 if os.path.isdir(STATIC_DIR):
-    app.add_middleware(SPAFallbackMiddleware)
     print(f"[SPA Debug] SPAFallbackMiddleware registered (STATIC_DIR={STATIC_DIR})", flush=True)
 else:
-    print("[SPA Debug] STATIC_DIR does not exist, middleware not added", flush=True)
+    print(f"[SPA Debug] SPAFallbackMiddleware registered without static files (STATIC_DIR={STATIC_DIR})", flush=True)
