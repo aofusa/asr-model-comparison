@@ -1,16 +1,16 @@
 """
 Qwen3-ASR Real Backend Implementation
 
-Uses transformers pipeline for automatic speech recognition.
-This provides actual model usage for Qwen3-ASR 0.6B and 1.7B variants.
+Uses the official qwen_asr backend for Qwen3-ASR 0.6B and 1.7B variants.
 
 Note: First run will download the model (several GB). 
 Recommended on machines with at least 16-24GB RAM.
 """
 from __future__ import annotations
 
-import tempfile
+import importlib
 import os
+import tempfile
 from typing import Any
 
 from app.services.asr_backends.base import ASRBackend
@@ -75,6 +75,7 @@ class Qwen3ASRBackend:
         self._torch_dtype = torch_dtype
 
         self._pipe = None
+        self._qwen_asr_model = None
         self._hf_model_id = self._resolve_hf_model_id(model_id)
 
     def _resolve_hf_model_id(self, model_id: str) -> str:
@@ -85,7 +86,11 @@ class Qwen3ASRBackend:
         return mapping.get(model_id, model_id)
 
     def _ensure_loaded(self) -> None:
-        if self._pipe is not None or getattr(self, "_model", None) is not None:
+        if (
+            self._pipe is not None
+            or self._qwen_asr_model is not None
+            or getattr(self, "_model", None) is not None
+        ):
             return
 
         try:
@@ -95,10 +100,9 @@ class Qwen3ASRBackend:
 
         try:
             import torch
-            from transformers import pipeline
         except ImportError as exc:
             raise RuntimeError(
-                "Qwen3-ASR requires optional heavy dependencies: torch and transformers. "
+                "Qwen3-ASR requires optional heavy dependencies: torch and qwen-asr. "
                 "Install them before loading Qwen models."
             ) from exc
 
@@ -118,32 +122,56 @@ class Qwen3ASRBackend:
 
         if self._use_dedicated_class:
             try:
-                from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
+                qwen3_asr_module = importlib.import_module("qwen_asr.inference.qwen3_asr")
+                qwen3_asr_model_cls = getattr(qwen3_asr_module, "Qwen3ASRModel")
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Qwen3-ASR requires the official qwen-asr package. "
+                    "The generic transformers ASR pipeline cannot load Qwen3-ASR checkpoints "
+                    "and produces the observed `qwen3_asr` model type error. "
+                    "Install qwen-asr in the backend environment, then restart the server."
+                ) from exc
 
-                print(f"[Qwen3ASRBackend] Attempting dedicated Qwen2Audio class...")
-                self._processor = AutoProcessor.from_pretrained(self._hf_model_id)
-                self._model = Qwen2AudioForConditionalGeneration.from_pretrained(
-                    self._hf_model_id,
-                    torch_dtype=torch_dtype,
-                    device_map=device_map,
-                    quantization_config=quantization_config,
-                    low_cpu_mem_usage=True,
-                )
-                print(f"[Qwen3ASRBackend] Successfully loaded using dedicated class.")
+            model_kwargs = {
+                "device_map": device_map,
+                "low_cpu_mem_usage": True,
+            }
+            if quantization_config is not None:
+                model_kwargs["quantization_config"] = quantization_config
+
+            # qwen_asr forwards kwargs to Transformers. Newer Transformers
+            # accepts `dtype`; older versions may still expect `torch_dtype`.
+            if torch_dtype is not None:
+                model_kwargs["dtype"] = torch_dtype
+
+            try:
+                print("[Qwen3ASRBackend] Attempting official qwen_asr Qwen3ASRModel...")
+                try:
+                    self._qwen_asr_model = qwen3_asr_model_cls.from_pretrained(
+                        self._hf_model_id,
+                        max_new_tokens=self._kwargs.get("max_new_tokens", 512),
+                        **model_kwargs,
+                    )
+                except TypeError as exc:
+                    if "dtype" not in str(exc):
+                        raise
+                    model_kwargs["torch_dtype"] = model_kwargs.pop("dtype")
+                    self._qwen_asr_model = qwen3_asr_model_cls.from_pretrained(
+                        self._hf_model_id,
+                        max_new_tokens=self._kwargs.get("max_new_tokens", 512),
+                        **model_kwargs,
+                    )
+                print("[Qwen3ASRBackend] Successfully loaded using official qwen_asr backend.")
                 return
             except Exception as e:
-                print(f"[Qwen3ASRBackend] Dedicated class loading failed ({type(e).__name__}: {e}). Falling back to pipeline for stability...")
+                raise RuntimeError(
+                    f"Failed to load Qwen3-ASR with the official qwen_asr backend: {e}"
+                ) from e
 
-        # Stable pipeline fallback
-        device_arg = 0 if self._device == "cuda" else -1
-        self._pipe = pipeline(
-            "automatic-speech-recognition",
-            model=self._hf_model_id,
-            device=device_arg,
-            torch_dtype=torch_dtype,
-            model_kwargs={"low_cpu_mem_usage": True},
+        raise RuntimeError(
+            "Generic transformers pipeline fallback is not supported for Qwen3-ASR. "
+            "Set use_dedicated_class=True and install the official qwen-asr package."
         )
-        print(f"[Qwen3ASRBackend] Model {self.model_id} loaded via pipeline (fallback).")
 
     def transcribe(self, audio: bytes | str, **kwargs: Any) -> dict[str, Any]:
         try:
@@ -173,61 +201,41 @@ class Qwen3ASRBackend:
             return self._run_inference(str(audio), **kwargs)
 
     def _run_inference(self, audio_path: str, **kwargs: Any) -> dict[str, Any]:
-        # Dedicated class path (higher quality for real-time Japanese use)
-        if getattr(self, "_model", None) is not None and getattr(self, "_processor", None) is not None:
+        # Official qwen_asr path. This is the supported Qwen3-ASR inference API;
+        # generic transformers ASR pipeline does not understand qwen3_asr configs.
+        if self._qwen_asr_model is not None:
             language = kwargs.get("language")
             target_language = kwargs.get("target_language")
             previous_text = kwargs.get("previous_text", "")
 
-            # Improved prompting for Japanese ASR quality with real-time chunk context
-            input_language = _language_name(language)
-            if target_language:
-                user_text = (
-                    f"Transcribe the following audio in {input_language}, then translate the output "
-                    f"accurately and naturally into {_language_name(target_language)}."
-                )
-            else:
-                user_text = f"Transcribe the following audio accurately and naturally in {input_language}."
-            if previous_text:
-                user_text += f"\nPrevious transcript context (for continuity): {previous_text}"
-
-            conversation = [
-                {"role": "user", "content": [
-                    {"type": "audio", "audio_url": audio_path},
-                    {"type": "text", "text": user_text},
-                ]}
-            ]
-
-            text_prompt = self._processor.apply_chat_template(
-                conversation, add_generation_prompt=True, tokenize=False
+            result = self._qwen_asr_model.transcribe(
+                audio=audio_path,
+                context=previous_text or "",
+                language=None if language in (None, "", "auto") else _language_name(language),
+                return_time_stamps=kwargs.get("return_timestamps", False),
             )
 
-            inputs = self._processor(text=text_prompt, audio=audio_path, return_tensors="pt", padding=True)
-            inputs = inputs.to(self._model.device)
+            item = result[0] if isinstance(result, list) and result else result
+            if isinstance(item, dict):
+                text = str(item.get("text", "")).strip()
+                detected_language = item.get("language") or language
+                time_stamps = item.get("time_stamps") or item.get("timestamps")
+            else:
+                text = str(getattr(item, "text", "")).strip()
+                detected_language = getattr(item, "language", None) or language
+                time_stamps = getattr(item, "time_stamps", None)
 
-            # Japanese accuracy focused generation parameters (heaviness accepted)
-            # Recommended for real-time Japanese: low temperature + decent beams
-            gen_kwargs = {
-                "max_length": 1024,
-                "num_beams": kwargs.get("beam_size", 6),
-                "temperature": kwargs.get("temperature", 0.0),
-                "repetition_penalty": kwargs.get("repetition_penalty", 1.15),
-                "do_sample": False,
+            normalized = {
+                "text": text,
+                "model_id": self.model_id,
+                "language": detected_language,
+                "target_language": target_language,
             }
 
-            import torch
-            with torch.no_grad():
-                generated_ids = self._model.generate(**inputs, **gen_kwargs)
+            if kwargs.get("return_timestamps") and time_stamps is not None:
+                normalized["chunks"] = [{"text": text, "timestamp": time_stamps}]
 
-            text = self._processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
-
-            result = {"text": text, "model_id": self.model_id, "language": language, "target_language": target_language}
-
-            if kwargs.get("return_timestamps"):
-                # Structured timestamps (improved in dedicated path)
-                result["chunks"] = [{"text": text, "timestamp": (0.0, None)}]
-
-            return result
+            return normalized
 
         # Pipeline fallback (also apply Japanese quality settings)
         assert self._pipe is not None
@@ -263,6 +271,13 @@ class Qwen3ASRBackend:
         return out
 
     def unload(self) -> None:
+        if self._qwen_asr_model is not None:
+            try:
+                del self._qwen_asr_model
+            except Exception:
+                pass
+            self._qwen_asr_model = None
+
         if self._pipe is not None:
             try:
                 del self._pipe
