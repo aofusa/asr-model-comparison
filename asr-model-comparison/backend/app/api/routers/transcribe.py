@@ -115,6 +115,12 @@ async def transcribe_audio(
         raise HTTPException(status_code=400, detail="Uploaded audio file is empty")
 
     try:
+        print(
+            f"[HTTP Transcribe] request model={model_id} filename={audio.filename} "
+            f"bytes={len(audio_bytes)} language={language} beam_size={beam_size} "
+            f"return_timestamps={return_timestamps} previous_text_len={len(previous_text or '')}",
+            flush=True,
+        )
         result = await model_manager.transcribe(
             audio=audio_bytes,
             model_id=model_id,
@@ -137,6 +143,11 @@ async def transcribe_audio(
     # Ensure we always return the required shape
     text = result.get("text", "") if isinstance(result, dict) else str(result)
     proc_time = float(result.get("processing_time_seconds", 0.0)) if isinstance(result, dict) else 0.0
+    print(
+        f"[HTTP Transcribe] complete model={model_id} text_len={len(text)} "
+        f"processing_time={proc_time:.3f}s",
+        flush=True,
+    )
 
     return TranscriptionResponse(
         model_id=model_id,
@@ -208,6 +219,14 @@ async def websocket_transcribe(websocket: WebSocket):
             use_dedicated_class = config.get("use_dedicated_class", use_dedicated_class)
             return_timestamps = config.get("return_timestamps", return_timestamps)
             vad_filter = config.get("vad_filter", vad_filter)
+            print(
+                f"[WS Config] model={current_model_id} language={language} "
+                f"target_language={target_language} beam_size={beam_size} "
+                f"temperature={temperature} repetition_penalty={repetition_penalty} "
+                f"use_dedicated_class={use_dedicated_class} "
+                f"return_timestamps={return_timestamps} vad_filter={vad_filter}",
+                flush=True,
+            )
         except Exception:
             await websocket.send_json({"type": "error", "message": "Invalid config JSON"})
             await websocket.close()
@@ -228,6 +247,11 @@ async def websocket_transcribe(websocket: WebSocket):
             loader = create_whisper_loader(device="cpu", compute_type="int8")
 
         manager = ModelManager(model_loader=loader)
+        print(
+            f"[WS Model] loader selected model={current_model_id} "
+            f"use_dedicated_class={use_dedicated_class}",
+            flush=True,
+        )
 
         await websocket.send_json({
             "type": "ready",
@@ -253,6 +277,11 @@ async def websocket_transcribe(websocket: WebSocket):
                 # (faster-whisper etc.) + its VAD can actually see speech.
                 # Without this, short 2s chunks frequently decode to empty after VAD.
                 audio_for_model = normalize_to_wav_pcm_16k_mono(raw_chunk)
+                print(
+                    f"[WS Audio] normalized model={current_model_id} chunk={chunk_index} "
+                    f"raw_bytes={len(raw_chunk)} normalized_bytes={len(audio_for_model)}",
+                    flush=True,
+                )
 
                 try:
                     asr_language = None if language in (None, "", "auto") else language
@@ -300,6 +329,12 @@ async def websocket_transcribe(websocket: WebSocket):
                     })
 
                 except Exception as e:
+                    print(
+                        f"[WS Chunk Error] model={current_model_id} chunk={chunk_index} "
+                        f"raw={len(raw_chunk)}B norm={len(audio_for_model)}B "
+                        f"error={type(e).__name__}: {e}",
+                        flush=True,
+                    )
                     await websocket.send_json({
                         "type": "error",
                         "code": "transcription_failed",

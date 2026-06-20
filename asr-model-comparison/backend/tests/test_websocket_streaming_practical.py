@@ -224,7 +224,7 @@ def test_websocket_chunk_provides_useful_feedback_for_realtime_mic_use_case():
             pytest.skip("TDD marker: had_speech / explicit realtime chunk feedback contract not yet present (see 修正指示書 Phase 1)")
 
 
-def test_websocket_chunk_response_includes_chunk_index_and_size_for_ui_feedback():
+def test_websocket_chunk_response_includes_chunk_index_and_size_for_ui_feedback(capsys):
     """
     Realtime UI needs stable per-chunk metadata to show progress even when text is
     empty. This test uses a mocked ASR backend so it stays fast and does not load
@@ -252,6 +252,12 @@ def test_websocket_chunk_response_includes_chunk_index_and_size_for_ui_feedback(
     assert response["had_speech"] is False
     assert response["chunk_index"] == 1
     assert response["chunk_size_bytes"] >= len(chunk)
+
+    captured = capsys.readouterr().out
+    assert "[WS Config] model=whisper-tiny" in captured
+    assert "[WS Model] loader selected model=whisper-tiny" in captured
+    assert "[WS Audio] normalized model=whisper-tiny chunk=1" in captured
+    assert "[WS Chunk] model=whisper-tiny" in captured
 
 
 @pytest.mark.parametrize(

@@ -115,6 +115,32 @@ async def test_unload_clears_state(mock_loaders):
 
 
 @pytest.mark.asyncio
+async def test_model_manager_logs_model_load_and_audio_processing(mock_loaders, capsys):
+    """Operational logs should show model lifecycle and audio processing status."""
+    manager = ModelManager(
+        model_loader=mock_loaders["load"],
+        model_unloader=mock_loaders["unload"],
+    )
+
+    result = await manager.transcribe(
+        b"fake-audio-bytes",
+        model_id="whisper-tiny",
+        language="ja",
+        beam_size=1,
+    )
+    await manager.unload_current()
+
+    captured = capsys.readouterr().out
+    assert result["model_id"] == "whisper-tiny"
+    assert "[ModelManager] load requested model=whisper-tiny" in captured
+    assert "[ModelManager] loading start model=whisper-tiny" in captured
+    assert "[ModelManager] loading complete model=whisper-tiny" in captured
+    assert "[ModelManager] transcribe start model=whisper-tiny bytes=16" in captured
+    assert "[ModelManager] transcribe complete model=whisper-tiny" in captured
+    assert "[ModelManager] unload complete model=whisper-tiny" in captured
+
+
+@pytest.mark.asyncio
 async def test_load_unknown_model_raises_error():
     """Requesting a model ID that is not in the registry must raise a clear error."""
     manager = ModelManager()

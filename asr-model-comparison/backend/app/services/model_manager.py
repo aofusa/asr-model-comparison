@@ -12,6 +12,8 @@ Real ASR engine loading is injected via callables so that:
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+import os
+import time
 from typing import Any
 
 from app.models.available_models import AVAILABLE_MODELS
@@ -62,6 +64,16 @@ class ModelManager:
     def is_model_loaded(self) -> bool:
         return self._current_model_id is not None and self._current_instance is not None
 
+    def _describe_audio(self, audio: bytes | str) -> str:
+        if isinstance(audio, (bytes, bytearray)):
+            return f"bytes={len(audio)}"
+
+        try:
+            size = os.path.getsize(audio)
+            return f"path={audio} bytes={size}"
+        except OSError:
+            return f"path={audio} bytes=unknown"
+
     async def load_model(self, model_id: str) -> None:
         """
         Load the requested model.
@@ -75,26 +87,61 @@ class ModelManager:
         if model_id not in self._valid_model_ids:
             raise ValueError(f"Unknown model id: {model_id}. Valid: {self._valid_model_ids}")
 
+        print(
+            f"[ModelManager] load requested model={model_id} current={self._current_model_id}",
+            flush=True,
+        )
+
         if self._current_model_id == model_id:
+            print(f"[ModelManager] model reuse model={model_id}", flush=True)
             return
 
         # Always unload previous before attempting new load (core constraint)
         if self._current_model_id is not None:
+            print(
+                f"[ModelManager] switching model unload_previous={self._current_model_id} "
+                f"load_next={model_id}",
+                flush=True,
+            )
             await self.unload_current()
 
         # Pass the public model_id to the loader. The individual backend
         # (WhisperBackend, Qwen3ASRBackend, etc.) is responsible for mapping
         # to the library-specific identifier.
-        self._current_instance = await self._model_loader(model_id)
+        start = time.perf_counter()
+        print(f"[ModelManager] loading start model={model_id}", flush=True)
+        try:
+            self._current_instance = await self._model_loader(model_id)
+        except Exception as exc:
+            elapsed = time.perf_counter() - start
+            print(
+                f"[ModelManager] loading failed model={model_id} elapsed={elapsed:.3f}s "
+                f"error={type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            raise
+
         self._current_model_id = model_id
+        elapsed = time.perf_counter() - start
+        print(f"[ModelManager] loading complete model={model_id} elapsed={elapsed:.3f}s", flush=True)
 
     async def unload_current(self) -> None:
         """Explicitly unload whatever model is currently resident (if any)."""
+        if self._current_instance is None:
+            print("[ModelManager] unload skipped current=None", flush=True)
+            self._current_model_id = None
+            return
+
+        model_id = self._current_model_id
+        start = time.perf_counter()
+        print(f"[ModelManager] unload start model={model_id}", flush=True)
         if self._current_instance is not None:
             await self._model_unloader(self._current_instance)
 
         self._current_instance = None
         self._current_model_id = None
+        elapsed = time.perf_counter() - start
+        print(f"[ModelManager] unload complete model={model_id} elapsed={elapsed:.3f}s", flush=True)
 
     async def get_current_instance(self) -> Any:
         """Return the raw loaded engine (for transcription service to use)."""
@@ -151,8 +198,6 @@ class ModelManager:
         Returns a dict containing at minimum {"text": str, "processing_time_seconds": float}.
         Real implementations will populate more fields (language, segments, etc.).
         """
-        import time
-
         if model_id and model_id != self.current_model_id:
             await self.load_model(model_id)
 
@@ -164,27 +209,52 @@ class ModelManager:
         start = time.perf_counter()
 
         instance = await self.get_current_instance()
+        audio_desc = self._describe_audio(audio)
+        print(
+            f"[ModelManager] transcribe start model={self.current_model_id} {audio_desc} "
+            f"options={sorted(kwargs.keys())}",
+            flush=True,
+        )
 
         # The actual engine may expose .transcribe(audio, ...) or be a callable
-        if hasattr(instance, "transcribe"):
-            result = instance.transcribe(audio, **kwargs)
-            if hasattr(result, "__await__"):
-                result = await result
-        else:
-            # Fallback for our noop mock
-            result = {"text": f"[mock transcription from {self.current_model_id}]"}
+        try:
+            if hasattr(instance, "transcribe"):
+                result = instance.transcribe(audio, **kwargs)
+                if hasattr(result, "__await__"):
+                    result = await result
+            else:
+                # Fallback for our noop mock
+                result = {"text": f"[mock transcription from {self.current_model_id}]"}
+        except Exception as exc:
+            elapsed = time.perf_counter() - start
+            print(
+                f"[ModelManager] transcribe failed model={self.current_model_id} "
+                f"elapsed={elapsed:.3f}s error={type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            raise
 
         elapsed = time.perf_counter() - start
 
         if isinstance(result, dict):
             result.setdefault("processing_time_seconds", elapsed)
             result.setdefault("model_id", self.current_model_id)
+            text_len = len(str(result.get("text", "")))
+            chunk_count = len(result.get("chunks", []) or [])
         else:
             result = {
                 "text": str(result),
                 "model_id": self.current_model_id,
                 "processing_time_seconds": elapsed,
             }
+            text_len = len(result["text"])
+            chunk_count = 0
+
+        print(
+            f"[ModelManager] transcribe complete model={self.current_model_id} "
+            f"elapsed={elapsed:.3f}s text_len={text_len} chunks={chunk_count}",
+            flush=True,
+        )
 
         return result
 
