@@ -82,6 +82,14 @@ logs/
 *.log
 backend/logs/
 
+# Local AI/generated documents
+docs/artifact/
+asr-model-comparison/docs/
+
+# Playwright generated artifacts in the app workspace
+asr-model-comparison/frontend/playwright-report/
+asr-model-comparison/frontend/test-results/
+
 # OS / Editor
 .DS_Store
 Thumbs.db

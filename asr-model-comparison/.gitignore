@@ -1,3 +1,6 @@
 # Playwright generated artifacts
 frontend/playwright-report/
 frontend/test-results/
+
+# Workspace-level/generated documents should stay outside the app source tree
+docs/
