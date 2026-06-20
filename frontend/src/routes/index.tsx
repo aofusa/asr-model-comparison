@@ -29,17 +29,17 @@ type AudioSourceKind = 'microphone' | 'system' | 'window';
 const audioSourceOptions: { value: AudioSourceKind; label: string; description: string }[] = [
   {
     value: 'microphone',
-    label: 'Microphone',
+    label: 'Mic',
     description: 'Use the browser microphone input.',
   },
   {
     value: 'system',
-    label: 'System / tab audio',
+    label: 'System',
     description: 'Use browser screen sharing to capture audio played on this device.',
   },
   {
     value: 'window',
-    label: 'Window / app audio',
+    label: 'Window',
     description: 'Choose a specific window, app, or tab when the browser share picker opens.',
   },
 ];
@@ -1361,179 +1361,129 @@ export default component$(() => {
     <div class="container">
       <div data-testid="hydrated-marker" style={{ color: 'red', fontWeight: 'bold' }}>CLIENT RENDERED</div>
       <h1>ASR Real-time Comparison</h1>
-      <p style={{ textAlign: 'center', color: '#94a3b8' }}>
-        Speak or share audio, then read the transcription and optional translation in real time.
-      </p>
-
-      <div class="primary-workflow" data-testid="primary-workflow">
-        <div>
-          <strong>1. Choose audio</strong>
-          <span>Microphone, system audio, or a shared window.</span>
-        </div>
-        <div>
-          <strong>2. Choose recognition</strong>
-          <span>Pick one ASR model and whether translation is needed.</span>
-        </div>
-        <div>
-          <strong>3. Start</strong>
-          <span>Results and history stay visible while reconnecting.</span>
-        </div>
-      </div>
-
-      <section class="app-section">
-        <div class="section-heading">
-          <span>Step 1</span>
-          <h2>Recognition Model</h2>
-          <p>Whisper is light for testing. Qwen3-ASR and Voxtral are recommended for Japanese quality.</p>
-        </div>
-      <div class="model-selector">
-        {models.map((model) => (
-          <label key={model.id}>
-            <input
-              type="radio"
-              name="model"
-              value={model.id}
-              checked={selectedModel.value === model.id}
-              onChange$={() => { selectedModel.value = model.id; saveSettings(); }}
-            />
-            {model.label}
-          </label>
-        ))}
-      </div>
-      </section>
-
-      <section class="app-section">
-        <div class="section-heading">
-          <span>Step 2</span>
-          <h2>Audio Input</h2>
-          <p>Select what the app should listen to. Browser and OS support may limit shared audio.</p>
-        </div>
-      <div class="audio-source-selector" data-testid="audio-source-selector">
-        <div class="audio-source-header">
-          <strong>Audio Input Source</strong>
-          <span>Applied on next Start Recording</span>
-        </div>
-        <div class="audio-source-options">
-          {audioSourceOptions.map((source) => (
-            <label key={source.value}>
-              <input
-                type="radio"
-                name="audio-source"
-                value={source.value}
-                checked={selectedAudioSource.value === source.value}
-                disabled={isRecording.value}
-                onChange$={() => { selectedAudioSource.value = source.value; saveSettings(); }}
-              />
-              <span>
-                <strong>{source.label}</strong>
-                <small>{source.description}</small>
-              </span>
-            </label>
-          ))}
-        </div>
-        <p class="audio-source-note" data-testid="audio-source-note">
-          System/window capture uses the browser share picker. Availability depends on the browser, OS, and whether "share audio" is enabled for the selected target.
-        </p>
-      </div>
-      </section>
-
-      {/* Phase 2: Settings Panel */}
-      <section class="app-section">
-        <div class="section-heading">
-          <span>Step 3</span>
-          <h2>Language And Translation</h2>
-          <p>Turn on translation only when you want a second output. The original transcription is always kept.</p>
-        </div>
-      <div class="settings-panel">
-        <div class="settings-header">
-          <strong>Language Settings</strong>
-          <span class="settings-note">Applied on next Start / Reconnect</span>
-        </div>
-
-        <div class="settings-controls">
-          <label>
-            Input Language
-            <select
-              data-testid="language-select"
-              value={selectedLanguage.value}
-              onChange$={(e) => { selectedLanguage.value = (e.target as HTMLSelectElement).value; saveSettings(); }}
-            >
-              {languageOptions.map((language) => (
-                <option key={language.value} value={language.value}>{language.label}</option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            Translation Output (Qwen/Voxtral)
-            <select
-              data-testid="translation-target-select"
-              value={translationTarget.value}
-              onChange$={(e) => { translationTarget.value = (e.target as HTMLSelectElement).value; saveSettings(); }}
-            >
-              <option value="none">No Translation</option>
-              {languageOptions.filter((language) => language.value !== 'auto').map((language) => (
-                <option key={language.value} value={language.value}>{language.label}</option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        <details class="advanced-settings" open>
-          <summary>Advanced accuracy settings</summary>
-          <div class="settings-presets">
-            <button type="button" onClick$={setHighAccuracy}>High Accuracy (ja)</button>
-            <button type="button" onClick$={setBalanced}>Balanced (recommended)</button>
-            <button type="button" onClick$={setFaster}>Faster</button>
-          </div>
-
-          <div class="settings-controls">
-            <label>
-              Beam Size
-              <input type="number" min="1" max="10" value={beamSize.value}
-                     onInput$={(e) => { beamSize.value = Number((e.target as HTMLInputElement).value); saveSettings(); }} />
-            </label>
-
-            <label>
-              Temperature
-              <input type="number" step="0.1" min="0" max="1" value={temperature.value}
-                     onInput$={(e) => { temperature.value = Number((e.target as HTMLInputElement).value); saveSettings(); }} />
-            </label>
-
-            <label>
-              Repetition Penalty
-              <input type="number" step="0.01" min="1" max="1.5" value={repetitionPenalty.value}
-                     onInput$={(e) => { repetitionPenalty.value = Number((e.target as HTMLInputElement).value); saveSettings(); }} />
-            </label>
-
-            <label class="checkbox">
-              <input type="checkbox" checked={useDedicatedClass.value}
-                     onChange$={(e) => { useDedicatedClass.value = (e.target as HTMLInputElement).checked; saveSettings(); }} />
-              Use Dedicated Class (recommended)
-            </label>
-          </div>
-        </details>
-      </div>
-      </section>
-
-      <div class="controls">
-        <button data-testid="start-recording" type="button" disabled={isRecording.value}>
-          🎤 Start Recording
-        </button>
-        <button data-testid="stop-recording" type="button" disabled={!isRecording.value}>
-          ⏹ Stop
-        </button>
-
-        {(status.value.includes('Disconnected') || status.value.includes('error') || status.value.includes('failed') || isReconnecting.value) ? (
-          <button 
-            data-testid="reconnect-button"
-            onClick$={reconnectNow}
-            disabled={isRecording.value}
-          >
-            🔄 {isReconnecting.value ? 'Retry Now' : 'Reconnect Now'}
+      <section class="top-console">
+        <div class="controls">
+          <button data-testid="start-recording" type="button" disabled={isRecording.value}>
+            Start Recording
           </button>
-        ) : null}
-      </div>
+          <button data-testid="stop-recording" type="button" disabled={!isRecording.value}>
+            Stop
+          </button>
+
+          {(status.value.includes('Disconnected') || status.value.includes('error') || status.value.includes('failed') || isReconnecting.value) ? (
+            <button
+              data-testid="reconnect-button"
+              onClick$={reconnectNow}
+              disabled={isRecording.value}
+            >
+              {isReconnecting.value ? 'Retry Now' : 'Reconnect Now'}
+            </button>
+          ) : null}
+        </div>
+
+        <div class="quick-settings">
+          <div class="audio-source-selector" data-testid="audio-source-selector">
+            <span class="quick-label">Audio Input Source</span>
+            <div class="audio-source-options">
+              {audioSourceOptions.map((source) => (
+                <label key={source.value}>
+                  <input
+                    type="radio"
+                    name="audio-source"
+                    value={source.value}
+                    checked={selectedAudioSource.value === source.value}
+                    disabled={isRecording.value}
+                    onChange$={() => { selectedAudioSource.value = source.value; saveSettings(); }}
+                  />
+                  <span>{source.label}</span>
+                </label>
+              ))}
+            </div>
+            <span class="audio-source-note" data-testid="audio-source-note">Browser sharing controls System/Window audio.</span>
+          </div>
+
+          <div class="settings-panel">
+            <div class="settings-controls compact-settings">
+              <label>
+                Input Language
+                <select
+                  data-testid="language-select"
+                  value={selectedLanguage.value}
+                  onChange$={(e) => { selectedLanguage.value = (e.target as HTMLSelectElement).value; saveSettings(); }}
+                >
+                  {languageOptions.map((language) => (
+                    <option key={language.value} value={language.value}>{language.label}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Translation Output
+                <select
+                  data-testid="translation-target-select"
+                  value={translationTarget.value}
+                  onChange$={(e) => { translationTarget.value = (e.target as HTMLSelectElement).value; saveSettings(); }}
+                >
+                  <option value="none">No Translation</option>
+                  {languageOptions.filter((language) => language.value !== 'auto').map((language) => (
+                    <option key={language.value} value={language.value}>{language.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <details class="advanced-settings">
+              <summary>Advanced settings</summary>
+              <div class="model-selector">
+                {models.map((model) => (
+                  <label key={model.id}>
+                    <input
+                      type="radio"
+                      name="model"
+                      value={model.id}
+                      checked={selectedModel.value === model.id}
+                      onChange$={() => { selectedModel.value = model.id; saveSettings(); }}
+                    />
+                    {model.label}
+                  </label>
+                ))}
+              </div>
+
+              <div class="settings-presets">
+                <button type="button" onClick$={setHighAccuracy}>High Accuracy</button>
+                <button type="button" onClick$={setBalanced}>Balanced</button>
+                <button type="button" onClick$={setFaster}>Faster</button>
+              </div>
+
+              <div class="settings-controls">
+                <label>
+                  Beam Size
+                  <input type="number" min="1" max="10" value={beamSize.value}
+                         onInput$={(e) => { beamSize.value = Number((e.target as HTMLInputElement).value); saveSettings(); }} />
+                </label>
+
+                <label>
+                  Temperature
+                  <input type="number" step="0.1" min="0" max="1" value={temperature.value}
+                         onInput$={(e) => { temperature.value = Number((e.target as HTMLInputElement).value); saveSettings(); }} />
+                </label>
+
+                <label>
+                  Repetition Penalty
+                  <input type="number" step="0.01" min="1" max="1.5" value={repetitionPenalty.value}
+                         onInput$={(e) => { repetitionPenalty.value = Number((e.target as HTMLInputElement).value); saveSettings(); }} />
+                </label>
+
+                <label class="checkbox">
+                  <input type="checkbox" checked={useDedicatedClass.value}
+                         onChange$={(e) => { useDedicatedClass.value = (e.target as HTMLInputElement).checked; saveSettings(); }} />
+                  Use Dedicated Class
+                </label>
+              </div>
+            </details>
+          </div>
+        </div>
+      </section>
 
       {/* Detailed Reconnection UI */}
       {isReconnecting.value ? (
@@ -1543,10 +1493,6 @@ export default component$(() => {
             <strong>Reconnecting to server...</strong>
           </div>
           <div class="reconnection-details">
-            <p>
-              Connection to the ASR server was lost. 
-              We are automatically trying to reconnect to continue real-time transcription.
-            </p>
             <div class="reconnection-meta">
               <span data-testid="reconnect-attempt">Attempt <strong>{reconnectAttempts.value}</strong> of {maxReconnectAttempts}</span>
               {nextReconnectIn.value > 0 && (
@@ -1565,9 +1511,7 @@ export default component$(() => {
               Stop Recording
             </button>
           </div>
-          <p class="reconnection-note" data-testid="reconnection-note">
-            Your current transcript is preserved and will continue after reconnection.
-          </p>
+          <p class="reconnection-note" data-testid="reconnection-note">Transcript preserved.</p>
         </div>
       ) : (
         <div 
@@ -1590,7 +1534,7 @@ export default component$(() => {
         </div>
         <div class="model-progress-message">
           {modelProgress.phase === 'idle'
-            ? 'Model will be prepared when recording starts.'
+            ? 'Idle'
             : `${modelProgress.phase}: ${modelProgress.message}`}
           {modelProgress.elapsedSeconds !== null ? ` (${modelProgress.elapsedSeconds.toFixed(2)}s)` : ''}
         </div>
@@ -1617,7 +1561,7 @@ export default component$(() => {
       </div>
 
       {/* Phase 2 extension: per-chunk processing feedback (addresses "話しかけても何も起きない") */}
-      <div class="chunk-feedback" data-testid="chunk-feedback" style={{ textAlign: 'center', margin: '0.5rem 0', fontSize: '0.9em', color: '#64748b' }}>
+      <div class="chunk-feedback" data-testid="chunk-feedback">
         {currentChunkStatus.value === 'processing' && '⏳ Processing latest 2s chunk...'}
         {lastChunkInfo.value && (
           <div>
@@ -1634,7 +1578,6 @@ export default component$(() => {
           <div class="result-card source-transcript" data-testid="source-transcript">
             <div class="result-card-header">
               <strong>Heard Text</strong>
-              <span>Original ASR output</span>
             </div>
             <div>
               {finalTranscript.value && (
@@ -1655,7 +1598,7 @@ export default component$(() => {
             <div class="result-card translated-transcript" data-testid="translated-transcript">
               <div class="result-card-header">
                 <strong>Translation</strong>
-                <span>{translationTarget.value === 'none' ? 'Off' : `Target: ${translationTarget.value}`}</span>
+              <span>{translationTarget.value === 'none' ? 'Off' : translationTarget.value}</span>
               </div>
               <div>
                 {translatedTranscript.value || 'Translation will appear here when enabled and speech is detected.'}

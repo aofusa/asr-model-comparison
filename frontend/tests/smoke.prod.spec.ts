@@ -1,4 +1,13 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
+
+async function openAdvancedSettings(page: Page) {
+  const details = page.locator('details.advanced-settings').first();
+  await expect(details).toBeVisible({ timeout: 10000 });
+  const isOpen = await details.evaluate((el) => (el as HTMLDetailsElement).open);
+  if (!isOpen) {
+    await details.locator('summary').click();
+  }
+}
 
 /**
  * Production Smoke Tests
@@ -62,10 +71,10 @@ test.describe('Production Smoke Tests', () => {
 
     // Basic smoke checks (shell + component)
     await expect(page.getByText('ASR Real-time Comparison')).toBeVisible().catch(() => {});
-    await expect(page.getByText(/Whisper \(tiny\/small\/medium\/large-v3-turbo\)/)).toBeVisible().catch(() => {});
     await expect(page.getByRole('button', { name: /Start Recording/i })).toBeVisible().catch(() => {});
 
     // Model selector
+    await openAdvancedSettings(page);
     const tinyRadio = page.locator('input[value="whisper-tiny"]');
     await expect(tinyRadio).toBeChecked();
     await expect(page.locator('input[value="whisper-small"]')).toBeVisible();
@@ -96,6 +105,7 @@ test.describe('Production Smoke Tests', () => {
     // Strict: the live settings controls (number inputs, checkbox) must be present from hydrated component
     const panel = page.locator('.settings-panel');
     await expect(panel).toBeVisible({ timeout: 10000 });
+    await openAdvancedSettings(page);
 
     // Live inputs (not static text in shell)
     await expect(panel.locator('input[type="number"]').first()).toBeVisible({ timeout: 10000 });
@@ -138,7 +148,8 @@ test.describe('Production Smoke Tests', () => {
     const initialBeam = await beamInput.inputValue();
 
     // Preset click (onClick$ inline arrow in JSX) - must update the signal and DOM value
-    await panel.getByRole('button', { name: /High Accuracy \(ja\)/i }).click();
+    await openAdvancedSettings(page);
+    await panel.getByRole('button', { name: /High Accuracy/i }).click();
     await expect(beamInput).toHaveValue('8', { timeout: 3000 });
 
     // Another preset
@@ -172,8 +183,8 @@ test.describe('Production Smoke Tests', () => {
     await page.goto('/');
 
     // Strict: the emoji buttons from the hydrated component (not plain text in old shell)
-    await expect(page.getByRole('button', { name: '🎤 Start Recording' })).toBeVisible({ timeout: 10000 });
-    await expect(page.getByRole('button', { name: '⏹ Stop' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('button', { name: 'Start Recording' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 10000 });
   });
 
   test('transcript container and copy affordance structure present', async ({ page }) => {
@@ -235,6 +246,7 @@ test.describe('Production Smoke Tests', () => {
     const startBtn = page.getByTestId('start-recording');
     const stopBtn = page.getByTestId('stop-recording');
 
+    await openAdvancedSettings(page);
     await expect(page.locator('input[type="number"]').first()).toBeVisible({ timeout: 10000 });
 
     // Extra guard for click timing post-hydration (Qwik event serialization + possible worker contention)

@@ -1,29 +1,47 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
+
+async function openAdvancedSettings(page: Page) {
+  const details = page.locator('details.advanced-settings').first();
+  await expect(details).toBeVisible({ timeout: 10000 });
+  const isOpen = await details.evaluate((el) => (el as HTMLDetailsElement).open);
+  if (!isOpen) {
+    await details.locator('summary').click();
+  }
+}
+
+async function chooseModel(page: Page, modelId: string) {
+  await openAdvancedSettings(page);
+  await page.locator(`input[value="${modelId}"]`).check();
+}
 
 test('frontend loads and shows main UI (whisper-tiny)', async ({ page }) => {
   await page.goto('/');
 
   await expect(page.getByText('ASR Real-time Comparison')).toBeVisible();
-  await expect(page.getByText('Whisper Tiny')).toBeVisible();
-  await expect(page.getByRole('button', { name: '🎤 Start Recording' })).toBeVisible();
+  await expect(page.getByTestId('start-recording')).toBeVisible();
+  await expect(page.getByTestId('model-progress')).toContainText('Model preparation');
+  await expect(page.getByTestId('volume-meter')).toContainText('Input Level');
 });
 
 test('model selection works', async ({ page }) => {
   await page.goto('/');
 
+  await openAdvancedSettings(page);
   const voxtralRadio = page.locator('input[value="voxtral-mini-4b"]');
   await voxtralRadio.check();
 
   await expect(voxtralRadio).toBeChecked();
 });
 
-test('non-technical workflow sections are visible', async ({ page }) => {
+test('compact top workflow controls are visible', async ({ page }) => {
   await page.goto('/');
 
-  await expect(page.getByTestId('primary-workflow')).toContainText('Choose audio');
-  await expect(page.getByRole('heading', { name: 'Recognition Model' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Audio Input' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Language And Translation' })).toBeVisible();
+  await expect(page.getByTestId('start-recording')).toBeVisible();
+  await expect(page.getByTestId('stop-recording')).toBeVisible();
+  await expect(page.getByTestId('audio-source-selector')).toContainText('Mic');
+  await expect(page.getByTestId('language-select')).toBeVisible();
+  await expect(page.getByTestId('translation-target-select')).toBeVisible();
+  await expect(page.locator('details.advanced-settings summary')).toContainText('Advanced settings');
 });
 
 test('audio source selection uses display media for window/app capture', async ({ page }) => {
@@ -121,7 +139,7 @@ test('audio source selection uses display media for window/app capture', async (
   await page.goto('/');
   await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
 
-  await expect(page.getByTestId('audio-source-selector')).toContainText('Window / app audio');
+  await expect(page.getByTestId('audio-source-selector')).toContainText('Window');
   await page.locator('input[name="audio-source"][value="window"]').check();
   await page.getByTestId('start-recording').click();
 
@@ -240,7 +258,7 @@ test.describe('WebSocket Reconnection and Error Recovery (detailed)', () => {
 
     // Click exercises startRecording $() handler. Per 修正指示書, in broken state (pre-fix) this was no-op.
     // Post-fix + hydration the handler runs, enabling the reconnect logic in this test (with MockWebSocket).
-    await page.getByRole('button', { name: '🎤 Start Recording' }).click();
+    await page.getByTestId('start-recording').click();
 
     const banner = page.getByTestId('reconnection-banner');
     if (!await banner.isVisible({ timeout: 8000 }).catch(() => false)) {
@@ -258,7 +276,7 @@ test.describe('WebSocket Reconnection and Error Recovery (detailed)', () => {
 
     // Click exercises startRecording $() handler. Per 修正指示書, in broken state (pre-fix) this was no-op.
     // Post-fix + hydration the handler runs, enabling the reconnect logic in this test (with MockWebSocket).
-    await page.getByRole('button', { name: '🎤 Start Recording' }).click();
+    await page.getByTestId('start-recording').click();
 
     const banner = page.getByTestId('reconnection-banner');
     if (!await banner.isVisible({ timeout: 8000 }).catch(() => false)) {
@@ -281,7 +299,7 @@ test.describe('WebSocket Reconnection and Error Recovery (detailed)', () => {
 
     // Click exercises startRecording $() handler. Per 修正指示書, in broken state (pre-fix) this was no-op.
     // Post-fix + hydration the handler runs, enabling the reconnect logic in this test (with MockWebSocket).
-    await page.getByRole('button', { name: '🎤 Start Recording' }).click();
+    await page.getByTestId('start-recording').click();
 
     const banner = page.getByTestId('reconnection-banner');
     if (!await banner.isVisible({ timeout: 8000 }).catch(() => false)) {
@@ -307,7 +325,7 @@ test.describe('WebSocket Reconnection and Error Recovery (detailed)', () => {
 
     // Click exercises startRecording $() handler. Per 修正指示書, in broken state (pre-fix) this was no-op.
     // Post-fix + hydration the handler runs, enabling the reconnect logic in this test (with MockWebSocket).
-    await page.getByRole('button', { name: '🎤 Start Recording' }).click();
+    await page.getByTestId('start-recording').click();
 
     const banner = page.getByTestId('reconnection-banner');
     if (!await banner.isVisible({ timeout: 8000 }).catch(() => false)) {
@@ -328,7 +346,7 @@ test.describe('WebSocket Reconnection and Error Recovery (detailed)', () => {
 
     // Click exercises startRecording $() handler. Per 修正指示書, in broken state (pre-fix) this was no-op.
     // Post-fix + hydration the handler runs, enabling the reconnect logic in this test (with MockWebSocket).
-    await page.getByRole('button', { name: '🎤 Start Recording' }).click();
+    await page.getByTestId('start-recording').click();
 
     const banner = page.getByTestId('reconnection-banner');
     if (!await banner.isVisible({ timeout: 8000 }).catch(() => false)) {
@@ -347,7 +365,7 @@ test.describe('WebSocket Reconnection and Error Recovery (detailed)', () => {
 
     // Click exercises startRecording $() handler. Per 修正指示書, in broken state (pre-fix) this was no-op.
     // Post-fix + hydration the handler runs, enabling the reconnect logic in this test (with MockWebSocket).
-    await page.getByRole('button', { name: '🎤 Start Recording' }).click();
+    await page.getByTestId('start-recording').click();
 
     const banner = page.getByTestId('reconnection-banner');
     if (!await banner.isVisible({ timeout: 8000 }).catch(() => false)) {
@@ -376,7 +394,7 @@ test.describe('WebSocket Reconnection and Error Recovery (detailed)', () => {
 
     // Click exercises startRecording $() handler. Per 修正指示書, in broken state (pre-fix) this was no-op.
     // Post-fix + hydration the handler runs, enabling the reconnect logic in this test (with MockWebSocket).
-    await page.getByRole('button', { name: '🎤 Start Recording' }).click();
+    await page.getByTestId('start-recording').click();
 
     const banner = page.getByTestId('reconnection-banner');
     if (!await banner.isVisible({ timeout: 8000 }).catch(() => false)) {
@@ -427,7 +445,7 @@ test.describe('Phase 2 - Visual Feedback (volume meter etc.)', () => {
 
     // Click exercises startRecording $() handler. Per 修正指示書, in broken state (pre-fix) this was no-op.
     // Post-fix + hydration the handler runs, enabling the reconnect logic in this test (with MockWebSocket).
-    await page.getByRole('button', { name: '🎤 Start Recording' }).click();
+    await page.getByTestId('start-recording').click();
 
     // After starting, a visual level indicator should react (we accept either
     // data attribute updates or CSS class changes for now)
@@ -444,9 +462,10 @@ test.describe('Phase 2 - Visual Feedback (volume meter etc.)', () => {
 
     const panel = page.locator('.settings-panel');
     await expect(panel).toBeVisible();
+    await openAdvancedSettings(page);
 
     // Presets
-    await expect(panel.getByRole('button', { name: /Balanced \(recommended\)/ })).toBeVisible();
+    await expect(panel.getByRole('button', { name: /Balanced/ })).toBeVisible();
     await expect(panel.getByRole('button', { name: /High Accuracy/ })).toBeVisible();
 
     // Key controls
@@ -462,7 +481,7 @@ test.describe('Phase 2 - Visual Feedback (volume meter etc.)', () => {
     // Start recording (will use WS mock from earlier describe or fail gracefully)
     // Click exercises startRecording $() handler. Per 修正指示書, in broken state (pre-fix) this was no-op.
     // Post-fix + hydration the handler runs, enabling the reconnect logic in this test (with MockWebSocket).
-    await page.getByRole('button', { name: '🎤 Start Recording' }).click();
+    await page.getByTestId('start-recording').click();
 
     const transcriptBox = page.locator('.transcript');
 
@@ -488,6 +507,7 @@ test.describe('Phase 2 - Visual Feedback (volume meter etc.)', () => {
     // A: Settings panel with live controls
     const panel = page.locator('.settings-panel');
     await expect(panel).toBeVisible();
+    await openAdvancedSettings(page);
     await expect(panel.getByText('Beam Size')).toBeVisible();
     await expect(panel.getByText('Use Dedicated Class')).toBeVisible();
 
@@ -557,7 +577,7 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
     await page.getByTestId('status').waitFor({ timeout: 8000 }).catch(() => {});
 
     // Start recording (exercises the $() handler + WS connect in the component)
-    await page.getByRole('button', { name: '🎤 Start Recording' }).click();
+    await page.getByTestId('start-recording').click();
 
     // In real flow the app would send chunks via MediaRecorder.
     // Here we use a lightweight way: if the component exposes window hooks or we can
@@ -802,7 +822,7 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
     await page.goto('/');
     await page.getByTestId('hydrated-marker').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
     await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
-    await page.locator('input[value="voxtral-mini-4b"]').check();
+    await chooseModel(page, 'voxtral-mini-4b');
     await page.getByTestId('start-recording').click();
 
     await expect.poll(async () => page.evaluate(() => (window as any).__binarySends), {
@@ -882,7 +902,7 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
     await page.getByTestId('hydrated-marker').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
     await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
 
-    await page.locator('input[value="qwen3-asr-0.6b"]').check();
+    await chooseModel(page, 'qwen3-asr-0.6b');
     await page.getByTestId('language-select').selectOption('en');
     await expect(page.getByTestId('translation-target-select')).toBeVisible({ timeout: 5000 });
     await page.getByTestId('translation-target-select').selectOption('ja');
@@ -969,7 +989,7 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
     await page.getByTestId('hydrated-marker').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
     await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
 
-    await page.locator('input[value="voxtral-mini-4b"]').check();
+    await chooseModel(page, 'voxtral-mini-4b');
     await page.getByTestId('language-select').selectOption('ja');
     await expect(page.getByTestId('translation-target-select')).toBeVisible({ timeout: 5000 });
     await page.getByTestId('translation-target-select').selectOption('none');
@@ -1096,7 +1116,7 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
       await page.getByTestId('hydrated-marker').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
       await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
 
-      await page.locator(`input[value="${scenario.modelId}"]`).check();
+      await chooseModel(page, scenario.modelId);
       await page.getByTestId('language-select').selectOption('en');
       await page.getByTestId('translation-target-select').selectOption('ja');
       await page.getByTestId('start-recording').click();
@@ -1228,7 +1248,7 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
     await page.getByTestId('hydrated-marker').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
     await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
 
-    await page.locator('input[value="qwen3-asr-0.6b"]').check();
+    await chooseModel(page, 'qwen3-asr-0.6b');
     await page.getByTestId('start-recording').click();
 
     await expect(page.getByTestId('chunk-feedback')).toContainText(/一回目の結果/, { timeout: 10000 });
@@ -1331,7 +1351,7 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
     await page.getByTestId('hydrated-marker').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
     await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
 
-    await page.locator('input[value="qwen3-asr-0.6b"]').check();
+    await chooseModel(page, 'qwen3-asr-0.6b');
     await page.getByTestId('start-recording').click();
     await expect(page.getByTestId('status')).toContainText(/Ready - qwen3-asr-0\.6b|Recording/, { timeout: 5000 });
     await page.getByTestId('stop-recording').click({ force: true });
@@ -1427,12 +1447,12 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
     await page.getByTestId('hydrated-marker').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
     await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
 
-    await page.locator('input[value="whisper-tiny"]').check();
+    await chooseModel(page, 'whisper-tiny');
     await page.getByTestId('start-recording').click();
-    await page.locator('input[value="whisper-small"]').check();
+    await chooseModel(page, 'whisper-small');
     await page.getByTestId('stop-recording').click({ force: true }).catch(() => {});
     await page.getByTestId('start-recording').click();
-    await page.locator('input[value="qwen3-asr-0.6b"]').check();
+    await chooseModel(page, 'qwen3-asr-0.6b');
     await page.getByTestId('stop-recording').click({ force: true }).catch(() => {});
     await page.getByTestId('start-recording').click();
 
