@@ -46,14 +46,11 @@ def test_qwen3_dedicated_class_handles_previous_text_for_streaming():
         use_dedicated_class=True,
     )
 
-    # Mock the model and processor to avoid actual loading
-    backend._model = MagicMock()
-    backend._processor = MagicMock()
-    backend._processor.apply_chat_template.return_value = "fake prompt"
-    backend._processor.return_tensors = "pt"
-    # Simulate generation output
-    backend._model.generate.return_value = [[1, 2, 3]]
-    backend._processor.batch_decode.return_value = ["続きの日本語テキスト"]
+    # Mock the official qwen_asr model to avoid actual loading while testing context forwarding.
+    backend._qwen_asr_model = MagicMock()
+    backend._qwen_asr_model.transcribe.return_value = [
+        {"text": "続きの日本語テキスト", "language": "ja"}
+    ]
 
     result = backend.transcribe(
         b"fake-audio-chunk",
@@ -65,7 +62,8 @@ def test_qwen3_dedicated_class_handles_previous_text_for_streaming():
     assert "text" in result
     # In a properly deepened implementation, previous_text should influence the prompt
     # We at least verify the call happened with context
-    assert backend._processor.apply_chat_template.called
+    _, kwargs = backend._qwen_asr_model.transcribe.call_args
+    assert kwargs["context"] == "今日はいい天気です"
 
 
 @pytest.mark.slow

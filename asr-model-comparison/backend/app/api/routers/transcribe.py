@@ -284,12 +284,25 @@ async def websocket_transcribe(websocket: WebSocket):
             # Default to Whisper (tiny is ideal for fast E2E protocol tests)
             loader = create_whisper_loader(device="cpu", compute_type="int8")
 
-        manager = ModelManager(model_loader=loader)
+        async def send_model_progress(event: dict) -> None:
+            await safe_send_json(event)
+
+        manager = ModelManager(model_loader=loader, progress_callback=send_model_progress)
         server_log(
             f"[WS Model] loader selected model={current_model_id} "
             f"use_dedicated_class={use_dedicated_class}"
         )
-        await manager.load_model(current_model_id)
+        try:
+            await manager.load_model(current_model_id)
+        except Exception as exc:
+            server_log(f"[WS Model] load failed model={current_model_id} error={exc}")
+            await safe_send_json({
+                "type": "error",
+                "code": "model_load_failed",
+                "message": str(exc),
+                "model_id": current_model_id,
+            })
+            return
         server_log(f"[WS Ready] model loaded and ready model={current_model_id}")
 
         if not await safe_send_json({
@@ -308,6 +321,12 @@ async def websocket_transcribe(websocket: WebSocket):
             if "bytes" in message:
                 raw_chunk = message["bytes"]
                 if not raw_chunk:
+                    if not await safe_send_json({
+                        "type": "error",
+                        "code": "empty_audio_chunk",
+                        "message": "Received an empty audio chunk.",
+                    }):
+                        break
                     continue
                 chunk_index += 1
 

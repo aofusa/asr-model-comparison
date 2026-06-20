@@ -287,3 +287,79 @@ button:disabled {
 .settings-controls input[type="checkbox"] {
   accent-color: #3b82f6;
 }
+
+.model-progress {
+  background: #111827;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+}
+
+.model-progress-header,
+.history-header,
+.history-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.model-progress-header span,
+.history-header span,
+.history-meta {
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+
+.model-progress-message {
+  color: #cbd5e1;
+  font-size: 0.85rem;
+  margin: 0.45rem 0;
+}
+
+.model-progress-bar-bg {
+  height: 8px;
+  background: #0f172a;
+  border: 1px solid #475569;
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.model-progress-bar-fill {
+  height: 100%;
+  min-width: 4px;
+  background: linear-gradient(90deg, #3b82f6, #22c55e);
+  transition: width 160ms ease;
+}
+
+.transcript-history {
+  margin-top: 1rem;
+  max-height: 260px;
+  overflow-y: auto;
+  background: #111827;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+.history-empty {
+  color: #64748b;
+  font-size: 0.9rem;
+  padding: 0.75rem 0.25rem;
+}
+
+.history-item {
+  border-top: 1px solid #334155;
+  padding: 0.75rem 0.25rem;
+}
+
+.history-item:first-of-type {
+  border-top: none;
+}
+
+.history-text {
+  margin-top: 0.35rem;
+  white-space: pre-wrap;
+  color: #e2e8f0;
+}

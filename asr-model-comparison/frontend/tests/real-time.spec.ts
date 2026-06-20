@@ -1323,6 +1323,307 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
   });
 });
 
+test.describe('Backlog 1-4 - silence, history, and model progress', () => {
+  test('model load progress is visible and audio is not sent before ready', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as any).__binarySends = 0;
+
+      class MockWebSocket {
+        static OPEN = 1;
+        readyState = MockWebSocket.OPEN;
+        onopen: ((ev: Event) => void) | null = null;
+        onmessage: ((ev: MessageEvent) => void) | null = null;
+        onclose: ((ev: CloseEvent) => void) | null = null;
+
+        constructor(public url: string) {
+          setTimeout(() => this.onopen?.(new Event('open')), 0);
+        }
+
+        send(data: any) {
+          if (typeof data === 'string') {
+            const parsed = JSON.parse(data);
+            if (parsed.type === 'config') {
+              setTimeout(() => {
+                this.onmessage?.(new MessageEvent('message', {
+                  data: JSON.stringify({
+                    type: 'model_progress',
+                    model_id: parsed.model_id,
+                    phase: 'loading',
+                    progress: null,
+                    message: 'Downloading model if needed, then loading it into memory.',
+                  }),
+                }));
+              }, 10);
+              setTimeout(() => {
+                this.onmessage?.(new MessageEvent('message', {
+                  data: JSON.stringify({
+                    type: 'ready',
+                    model_id: parsed.model_id,
+                  }),
+                }));
+              }, 180);
+            }
+            return;
+          }
+
+          (window as any).__binarySends += 1;
+        }
+
+        close() {
+          this.onclose?.(new CloseEvent('close'));
+        }
+        addEventListener() {}
+        removeEventListener() {}
+        dispatchEvent() { return true; }
+      }
+
+      class MockMediaRecorder {
+        ondataavailable: ((ev: any) => void) | null = null;
+        stream: any;
+        constructor(stream: any) {
+          this.stream = stream;
+        }
+        start() {
+          [30, 80, 130, 220].forEach((delay) => {
+            setTimeout(() => {
+              this.ondataavailable?.({
+                data: new Blob(['speech chunk'], { type: 'audio/webm' }),
+              });
+            }, delay);
+          });
+        }
+        stop() {}
+      }
+
+      // Force MediaRecorder path for this readiness gate test.
+      Object.defineProperty(window, 'AudioContext', { configurable: true, value: undefined });
+      Object.defineProperty(window, 'webkitAudioContext', { configurable: true, value: undefined });
+      // @ts-ignore
+      (window as any).WebSocket = MockWebSocket;
+      // @ts-ignore
+      (window as any).MediaRecorder = MockMediaRecorder;
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: {
+          getUserMedia: async () => ({
+            getTracks: () => [{ stop: () => {} }],
+          }),
+        },
+      });
+    });
+
+    await page.goto('/');
+    await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
+    await page.getByTestId('start-recording').click();
+
+    await expect(page.getByTestId('model-progress')).toContainText(/loading|Downloading model/i, { timeout: 5000 });
+    await page.waitForTimeout(120);
+    expect(await page.evaluate(() => (window as any).__binarySends)).toBe(0);
+    await expect.poll(async () => page.evaluate(() => (window as any).__binarySends), {
+      timeout: 5000,
+    }).toBeGreaterThan(0);
+  });
+
+  test('silent PCM input is not sent to WebSocket', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as any).__binarySends = 0;
+
+      class MockWebSocket {
+        static OPEN = 1;
+        readyState = MockWebSocket.OPEN;
+        onopen: ((ev: Event) => void) | null = null;
+        onmessage: ((ev: MessageEvent) => void) | null = null;
+        onclose: ((ev: CloseEvent) => void) | null = null;
+
+        constructor(public url: string) {
+          setTimeout(() => this.onopen?.(new Event('open')), 0);
+        }
+
+        send(data: any) {
+          if (typeof data === 'string') {
+            const parsed = JSON.parse(data);
+            if (parsed.type === 'config') {
+              setTimeout(() => {
+                this.onmessage?.(new MessageEvent('message', {
+                  data: JSON.stringify({ type: 'ready', model_id: parsed.model_id }),
+                }));
+              }, 0);
+            }
+            return;
+          }
+          (window as any).__binarySends += 1;
+        }
+
+        close() {
+          this.onclose?.(new CloseEvent('close'));
+        }
+        addEventListener() {}
+        removeEventListener() {}
+        dispatchEvent() { return true; }
+      }
+
+      class MockAudioContext {
+        sampleRate = 4096;
+        destination = {};
+        createMediaStreamSource() {
+          return { connect() {}, disconnect() {} };
+        }
+        createAnalyser() {
+          return {
+            fftSize: 64,
+            minDecibels: -90,
+            maxDecibels: -10,
+            smoothingTimeConstant: 0.7,
+            frequencyBinCount: 32,
+            getByteFrequencyData(data: Uint8Array) { data.fill(0); },
+          };
+        }
+        createScriptProcessor() {
+          const processor: any = {
+            onaudioprocess: null,
+            connect() {
+              [20, 40, 60, 80].forEach((delay) => {
+                setTimeout(() => {
+                  processor.onaudioprocess?.({
+                    inputBuffer: {
+                      getChannelData: () => new Float32Array(4096),
+                    },
+                  });
+                }, delay);
+              });
+            },
+            disconnect() {},
+          };
+          return processor;
+        }
+        close() { return Promise.resolve(); }
+      }
+
+      // @ts-ignore
+      (window as any).WebSocket = MockWebSocket;
+      // @ts-ignore
+      (window as any).AudioContext = MockAudioContext;
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: {
+          getUserMedia: async () => ({
+            getTracks: () => [{ stop: () => {} }],
+          }),
+        },
+      });
+    });
+
+    await page.goto('/');
+    await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
+    await page.getByTestId('start-recording').click();
+    await page.waitForTimeout(300);
+
+    expect(await page.evaluate(() => (window as any).__binarySends)).toBe(0);
+    await expect(page.getByTestId('status')).toContainText(/silent|Recording|Ready/i);
+  });
+
+  test('final transcription results are appended to a scrollable history', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as any).__binarySends = 0;
+
+      class MockWebSocket {
+        static OPEN = 1;
+        readyState = MockWebSocket.OPEN;
+        onopen: ((ev: Event) => void) | null = null;
+        onmessage: ((ev: MessageEvent) => void) | null = null;
+        onclose: ((ev: CloseEvent) => void) | null = null;
+        private responses = ['最初の結果', '二回目の結果'];
+
+        constructor(public url: string) {
+          setTimeout(() => this.onopen?.(new Event('open')), 0);
+        }
+
+        send(data: any) {
+          if (typeof data === 'string') {
+            const parsed = JSON.parse(data);
+            if (parsed.type === 'config') {
+              setTimeout(() => {
+                this.onmessage?.(new MessageEvent('message', {
+                  data: JSON.stringify({ type: 'ready', model_id: parsed.model_id }),
+                }));
+              }, 0);
+            }
+            return;
+          }
+
+          (window as any).__binarySends += 1;
+          const text = this.responses.shift();
+          if (!text) return;
+          setTimeout(() => {
+            this.onmessage?.(new MessageEvent('message', {
+              data: JSON.stringify({
+                type: 'transcription',
+                model_id: 'whisper-tiny',
+                text,
+                accumulated_text: text,
+                is_final: true,
+                processing_time_seconds: 0.2,
+                had_speech: true,
+                chunk_index: (window as any).__binarySends,
+                chunk_size_bytes: 128,
+              }),
+            }));
+          }, 10);
+        }
+
+        close() {
+          this.onclose?.(new CloseEvent('close'));
+        }
+        addEventListener() {}
+        removeEventListener() {}
+        dispatchEvent() { return true; }
+      }
+
+      class MockMediaRecorder {
+        ondataavailable: ((ev: any) => void) | null = null;
+        stream: any;
+        constructor(stream: any) {
+          this.stream = stream;
+        }
+        start() {
+          [30, 90].forEach((delay) => {
+            setTimeout(() => {
+              this.ondataavailable?.({
+                data: new Blob(['speech'], { type: 'audio/webm' }),
+              });
+            }, delay);
+          });
+        }
+        stop() {}
+      }
+
+      Object.defineProperty(window, 'AudioContext', { configurable: true, value: undefined });
+      Object.defineProperty(window, 'webkitAudioContext', { configurable: true, value: undefined });
+      // @ts-ignore
+      (window as any).WebSocket = MockWebSocket;
+      // @ts-ignore
+      (window as any).MediaRecorder = MockMediaRecorder;
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: {
+          getUserMedia: async () => ({
+            getTracks: () => [{ stop: () => {} }],
+          }),
+        },
+      });
+    });
+
+    await page.goto('/');
+    await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
+    await page.getByTestId('start-recording').click();
+
+    const history = page.getByTestId('transcript-history');
+    await expect(history).toContainText('最初の結果', { timeout: 10000 });
+    await expect(history).toContainText('二回目の結果', { timeout: 10000 });
+    await expect(history).toHaveCSS('overflow-y', /auto|scroll/);
+  });
+});
+
 
 
 

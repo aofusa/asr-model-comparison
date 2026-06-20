@@ -6,9 +6,34 @@ These tests are written BEFORE the implementation upgrades.
 """
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 from app.services.asr_backends.qwen3_backend import Qwen3ASRBackend
 from app.services.asr_backends.voxtral_backend import VoxtralBackend
+
+
+def _mock_qwen_backend(model_id: str = "qwen3-asr-0.6b", text: str = "日本語テキスト") -> Qwen3ASRBackend:
+    backend = Qwen3ASRBackend(model_id=model_id, use_dedicated_class=True)
+    backend._qwen_asr_model = MagicMock()
+    backend._qwen_asr_model.transcribe.return_value = [
+        {"text": text, "language": "ja", "time_stamps": (0.0, 1.0)}
+    ]
+    return backend
+
+
+def _mock_voxtral_backend(text: str = "次の発話") -> VoxtralBackend:
+    backend = VoxtralBackend(model_id="voxtral-mini-4b", use_dedicated_class=True)
+    backend._model = MagicMock()
+    backend._model.device = "cpu"
+    backend._model.generate.return_value = [[1, 2, 3]]
+    backend._processor = MagicMock()
+    request = MagicMock()
+    request.to.return_value = request
+    backend._processor.apply_transcription_request.return_value = request
+    backend._processor.apply_chat_template.return_value = request
+    backend._processor.batch_decode.return_value = [text]
+    return backend
 
 
 def test_qwen3_dedicated_class_uses_better_asr_prompting():
@@ -16,10 +41,7 @@ def test_qwen3_dedicated_class_uses_better_asr_prompting():
     When using dedicated class, Qwen3 should construct a proper prompt
     suitable for high-quality ASR (especially Japanese).
     """
-    backend = Qwen3ASRBackend(
-        model_id="qwen3-asr-0.6b",
-        use_dedicated_class=True,
-    )
+    backend = _mock_qwen_backend()
 
     # Simulate what the inference would do
     # In real implementation, we want good Japanese ASR prompting
@@ -33,6 +55,8 @@ def test_qwen3_dedicated_class_uses_better_asr_prompting():
 
     assert "text" in result
     assert result["model_id"] == "qwen3-asr-0.6b"
+    _, kwargs = backend._qwen_asr_model.transcribe.call_args
+    assert kwargs["language"] == "Japanese"
 
 
 def test_qwen3_supports_context_for_realtime_chunks():
@@ -41,7 +65,7 @@ def test_qwen3_supports_context_for_realtime_chunks():
     previous transcript as context to maintain continuity and improve accuracy
     across chunks.
     """
-    backend = Qwen3ASRBackend(model_id="qwen3-asr-0.6b", use_dedicated_class=True)
+    backend = _mock_qwen_backend()
 
     # First chunk
     result1 = backend.transcribe(b"chunk1-audio", language="ja")
@@ -59,7 +83,7 @@ def test_qwen3_supports_context_for_realtime_chunks():
 
 def test_voxtral_dedicated_class_and_context_support():
     """Voxtral should also support context for real-time streaming scenarios."""
-    backend = VoxtralBackend(model_id="voxtral-mini-4b", use_dedicated_class=True)
+    backend = _mock_voxtral_backend()
 
     result = backend.transcribe(
         b"audio-chunk",
@@ -76,7 +100,7 @@ def test_japanese_accuracy_generation_parameters_are_applied():
     When language=ja, the backend should apply generation parameters
     known to improve Japanese ASR quality (low temp, decent beams, etc.).
     """
-    backend = Qwen3ASRBackend(model_id="qwen3-asr-1.7b", use_dedicated_class=True)
+    backend = _mock_qwen_backend(model_id="qwen3-asr-1.7b")
 
     # The implementation should default or accept these for Japanese
     result = backend.transcribe(
@@ -95,7 +119,7 @@ def test_dedicated_class_returns_better_timestamp_structure():
     (start/end per segment) which is critical for real-time web applications
     (live subtitles, alignment).
     """
-    backend = Qwen3ASRBackend(model_id="qwen3-asr-0.6b", use_dedicated_class=True)
+    backend = _mock_qwen_backend()
 
     result = backend.transcribe(b"audio", return_timestamps=True, language="ja")
 

@@ -12,6 +12,7 @@ Real ASR engine loading is injected via callables so that:
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+import inspect
 import os
 import time
 from typing import Any
@@ -23,6 +24,7 @@ from app.utils.server_logging import server_log
 # Type aliases for dependency injection (makes testing trivial)
 ModelLoader = Callable[[str], Awaitable[Any]]          # model_id -> loaded engine instance
 ModelUnloader = Callable[[Any], Awaitable[None]]       # engine_instance -> None
+ModelProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 
 class ModelManager:
@@ -46,6 +48,7 @@ class ModelManager:
         self,
         model_loader: ModelLoader | None = None,
         model_unloader: ModelUnloader | None = None,
+        progress_callback: ModelProgressCallback | None = None,
     ) -> None:
         self._current_model_id: str | None = None
         self._current_instance: Any = None
@@ -53,6 +56,7 @@ class ModelManager:
         # Default no-op loaders (safe for early tests)
         self._model_loader = model_loader or self._default_noop_loader
         self._model_unloader = model_unloader or self._default_noop_unloader
+        self._progress_callback = progress_callback
 
         # Build a quick lookup set for validation
         self._valid_model_ids = {m.id for m in AVAILABLE_MODELS}
@@ -75,6 +79,30 @@ class ModelManager:
         except OSError:
             return f"path={audio} bytes=unknown"
 
+    async def _emit_progress(
+        self,
+        *,
+        model_id: str,
+        phase: str,
+        progress: int | None,
+        message: str,
+        elapsed_seconds: float | None = None,
+    ) -> None:
+        if self._progress_callback is None:
+            return
+
+        event: dict[str, Any] = {
+            "type": "model_progress",
+            "model_id": model_id,
+            "phase": phase,
+            "progress": progress,
+            "message": message,
+            "elapsed_seconds": elapsed_seconds,
+        }
+        result = self._progress_callback(event)
+        if inspect.isawaitable(result):
+            await result
+
     async def load_model(self, model_id: str) -> None:
         """
         Load the requested model.
@@ -92,6 +120,13 @@ class ModelManager:
 
         if self._current_model_id == model_id:
             server_log(f"[ModelManager] model reuse model={model_id}")
+            await self._emit_progress(
+                model_id=model_id,
+                phase="ready",
+                progress=100,
+                message="Model is already loaded.",
+                elapsed_seconds=0.0,
+            )
             return
 
         # Always unload previous before attempting new load (core constraint)
@@ -107,6 +142,20 @@ class ModelManager:
         # to the library-specific identifier.
         start = time.perf_counter()
         server_log(f"[ModelManager] loading start model={model_id}")
+        await self._emit_progress(
+            model_id=model_id,
+            phase="checking_cache",
+            progress=5,
+            message="Checking local model cache.",
+            elapsed_seconds=0.0,
+        )
+        await self._emit_progress(
+            model_id=model_id,
+            phase="loading",
+            progress=None,
+            message="Downloading model if needed, then loading it into memory.",
+            elapsed_seconds=0.0,
+        )
         try:
             self._current_instance = await self._model_loader(model_id)
         except Exception as exc:
@@ -115,11 +164,25 @@ class ModelManager:
                 f"[ModelManager] loading failed model={model_id} elapsed={elapsed:.3f}s "
                 f"error={type(exc).__name__}: {exc}"
             )
+            await self._emit_progress(
+                model_id=model_id,
+                phase="failed",
+                progress=None,
+                message=str(exc),
+                elapsed_seconds=elapsed,
+            )
             raise
 
         self._current_model_id = model_id
         elapsed = time.perf_counter() - start
         server_log(f"[ModelManager] loading complete model={model_id} elapsed={elapsed:.3f}s")
+        await self._emit_progress(
+            model_id=model_id,
+            phase="ready",
+            progress=100,
+            message="Model is loaded and ready.",
+            elapsed_seconds=elapsed,
+        )
 
     async def unload_current(self) -> None:
         """Explicitly unload whatever model is currently resident (if any)."""

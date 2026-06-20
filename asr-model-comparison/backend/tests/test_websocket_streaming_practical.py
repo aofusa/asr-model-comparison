@@ -69,6 +69,15 @@ def _tiny_silent_wav() -> bytes:
     )
 
 
+def _receive_until_ready(websocket) -> dict:
+    """Consume model_progress frames and return the final ready frame."""
+    while True:
+        message = websocket.receive_json()
+        if message.get("type") == "ready":
+            return message
+        assert message.get("type") == "model_progress"
+
+
 def test_is_likely_speech_treats_empty_wav_as_silence_but_keeps_fake_bytes():
     assert is_likely_speech(_tiny_silent_wav()) is False
     assert is_likely_speech(b"fake browser mic chunk") is True
@@ -94,11 +103,43 @@ def test_websocket_practical_connection_and_config():
             }
             websocket.send_json(config)
 
+            progress_events = [websocket.receive_json() for _ in range(3)]
+
+            assert [event.get("phase") for event in progress_events] == [
+                "checking_cache",
+                "loading",
+                "ready",
+            ]
+            assert all(event.get("type") == "model_progress" for event in progress_events)
+
             # Expect "ready" after model is loaded (once)
             response = websocket.receive_json()
             assert response.get("type") == "ready"
             assert response.get("model_id") == "qwen3-asr-0.6b"
             assert loaded_model_ids == ["qwen3-asr-0.6b"]
+
+
+def test_websocket_model_load_failure_sends_progress_failed_event():
+    """Model load failures should be visible to the browser as progress failure."""
+    client = TestClient(app)
+
+    async def failing_loader(_model_id: str):
+        raise RuntimeError("model cache unavailable")
+
+    with patch(
+        "app.api.routers.transcribe.create_whisper_loader",
+        return_value=failing_loader,
+    ):
+        with client.websocket_connect("/api/ws/transcribe") as websocket:
+            websocket.send_json({"type": "config", "model_id": "whisper-tiny"})
+            events = [websocket.receive_json() for _ in range(3)]
+            error = websocket.receive_json()
+
+    assert [event.get("phase") for event in events] == ["checking_cache", "loading", "failed"]
+    assert events[-1]["type"] == "model_progress"
+    assert "model cache unavailable" in events[-1]["message"]
+    assert error["type"] == "error"
+    assert error["code"] == "model_load_failed"
 
 
 @pytest.mark.slow
@@ -121,7 +162,7 @@ def test_websocket_sends_transcription_results_for_chunks():
         # Use whisper-tiny for reliable protocol tests (recommended in docs for E2E/WS verification,
         # avoids heavy Qwen/Voxtral deps like accelerate in normal CI).
         websocket.send_json({"type": "config", "model_id": "whisper-tiny", "language": "ja", "beam_size": 1})
-        websocket.receive_json()  # ready
+        _receive_until_ready(websocket)
 
         # Use a minimal but valid WAV (same tiny silence used in frontend ws-protocol test).
         # In real mic flow this would be 2s webm/opus from MediaRecorder -> often empty after VAD.
@@ -153,7 +194,7 @@ def test_websocket_maintains_previous_text_across_chunks():
         with client.websocket_connect("/api/ws/transcribe") as websocket:
             # Use whisper-tiny so the test runs reliably without heavy model deps (accelerate etc.)
             websocket.send_json({"type": "config", "model_id": "whisper-tiny", "language": "ja"})
-            websocket.receive_json()  # ready
+            _receive_until_ready(websocket)
 
             # Use valid tiny WAV (not raw b"chunk1") so whisper backend can decode without error
             # (plain bytes often cause decode failure -> error response -> WS close in test client).
@@ -198,7 +239,7 @@ def test_websocket_config_previous_text_is_passed_to_qwen_backend_and_not_duplic
                 "previous_text": "前回の認識結果",
                 "return_timestamps": False,
             })
-            websocket.receive_json()  # ready
+            _receive_until_ready(websocket)
 
             websocket.send_bytes(b"fake wav chunk")
             response = websocket.receive_json()
@@ -221,7 +262,7 @@ def test_websocket_graceful_disconnect():
     with patcher:
         with client.websocket_connect("/api/ws/transcribe") as websocket:
             websocket.send_json({"type": "config", "model_id": "qwen3-asr-0.6b"})
-            websocket.receive_json()  # ready
+            _receive_until_ready(websocket)
 
             # Client disconnects
             pass
@@ -282,7 +323,7 @@ def test_websocket_chunk_provides_useful_feedback_for_realtime_mic_use_case():
                 "beam_size": 1,
                 "return_timestamps": False,
             })
-            websocket.receive_json()  # ready
+            _receive_until_ready(websocket)
 
             # Simulate a 2s mic chunk (currently often leads to empty text in practice)
             tiny_wav = base64.b64decode(
@@ -326,7 +367,7 @@ def test_websocket_chunk_response_includes_chunk_index_and_size_for_ui_feedback(
                 "beam_size": 1,
                 "return_timestamps": False,
             })
-            websocket.receive_json()  # ready
+            _receive_until_ready(websocket)
 
             websocket.send_bytes(chunk)
             response = websocket.receive_json()
@@ -362,7 +403,7 @@ def test_websocket_voxtral_silent_wav_returns_no_speech_without_inference():
                 "beam_size": 5,
                 "return_timestamps": True,
             })
-            ready = websocket.receive_json()
+            ready = _receive_until_ready(websocket)
 
             websocket.send_bytes(_tiny_silent_wav())
             response = websocket.receive_json()
@@ -395,7 +436,7 @@ def test_websocket_uses_selected_whisper_model_id(model_id: str):
     with patcher:
         with client.websocket_connect("/api/ws/transcribe") as websocket:
             websocket.send_json({"type": "config", "model_id": model_id, "language": "en"})
-            ready = websocket.receive_json()
+            ready = _receive_until_ready(websocket)
             assert loaded_model_ids == [model_id]
             websocket.send_bytes(b"fake wav chunk")
             response = websocket.receive_json()
@@ -414,7 +455,7 @@ def test_websocket_uses_selected_qwen_model_id(model_id: str):
     with patcher:
         with client.websocket_connect("/api/ws/transcribe") as websocket:
             websocket.send_json({"type": "config", "model_id": model_id, "language": "en"})
-            ready = websocket.receive_json()
+            ready = _receive_until_ready(websocket)
             assert loaded_model_ids == [model_id]
             websocket.send_bytes(b"fake wav chunk")
             response = websocket.receive_json()
@@ -441,7 +482,7 @@ def test_websocket_passes_language_and_translation_to_qwen_backend():
                 "repetition_penalty": 1.1,
                 "return_timestamps": False,
             })
-            websocket.receive_json()
+            _receive_until_ready(websocket)
             websocket.send_bytes(b"fake wav chunk")
             response = websocket.receive_json()
 

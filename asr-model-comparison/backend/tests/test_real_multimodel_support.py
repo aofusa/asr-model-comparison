@@ -103,16 +103,15 @@ def test_attempting_unsupported_family_with_real_loader_fails_cleanly():
     manager = ModelManager(model_loader=loader)
 
     import asyncio
-    loop = asyncio.get_event_loop()
 
     # Load a real Whisper model first
-    loop.run_until_complete(manager.load_model("whisper-tiny"))
+    asyncio.run(manager.load_model("whisper-tiny"))
     assert manager.current_model_id == "whisper-tiny"
 
     # Attempting Qwen3 should raise a clear error (either from the wrong loader
     # or from the dedicated Qwen backend once a multi-family loader is used).
     with pytest.raises((ValueError, NotImplementedError, RuntimeError), match="(?i)(qwen|unsupported|not (yet )?supported|not implemented)"):
-        loop.run_until_complete(manager.load_model("qwen3-asr-1.7b"))
+        asyncio.run(manager.load_model("qwen3-asr-1.7b"))
 
     # After the failure, we should not be left with a broken state.
     # The previous successful model may still be loaded (acceptable),

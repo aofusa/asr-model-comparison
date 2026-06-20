@@ -200,3 +200,48 @@ async def test_switching_models_always_unloads_previous_even_on_error(mock_loade
     assert any("small" in str(e) for e in unload_events)
     assert manager.current_model_id is None
     assert manager.is_model_loaded is False
+
+
+@pytest.mark.asyncio
+async def test_load_model_emits_progress_events(mock_loaders):
+    """Model load progress must be observable by WebSocket/UI without loading real models."""
+    events: list[dict] = []
+
+    async def progress_callback(event: dict):
+        events.append(event)
+
+    manager = ModelManager(
+        model_loader=mock_loaders["load"],
+        model_unloader=mock_loaders["unload"],
+        progress_callback=progress_callback,
+    )
+
+    await manager.load_model("whisper-tiny")
+
+    phases = [event["phase"] for event in events]
+    assert phases == ["checking_cache", "loading", "ready"]
+    assert all(event["model_id"] == "whisper-tiny" for event in events)
+    assert events[-1]["progress"] == 100
+    assert "elapsed_seconds" in events[-1]
+
+
+@pytest.mark.asyncio
+async def test_load_model_emits_failed_progress_event(mock_loaders):
+    """A failed load should surface an actionable progress event before raising."""
+    events: list[dict] = []
+
+    async def failing_loader(_model_id: str):
+        raise RuntimeError("download failed")
+
+    manager = ModelManager(
+        model_loader=failing_loader,
+        model_unloader=mock_loaders["unload"],
+        progress_callback=lambda event: events.append(event),
+    )
+
+    with pytest.raises(RuntimeError, match="download failed"):
+        await manager.load_model("whisper-tiny")
+
+    assert events[-1]["phase"] == "failed"
+    assert events[-1]["model_id"] == "whisper-tiny"
+    assert "download failed" in events[-1]["message"]

@@ -72,6 +72,30 @@ function mergeFloatChunks(chunks: Float32Array[], totalLength: number): Float32A
   return merged;
 }
 
+function getPcmStats(samples: Float32Array): { rms: number; peak: number } {
+  if (samples.length === 0) {
+    return { rms: 0, peak: 0 };
+  }
+
+  let sumSquares = 0;
+  let peak = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const abs = Math.abs(samples[i]);
+    peak = Math.max(peak, abs);
+    sumSquares += samples[i] * samples[i];
+  }
+
+  return {
+    rms: Math.sqrt(sumSquares / samples.length),
+    peak,
+  };
+}
+
+function isAudiblePcm(samples: Float32Array): boolean {
+  const stats = getPcmStats(samples);
+  return stats.rms >= 0.006 || stats.peak >= 0.03;
+}
+
 function splitAccumulatedForPartial(accumulatedText: string, latestText: string): { finalText: string; partialText: string } {
   const accumulated = accumulatedText.trim();
   const latest = latestText.trim();
@@ -112,6 +136,40 @@ const languageOptions = [
   { value: 'sv', label: 'Swedish' },
 ];
 
+type TranscriptHistoryEntry = {
+  id: string;
+  modelId: string;
+  text: string;
+  processingTime: number;
+  createdAt: string;
+};
+
+function appendTranscriptHistoryValue(
+  history: TranscriptHistoryEntry[],
+  text: string,
+  modelId: string,
+  processingTime = 0,
+): TranscriptHistoryEntry[] {
+  const normalized = text.trim();
+  if (!normalized) {
+    return history;
+  }
+  const latest = history[0];
+  if (latest?.text === normalized && latest.modelId === modelId) {
+    return history;
+  }
+  return [
+    {
+      id: `${Date.now()}-${history.length}`,
+      modelId,
+      text: normalized,
+      processingTime,
+      createdAt: new Date().toLocaleTimeString(),
+    },
+    ...history,
+  ].slice(0, 50);
+}
+
 export default component$(() => {
   const isRecording = useSignal(false);
   const transcript = useSignal('');
@@ -122,6 +180,14 @@ export default component$(() => {
   const maxReconnectAttempts = 5;
   const isReconnecting = useSignal(false);
   const nextReconnectIn = useSignal(0);
+  const modelReady = useSignal(false);
+  const modelProgress = useStore({
+    phase: 'idle',
+    message: 'No model is loading.',
+    progress: null as number | null,
+    modelId: '',
+    elapsedSeconds: null as number | null,
+  });
 
   // Phase 2: Real-time visual feedback
   const volumeLevel = useSignal(0); // 0-100 for meter visualization
@@ -129,6 +195,7 @@ export default component$(() => {
   // Phase 2: is_final visual distinction
   const finalTranscript = useSignal('');
   const partialTranscript = useSignal('');
+  const transcriptHistory = useSignal<TranscriptHistoryEntry[]>([]);
 
   // Phase 2 extension (TDD per 修正指示書): per-chunk processing feedback
   // so user sees activity even when a 2s chunk yields empty text from ASR.
@@ -319,6 +386,12 @@ export default component$(() => {
     console.log('[connectWebSocket] creating WS to', wsUrl);
     const ws = new WebSocket(wsUrl);
     refs.ws = noSerialize(ws);
+    modelReady.value = false;
+    modelProgress.phase = 'connecting';
+    modelProgress.message = 'Connecting to ASR server.';
+    modelProgress.progress = null;
+    modelProgress.modelId = selectedModel.value;
+    modelProgress.elapsedSeconds = null;
 
     ws.onopen = () => {
       if (refs.ws !== ws || ws.readyState !== WebSocket.OPEN) {
@@ -328,7 +401,10 @@ export default component$(() => {
       clearCountdown();
       reconnectAttempts.value = 0;
       isReconnecting.value = false;
-      status.value = isReconnect ? 'Reconnected - Resuming context...' : 'Connected';
+      status.value = isReconnect ? 'Reconnected - Preparing model...' : 'Connected - Preparing model...';
+      modelProgress.phase = 'config_sent';
+      modelProgress.message = 'Model configuration sent. Waiting for server preparation.';
+      modelProgress.modelId = selectedModel.value;
 
       const config: any = {
         type: 'config',
@@ -358,9 +434,32 @@ export default component$(() => {
       }
       const data = JSON.parse(event.data);
 
+      if (data.type === 'model_progress') {
+        modelProgress.phase = String(data.phase || 'loading');
+        modelProgress.message = String(data.message || 'Preparing model.');
+        modelProgress.progress = typeof data.progress === 'number' ? data.progress : null;
+        modelProgress.modelId = String(data.model_id || selectedModel.value);
+        modelProgress.elapsedSeconds = typeof data.elapsed_seconds === 'number' ? data.elapsed_seconds : null;
+        status.value = `Model ${modelProgress.phase}: ${modelProgress.message}`;
+        try {
+          const statusEl = document.querySelector('[data-testid="status"]');
+          if (statusEl) statusEl.textContent = `Status: ${status.value}`;
+        } catch {}
+        return;
+      }
+
       if (data.type === 'ready') {
         console.log('[WS] received ready from server, model:', data.model_id);
+        modelReady.value = true;
+        modelProgress.phase = 'ready';
+        modelProgress.message = 'Model is loaded and ready.';
+        modelProgress.progress = 100;
+        modelProgress.modelId = String(data.model_id || selectedModel.value);
         status.value = `Ready - ${data.model_id}`;
+        try {
+          const statusEl = document.querySelector('[data-testid="status"]');
+          if (statusEl) statusEl.textContent = `Status: ${status.value}`;
+        } catch {}
       }
 
       if (data.type === 'transcription') {
@@ -397,6 +496,12 @@ export default component$(() => {
             partialTranscript.value = ''; // partial をクリア
             previousText.value = finalTranscript.value;
             transcript.value = finalTranscript.value; // 後方互換
+            transcriptHistory.value = appendTranscriptHistoryValue(
+              transcriptHistory.value,
+              finalTranscript.value,
+              String(data.model_id || selectedModel.value),
+              proc,
+            );
           } else {
             // 部分結果 → partialTranscript で一時表示
             const split = splitAccumulatedForPartial(nextContext, latestText);
@@ -439,6 +544,12 @@ export default component$(() => {
           finalTranscript.value = finalText;
           partialTranscript.value = '';
           transcript.value = finalText;
+          transcriptHistory.value = appendTranscriptHistoryValue(
+            transcriptHistory.value,
+            finalText,
+            String(data.model_id || selectedModel.value),
+            0,
+          );
         }
         status.value = 'Stream ended';
       }
@@ -448,6 +559,7 @@ export default component$(() => {
       if (refs.ws !== ws) {
         return;
       }
+      modelReady.value = false;
       status.value = 'Connection error';
       if (isRecording.value) {
         scheduleReconnect();
@@ -458,6 +570,7 @@ export default component$(() => {
       if (refs.ws !== ws) {
         return;
       }
+      modelReady.value = false;
       const wasRecording = isRecording.value;
       if (refs.intentionalStop) {
         refs.intentionalStop = false;
@@ -550,7 +663,7 @@ export default component$(() => {
       refs.pcmSampleCount = 0;
 
       processor.onaudioprocess = (event) => {
-        if (!isRecording.value || !refs.ws || refs.ws.readyState !== WebSocket.OPEN) {
+        if (!isRecording.value || !modelReady.value || !refs.ws || refs.ws.readyState !== WebSocket.OPEN) {
           return;
         }
         if (currentChunkStatus.value === 'processing') {
@@ -571,6 +684,16 @@ export default component$(() => {
         const merged = mergeFloatChunks(chunks, refs.pcmSampleCount);
         refs.pcmChunks = noSerialize([] as Float32Array[]);
         refs.pcmSampleCount = 0;
+
+        if (!isAudiblePcm(merged)) {
+          currentChunkStatus.value = 'idle';
+          status.value = 'Recording... (silent chunk skipped)';
+          try {
+            const statusEl = document.querySelector('[data-testid="status"]');
+            if (statusEl) statusEl.textContent = `Status: ${status.value}`;
+          } catch {}
+          return;
+        }
 
         chunkCount.value++;
         currentChunkStatus.value = 'processing';
@@ -631,6 +754,7 @@ export default component$(() => {
     if (isRecording.value) return;
 
     reconnectAttempts.value = 0;
+    modelReady.value = false;
     status.value = 'Requesting microphone...';
 
     // Belt-and-suspenders for flaky Qwik reactivity in static client-render:
@@ -689,7 +813,7 @@ export default component$(() => {
       if (!usingPcm) {
         refs.mediaRecorder = noSerialize(new MediaRecorder(stream));
         refs.mediaRecorder.ondataavailable = async (event) => {
-          if (event.data.size > 0 && refs.ws && refs.ws.readyState === WebSocket.OPEN) {
+          if (event.data.size > 0 && modelReady.value && refs.ws && refs.ws.readyState === WebSocket.OPEN) {
             if (currentChunkStatus.value === 'processing') {
               return;
             }
@@ -728,6 +852,7 @@ export default component$(() => {
     clearCountdown();
     isRecording.value = false;
     isReconnecting.value = false;
+    modelReady.value = false;
 
     if (refs.mediaRecorder) {
       refs.mediaRecorder.stop();
@@ -813,6 +938,7 @@ export default component$(() => {
       const startFallback = async () => {
         if (isRecording.value) return;
         reconnectAttempts.value = 0;
+        modelReady.value = false;
         setStatusDom('Requesting microphone...');
         const startBtn = document.querySelector('[data-testid="start-recording"]') as HTMLButtonElement | null;
         if (startBtn) startBtn.disabled = true;
@@ -853,7 +979,7 @@ export default component$(() => {
           if (!usingPcm) {
             refs.mediaRecorder = noSerialize(new MediaRecorder(stream));
             refs.mediaRecorder.ondataavailable = async (event) => {
-              if (event.data.size > 0 && refs.ws && (refs.ws.readyState === WebSocket.OPEN || refs.ws.readyState === 1)) {
+              if (event.data.size > 0 && modelReady.value && refs.ws && (refs.ws.readyState === WebSocket.OPEN || refs.ws.readyState === 1)) {
                 if (currentChunkStatus.value === 'processing') {
                   return;
                 }
@@ -898,6 +1024,7 @@ export default component$(() => {
         }
         isRecording.value = false;
         isReconnecting.value = false;
+        modelReady.value = false;
         stopPcmFn();
         if (refs.micStream) {
           try { refs.micStream.getTracks().forEach(track => track.stop()); } catch {}
@@ -1243,6 +1370,26 @@ export default component$(() => {
         </div>
       )}
 
+      <div class="model-progress" data-testid="model-progress">
+        <div class="model-progress-header">
+          <strong>Model preparation</strong>
+          <span>{modelProgress.modelId || selectedModel.value}</span>
+        </div>
+        <div class="model-progress-message">
+          {modelProgress.phase === 'idle'
+            ? 'Model will be prepared when recording starts.'
+            : `${modelProgress.phase}: ${modelProgress.message}`}
+          {modelProgress.elapsedSeconds !== null ? ` (${modelProgress.elapsedSeconds.toFixed(2)}s)` : ''}
+        </div>
+        <div class="model-progress-bar-bg">
+          <div
+            class="model-progress-bar-fill"
+            style={{ width: `${modelProgress.progress ?? (modelReady.value ? 100 : 35)}%` }}
+            data-progress={modelProgress.progress ?? ''}
+          />
+        </div>
+      </div>
+
       {/* Phase 2: Real-time Volume Meter (audio level visual feedback) */}
       <div class="volume-meter" data-testid="volume-meter">
         <div class="volume-label">Input Level</div>
@@ -1288,6 +1435,27 @@ export default component$(() => {
           <button class="copy-btn" onClick$={copyFinalTranscript} title="Copy finalized transcript">
             📋
           </button>
+        )}
+      </div>
+
+      <div class="transcript-history" data-testid="transcript-history">
+        <div class="history-header">
+          <strong>Transcript History</strong>
+          <span>{transcriptHistory.value.length} item(s)</span>
+        </div>
+        {transcriptHistory.value.length === 0 ? (
+          <div class="history-empty">Finalized transcription results will remain here.</div>
+        ) : (
+          transcriptHistory.value.map((entry) => (
+            <div class="history-item" key={entry.id}>
+              <div class="history-meta">
+                <span>{entry.createdAt}</span>
+                <span>{entry.modelId}</span>
+                <span>{entry.processingTime.toFixed(2)}s</span>
+              </div>
+              <div class="history-text">{entry.text}</div>
+            </div>
+          ))
         )}
       </div>
     </div>
