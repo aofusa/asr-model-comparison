@@ -2,5 +2,8 @@
 frontend/playwright-report/
 frontend/test-results/
 
+# Generated frontend build copied for backend serving
+backend/static/
+
 # Workspace-level/generated documents should stay outside the app source tree
 docs/

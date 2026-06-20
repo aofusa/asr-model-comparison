@@ -90,6 +90,9 @@ asr-model-comparison/docs/
 asr-model-comparison/frontend/playwright-report/
 asr-model-comparison/frontend/test-results/
 
+# Generated frontend build copied for backend serving
+asr-model-comparison/backend/static/
+
 # OS / Editor
 .DS_Store
 Thumbs.db
