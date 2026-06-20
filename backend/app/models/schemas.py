@@ -40,6 +40,13 @@ class TranscriptionResponse(BaseModel):
 
     model_id: str
     text: str
+    transcript_text: str | None = Field(
+        None, description="Original ASR transcription before optional translation"
+    )
+    translated_text: str | None = Field(
+        None, description="Translated text when translation is enabled"
+    )
     processing_time_seconds: float = Field(..., description="Wall-clock time from request to result")
     language: str | None = None
+    target_language: str | None = None
     # Future: confidence, segments, resource usage, etc.

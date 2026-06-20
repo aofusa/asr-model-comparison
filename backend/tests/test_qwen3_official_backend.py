@@ -106,10 +106,36 @@ def test_qwen3_translation_target_translates_transcribed_text(monkeypatch: pytes
 
     transcribe_calls = [call["transcribe"] for call in _FakeQwen3ASRModel.calls if "transcribe" in call]
     assert result["text"] == "This is a translated result."
+    assert result["transcript_text"] == "テストです"
+    assert result["translated_text"] == "This is a translated result."
     assert result["target_language"] == "ja"
-    assert transcribe_calls[-1]["language"] == "Japanese"
+    assert transcribe_calls[-1]["language"] == "English"
     assert transcribe_calls[-1]["context"] == "hello"
     assert translation_calls == [("テストです", "en", "ja")]
+
+
+def test_qwen3_no_translation_returns_transcript_without_translated_text(monkeypatch: pytest.MonkeyPatch):
+    _FakeQwen3ASRModel.calls = []
+    _install_fake_torch(monkeypatch)
+
+    fake_qwen3_module = types.ModuleType("qwen_asr.inference.qwen3_asr")
+    fake_qwen3_module.Qwen3ASRModel = _FakeQwen3ASRModel
+
+    monkeypatch.setitem(__import__("sys").modules, "qwen_asr", types.ModuleType("qwen_asr"))
+    monkeypatch.setitem(__import__("sys").modules, "qwen_asr.inference", types.ModuleType("qwen_asr.inference"))
+    monkeypatch.setitem(__import__("sys").modules, "qwen_asr.inference.qwen3_asr", fake_qwen3_module)
+
+    backend = Qwen3ASRBackend("qwen3-asr-1.7b", device="cpu")
+    result = backend.transcribe(
+        b"fake-wav",
+        language="ja",
+        target_language=None,
+        return_timestamps=False,
+    )
+
+    assert result["text"] == "テストです"
+    assert result["transcript_text"] == "テストです"
+    assert result["translated_text"] is None
 
 
 def test_qwen3_missing_qwen_asr_does_not_fallback_to_generic_pipeline(

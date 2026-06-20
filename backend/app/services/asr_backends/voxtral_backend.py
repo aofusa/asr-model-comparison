@@ -171,9 +171,36 @@ class VoxtralBackend:
             language = kwargs.get("language")
             target_language = kwargs.get("target_language")
             translation_enabled = _is_translation_enabled(target_language)
+            previous_text = str(kwargs.get("previous_text", "") or "").strip()
+
+            asr_inputs = self._processor.apply_transcription_request(
+                language=language or "auto",
+                audio=audio_path,
+                model_id=self._hf_model_id,
+                return_tensors="pt",
+            )
+            asr_inputs = asr_inputs.to(self._model.device)
+
+            asr_gen_kwargs = {
+                "max_new_tokens": 512,
+                "num_beams": kwargs.get("beam_size", 5),
+                "temperature": kwargs.get("temperature", 0.0),
+                "repetition_penalty": kwargs.get("repetition_penalty", 1.12),
+                "do_sample": False,
+            }
+
+            import torch
+            with torch.no_grad():
+                asr_generated_ids = self._model.generate(**asr_inputs, **asr_gen_kwargs)
+
+            try:
+                asr_generated_ids = asr_generated_ids[:, asr_inputs.input_ids.shape[1]:]
+            except Exception:
+                # Unit tests use simple list/MagicMock values instead of tensors.
+                pass
+            transcript_text = self._processor.batch_decode(asr_generated_ids, skip_special_tokens=True)[0].strip()
 
             if translation_enabled:
-                previous_text = str(kwargs.get("previous_text", "") or "").strip()
                 target_name = _language_name(target_language)
                 source_hint = (
                     f"The source speech language is {_language_name(language)}. "
@@ -187,7 +214,8 @@ class VoxtralBackend:
                 )
                 prompt = (
                     f"{source_hint}{context_hint}"
-                    f"Transcribe the audio and translate it into {target_name}. "
+                    f"Original transcript: {transcript_text}\n"
+                    f"Translate the original transcript into {target_name}. "
                     "Return only the translated text."
                 )
                 conversation = [
@@ -211,7 +239,6 @@ class VoxtralBackend:
                     "do_sample": False,
                 }
 
-                import torch
                 with torch.no_grad():
                     generated_ids = self._model.generate(**inputs, **gen_kwargs)
 
@@ -223,52 +250,31 @@ class VoxtralBackend:
                 text = self._processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
                 result = {
                     "text": text,
+                    "transcript_text": transcript_text,
+                    "translated_text": text,
                     "model_id": self.model_id,
                     "language": language,
                     "target_language": target_language,
                 }
                 if kwargs.get("return_timestamps"):
-                    result["chunks"] = [{"text": text, "timestamp": (0.0, None)}]
+                    result["chunks"] = [{"text": transcript_text, "timestamp": (0.0, None)}]
                 return result
 
-            # VoxtralProcessor does not accept raw audio through __call__.
-            # Use the official transcription request helper for ASR mode.
-            inputs = self._processor.apply_transcription_request(
-                language=language or "auto",
-                audio=audio_path,
-                model_id=self._hf_model_id,
-                return_tensors="pt",
-            )
-            inputs = inputs.to(self._model.device)
-
-            # Japanese accuracy focused generation (heaviness accepted)
-            gen_kwargs = {
-                "max_new_tokens": 512,
-                "num_beams": kwargs.get("beam_size", 5),
-                "temperature": kwargs.get("temperature", 0.0),
-                "repetition_penalty": kwargs.get("repetition_penalty", 1.12),
-                "do_sample": False,
+            result = {
+                "text": transcript_text,
+                "transcript_text": transcript_text,
+                "translated_text": None,
+                "model_id": self.model_id,
+                "language": language,
+                "target_language": target_language,
             }
-
-            import torch
-            with torch.no_grad():
-                generated_ids = self._model.generate(**inputs, **gen_kwargs)
-
-            try:
-                generated_ids = generated_ids[:, inputs.input_ids.shape[1]:]
-            except Exception:
-                # Unit tests use simple list/MagicMock values instead of tensors.
-                pass
-            text = self._processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
-
-            result = {"text": text, "model_id": self.model_id, "language": language, "target_language": target_language}
 
             if kwargs.get("return_timestamps"):
                 # Better structured timestamps for real-time applications
                 # (In a more advanced implementation we could parse forced alignment or use model outputs)
                 result["chunks"] = [
                     {
-                        "text": text,
+                        "text": transcript_text,
                         "timestamp": (0.0, None)
                     }
                 ]
@@ -295,7 +301,13 @@ class VoxtralBackend:
             generate_kwargs=generate_kwargs,
         )
         text = result.get("text", "").strip() if isinstance(result, dict) else str(result)
-        out = {"text": text, "model_id": self.model_id, "target_language": kwargs.get("target_language")}
+        out = {
+            "text": text,
+            "transcript_text": text,
+            "translated_text": None,
+            "model_id": self.model_id,
+            "target_language": kwargs.get("target_language"),
+        }
         if kwargs.get("return_timestamps") and isinstance(result, dict) and "chunks" in result:
             out["chunks"] = result.get("chunks", [])
         return out

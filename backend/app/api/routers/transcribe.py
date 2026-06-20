@@ -50,6 +50,52 @@ def _merge_realtime_context(previous_text: str, new_text: str) -> str:
     return f"{previous_text} {new_text}".strip()
 
 
+def _translation_enabled(target_language: str | None) -> bool:
+    return target_language not in (None, "", "none", "auto")
+
+
+def _normalize_transcription_result(
+    result: dict | str,
+    *,
+    target_language: str | None = None,
+) -> dict:
+    """Return a stable original/translated text contract for HTTP and WS callers."""
+    if not isinstance(result, dict):
+        text = str(result).strip()
+        return {
+            "text": text,
+            "transcript_text": text,
+            "translated_text": None,
+            "target_language": target_language,
+            "language": None,
+            "chunks": [],
+            "processing_time_seconds": 0.0,
+        }
+
+    text = str(result.get("text", "") or "").strip()
+    translated_text = result.get("translated_text")
+    translated_text = str(translated_text).strip() if translated_text else None
+    transcript_text = result.get("transcript_text")
+    if transcript_text is None:
+        transcript_text = text if not translated_text else str(result.get("original_text", "") or "").strip()
+    transcript_text = str(transcript_text or "").strip()
+
+    if not transcript_text and text and not translated_text:
+        transcript_text = text
+    display_text = translated_text or transcript_text or text
+
+    return {
+        **result,
+        "text": display_text,
+        "transcript_text": transcript_text,
+        "translated_text": translated_text,
+        "target_language": result.get("target_language", target_language),
+        "language": result.get("language"),
+        "chunks": result.get("chunks", []),
+        "processing_time_seconds": float(result.get("processing_time_seconds", 0.0)),
+    }
+
+
 def _get_real_loader_for_model(model_id: str):
     """Select the appropriate real loader based on model family."""
     model_info = next((m for m in AVAILABLE_MODELS if m.id == model_id), None)
@@ -99,6 +145,7 @@ async def transcribe_audio(
     beam_size: Annotated[int | None, Form(description="Beam size for higher quality (slower, recommended for Japanese)")] = None,
     return_timestamps: Annotated[bool, Form(description="Return timestamps (important for real-time)")] = False,
     previous_text: Annotated[str | None, Form(description="Previous transcript chunk for real-time continuity")] = None,
+    target_language: Annotated[str | None, Form(description="Optional translation target language")] = None,
 ) -> TranscriptionResponse:
     # Select the correct manager at request time based on the requested model
     # This allows proper support for Whisper, Qwen3, and Voxtral in real mode.
@@ -136,7 +183,8 @@ async def transcribe_audio(
         server_log(
             f"[HTTP Transcribe] request model={model_id} filename={audio.filename} "
             f"bytes={len(audio_bytes)} language={language} beam_size={beam_size} "
-            f"return_timestamps={return_timestamps} previous_text_len={len(previous_text or '')}"
+            f"target_language={target_language} return_timestamps={return_timestamps} "
+            f"previous_text_len={len(previous_text or '')}"
         )
         result = await model_manager.transcribe(
             audio=audio_bytes,
@@ -146,6 +194,7 @@ async def transcribe_audio(
             beam_size=beam_size,
             return_timestamps=return_timestamps,
             previous_text=previous_text,
+            target_language=None if target_language in (None, "", "none") else target_language,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid input: {exc}") from exc
@@ -158,8 +207,9 @@ async def transcribe_audio(
         raise HTTPException(status_code=500, detail="Transcription failed due to an internal error.") from exc
 
     # Ensure we always return the required shape
-    text = result.get("text", "") if isinstance(result, dict) else str(result)
-    proc_time = float(result.get("processing_time_seconds", 0.0)) if isinstance(result, dict) else 0.0
+    normalized = _normalize_transcription_result(result, target_language=target_language)
+    text = normalized["text"]
+    proc_time = normalized["processing_time_seconds"]
     server_log(
         f"[HTTP Transcribe] complete model={model_id} text_len={len(text)} "
         f"processing_time={proc_time:.3f}s"
@@ -168,8 +218,11 @@ async def transcribe_audio(
     return TranscriptionResponse(
         model_id=model_id,
         text=text,
+        transcript_text=normalized["transcript_text"],
+        translated_text=normalized["translated_text"],
         processing_time_seconds=proc_time,
-        language=None,  # future extension
+        language=normalized["language"],
+        target_language=normalized["target_language"],
     )
 
 
@@ -207,6 +260,7 @@ async def websocket_transcribe(websocket: WebSocket):
     repetition_penalty = 1.15
     use_dedicated_class = True
     previous_text = ""
+    previous_translated_text = ""
     return_timestamps = True
     vad_filter = False
     audio_source = "microphone"
@@ -261,13 +315,15 @@ async def websocket_transcribe(websocket: WebSocket):
             if requested_audio_source in {"microphone", "system", "window"}:
                 audio_source = requested_audio_source
             previous_text = str(config.get("previous_text", "") or "").strip()
+            previous_translated_text = str(config.get("previous_translated_text", "") or "").strip()
             server_log(
                 f"[WS Config] model={current_model_id} language={language} "
                 f"target_language={target_language} beam_size={beam_size} "
                 f"temperature={temperature} repetition_penalty={repetition_penalty} "
                 f"use_dedicated_class={use_dedicated_class} "
                 f"return_timestamps={return_timestamps} vad_filter={vad_filter} "
-                f"audio_source={audio_source} previous_text_len={len(previous_text)}"
+                f"audio_source={audio_source} previous_text_len={len(previous_text)} "
+                f"previous_translated_text_len={len(previous_translated_text)}"
             )
         except Exception:
             await safe_send_json({"type": "error", "message": "Invalid config JSON"})
@@ -356,6 +412,8 @@ async def websocket_transcribe(websocket: WebSocket):
                         "type": "transcription",
                         "model_id": current_model_id,
                         "text": "",
+                        "transcript_text": "",
+                        "translated_text": None,
                         "is_final": False,
                         "chunks": [],
                         "language": None if language in (None, "", "auto") else language,
@@ -365,6 +423,8 @@ async def websocket_transcribe(websocket: WebSocket):
                         "chunk_index": chunk_index,
                         "chunk_size_bytes": len(audio_for_model),
                         "accumulated_text": previous_text,
+                        "accumulated_transcript_text": previous_text,
+                        "accumulated_translated_text": previous_translated_text,
                     }):
                         break
                     continue
@@ -385,12 +445,28 @@ async def websocket_transcribe(websocket: WebSocket):
                         vad_filter=vad_filter,
                     )
 
-                    new_text = result.get("text", "").strip()
-                    if new_text:
-                        previous_text = _merge_realtime_context(previous_text, new_text)
+                    normalized_result = _normalize_transcription_result(
+                        result,
+                        target_language=translation_target,
+                    )
+                    new_text = normalized_result["text"]
+                    new_transcript_text = normalized_result["transcript_text"]
+                    new_translated_text = normalized_result["translated_text"]
+                    if new_transcript_text:
+                        previous_text = _merge_realtime_context(previous_text, new_transcript_text)
+                    if new_translated_text:
+                        previous_translated_text = _merge_realtime_context(
+                            previous_translated_text,
+                            new_translated_text,
+                        )
 
                     # had_speech heuristic: if the backend returned segments/chunks or we got text
-                    had_speech = bool(new_text or result.get("chunks") or result.get("segments"))
+                    had_speech = bool(
+                        new_transcript_text
+                        or new_translated_text
+                        or normalized_result.get("chunks")
+                        or normalized_result.get("segments")
+                    )
 
                     # Diagnostic log (very useful when user reports "nothing happens")
                     server_log(
@@ -403,15 +479,19 @@ async def websocket_transcribe(websocket: WebSocket):
                         "type": "transcription",
                         "model_id": current_model_id,
                         "text": new_text,
+                        "transcript_text": new_transcript_text,
+                        "translated_text": new_translated_text,
                         "is_final": False,
-                        "chunks": result.get("chunks", []),
-                        "language": result.get("language"),
+                        "chunks": normalized_result.get("chunks", []),
+                        "language": normalized_result.get("language"),
                         "target_language": translation_target,
-                        "processing_time_seconds": result.get("processing_time_seconds", 0.0),
+                        "processing_time_seconds": normalized_result.get("processing_time_seconds", 0.0),
                         "had_speech": had_speech,
                         "chunk_index": chunk_index,
                         "chunk_size_bytes": len(audio_for_model),
                         "accumulated_text": previous_text,
+                        "accumulated_transcript_text": previous_text,
+                        "accumulated_translated_text": previous_translated_text,
                     }):
                         break
 
@@ -444,7 +524,10 @@ async def websocket_transcribe(websocket: WebSocket):
                         await safe_send_json({
                             "type": "final",
                             "model_id": current_model_id,
-                            "text": previous_text,
+                            "text": previous_translated_text or previous_text,
+                            "transcript_text": previous_text,
+                            "translated_text": previous_translated_text or None,
+                            "target_language": None if target_language in (None, "", "none") else target_language,
                         })
                         break
 

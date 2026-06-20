@@ -17,6 +17,15 @@ test('model selection works', async ({ page }) => {
   await expect(voxtralRadio).toBeChecked();
 });
 
+test('non-technical workflow sections are visible', async ({ page }) => {
+  await page.goto('/');
+
+  await expect(page.getByTestId('primary-workflow')).toContainText('Choose audio');
+  await expect(page.getByRole('heading', { name: 'Recognition Model' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Audio Input' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Language And Translation' })).toBeVisible();
+});
+
 test('audio source selection uses display media for window/app capture', async ({ page }) => {
   await page.addInitScript(() => {
     (window as any).__userMediaCalls = 0;
@@ -1027,7 +1036,11 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
                   type: 'transcription',
                   model_id: modelId,
                   text: expectedText,
-                  accumulated_text: expectedText,
+                  transcript_text: 'Original speech text',
+                  translated_text: expectedText,
+                  accumulated_text: 'Original speech text',
+                  accumulated_transcript_text: 'Original speech text',
+                  accumulated_translated_text: expectedText,
                   is_final: false,
                   processing_time_seconds: 0.42,
                   had_speech: true,
@@ -1096,6 +1109,8 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
         target_language: 'ja',
       });
       await expect(page.locator('.transcript')).toContainText(scenario.expectedText, { timeout: 10000 });
+      await expect(page.getByTestId('source-transcript')).toContainText('Original speech text', { timeout: 10000 });
+      await expect(page.getByTestId('translated-transcript')).toContainText(scenario.expectedText, { timeout: 10000 });
       await expect(page.getByTestId('chunk-feedback')).toContainText(/0\.42s/, { timeout: 10000 });
     });
   }

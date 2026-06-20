@@ -96,7 +96,7 @@ def test_voxtral_translation_uses_audio_chat_instruction():
     fake_inputs.input_ids.shape = [1, 3]
     backend._processor.apply_chat_template.return_value = fake_inputs
     backend._model.generate.return_value = [[10, 20, 30, 40]]
-    backend._processor.batch_decode.return_value = ["これは翻訳結果です"]
+    backend._processor.batch_decode.side_effect = [["Original transcript"], ["これは翻訳結果です"]]
 
     result = backend.transcribe(
         b"english-audio",
@@ -107,12 +107,15 @@ def test_voxtral_translation_uses_audio_chat_instruction():
     )
 
     assert result["text"] == "これは翻訳結果です"
+    assert result["transcript_text"] == "Original transcript"
+    assert result["translated_text"] == "これは翻訳結果です"
     assert result["target_language"] == "ja"
-    backend._processor.apply_transcription_request.assert_not_called()
+    backend._processor.apply_transcription_request.assert_called_once()
     backend._processor.apply_chat_template.assert_called_once()
     conversation = backend._processor.apply_chat_template.call_args.args[0]
     prompt = conversation[0]["content"][1]["text"]
-    assert "translate it into Japanese" in prompt
+    assert "Translate the original transcript into Japanese" in prompt
+    assert "Original transcript: Original transcript" in prompt
     assert "Previous transcript context: Hello" in prompt
 
 

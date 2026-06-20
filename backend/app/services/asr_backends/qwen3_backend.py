@@ -45,13 +45,15 @@ def _language_name(code: str | None) -> str:
     return LANGUAGE_NAMES.get(code or "", "the detected language")
 
 
-def _translation_target_language(language: str | None, target_language: str | None) -> str | None:
-    """Qwen3-ASR uses the language argument to force the output text language."""
-    if target_language not in (None, "", "none", "auto"):
-        return _language_name(target_language)
+def _asr_output_language(language: str | None) -> str | None:
+    """Qwen3-ASR uses the language argument to force the ASR output language."""
     if language in (None, "", "auto"):
         return None
     return _language_name(language)
+
+
+def _is_translation_enabled(target_language: str | None) -> bool:
+    return target_language not in (None, "", "none", "auto")
 
 
 class Qwen3ASRBackend:
@@ -218,7 +220,7 @@ class Qwen3ASRBackend:
             language = kwargs.get("language")
             target_language = kwargs.get("target_language")
             previous_text = kwargs.get("previous_text", "")
-            output_language = _translation_target_language(language, target_language)
+            output_language = _asr_output_language(language)
 
             try:
                 result = self._qwen_asr_model.transcribe(
@@ -251,21 +253,25 @@ class Qwen3ASRBackend:
                 detected_language = getattr(item, "language", None) or language
                 time_stamps = getattr(item, "time_stamps", None)
 
-            if target_language not in (None, "", "none", "auto") and text:
+            transcript_text = text
+            translated_text = None
+            if _is_translation_enabled(target_language) and transcript_text:
                 source_language = language or detected_language
-                translated = translate_text(text, source_language, target_language)
+                translated = translate_text(transcript_text, source_language, target_language)
                 if translated:
-                    text = translated
+                    translated_text = translated
 
             normalized = {
-                "text": text,
+                "text": translated_text or transcript_text,
+                "transcript_text": transcript_text,
+                "translated_text": translated_text,
                 "model_id": self.model_id,
                 "language": detected_language,
                 "target_language": target_language,
             }
 
             if kwargs.get("return_timestamps") and time_stamps is not None:
-                normalized["chunks"] = [{"text": text, "timestamp": time_stamps}]
+                normalized["chunks"] = [{"text": transcript_text, "timestamp": time_stamps}]
 
             return normalized
 
@@ -292,6 +298,8 @@ class Qwen3ASRBackend:
         text = result.get("text", "").strip() if isinstance(result, dict) else str(result)
         out = {
             "text": text,
+            "transcript_text": text,
+            "translated_text": None,
             "model_id": self.model_id,
             "language": result.get("language") if isinstance(result, dict) else None,
             "target_language": kwargs.get("target_language"),

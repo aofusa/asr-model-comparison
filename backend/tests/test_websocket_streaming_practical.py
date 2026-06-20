@@ -496,6 +496,76 @@ def test_websocket_passes_language_and_translation_to_qwen_backend():
     assert kwargs["repetition_penalty"] == 1.1
 
 
+def test_websocket_returns_original_and_translated_text_when_translation_enabled():
+    client = TestClient(app)
+    patcher, fake_backend, _loaded_model_ids = _mock_loader_for("create_qwen3_loader", text="")
+    fake_backend.transcribe.return_value = {
+        "text": "翻訳された結果",
+        "transcript_text": "original transcript",
+        "translated_text": "翻訳された結果",
+        "processing_time_seconds": 0.12,
+        "chunks": [{"text": "original transcript"}],
+        "language": "en",
+        "target_language": "ja",
+    }
+
+    with patcher:
+        with client.websocket_connect("/api/ws/transcribe") as websocket:
+            websocket.send_json({
+                "type": "config",
+                "model_id": "qwen3-asr-0.6b",
+                "language": "en",
+                "target_language": "ja",
+            })
+            _receive_until_ready(websocket)
+            websocket.send_bytes(b"fake wav chunk")
+            response = websocket.receive_json()
+
+    assert response["type"] == "transcription"
+    assert response["text"] == "翻訳された結果"
+    assert response["transcript_text"] == "original transcript"
+    assert response["translated_text"] == "翻訳された結果"
+    assert response["accumulated_transcript_text"] == "original transcript"
+    assert response["accumulated_translated_text"] == "翻訳された結果"
+
+
+@pytest.mark.parametrize("model_id,loader_name", [
+    ("qwen3-asr-0.6b", "create_qwen3_loader"),
+    ("qwen3-asr-1.7b", "create_qwen3_loader"),
+    ("voxtral-mini-4b", "create_voxtral_loader"),
+])
+def test_websocket_translation_disabled_returns_qwen_voxtral_transcript_text(model_id: str, loader_name: str):
+    client = TestClient(app)
+    patcher, fake_backend, _loaded_model_ids = _mock_loader_for(loader_name, text="認識結果")
+    fake_backend.transcribe.return_value = {
+        "text": "認識結果",
+        "transcript_text": "認識結果",
+        "translated_text": None,
+        "processing_time_seconds": 0.08,
+        "language": "ja",
+        "target_language": None,
+    }
+
+    with patcher:
+        with client.websocket_connect("/api/ws/transcribe") as websocket:
+            websocket.send_json({
+                "type": "config",
+                "model_id": model_id,
+                "language": "ja",
+                "target_language": "none",
+            })
+            _receive_until_ready(websocket)
+            websocket.send_bytes(b"fake wav chunk")
+            response = websocket.receive_json()
+
+    assert response["type"] == "transcription"
+    assert response["model_id"] == model_id
+    assert response["text"] == "認識結果"
+    assert response["transcript_text"] == "認識結果"
+    assert response["translated_text"] is None
+    assert response["accumulated_text"] == "認識結果"
+
+
 def test_qwen_backend_maps_public_ids_to_expected_hf_ids():
     from app.services.asr_backends.qwen3_backend import Qwen3ASRBackend
 

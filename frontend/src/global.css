@@ -8,7 +8,7 @@ body {
 }
 
 .container {
-  max-width: 960px;
+  max-width: 1080px;
   margin: 0 auto;
   padding: 2rem;
 }
@@ -16,6 +16,64 @@ body {
 h1 {
   text-align: center;
   color: #64748b;
+}
+
+h2 {
+  margin: 0.1rem 0;
+  color: #e2e8f0;
+  font-size: 1.15rem;
+}
+
+.primary-workflow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+  margin: 1.5rem 0;
+}
+
+.primary-workflow div,
+.app-section {
+  background: #111827;
+  border: 1px solid #334155;
+  border-radius: 12px;
+}
+
+.primary-workflow div {
+  padding: 0.9rem;
+}
+
+.primary-workflow strong,
+.primary-workflow span {
+  display: block;
+}
+
+.primary-workflow span,
+.section-heading p {
+  color: #94a3b8;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.app-section {
+  padding: 1rem;
+  margin: 1rem 0;
+}
+
+.section-heading {
+  margin-bottom: 0.85rem;
+}
+
+.section-heading > span {
+  display: inline-block;
+  color: #93c5fd;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.section-heading p {
+  margin: 0.2rem 0 0;
 }
 
 .controls {
@@ -48,19 +106,25 @@ button:disabled {
   white-space: pre-wrap;
   margin-top: 2rem;
   border: 1px solid #334155;
+  display: grid;
+  gap: 1rem;
 }
 
 .model-selector {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 1rem;
-  justify-content: center;
-  margin-bottom: 2rem;
+  margin-bottom: 0;
 }
 
 .model-selector label {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  background: #1e2937;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 0.75rem;
 }
 
 .audio-source-selector {
@@ -298,7 +362,7 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin-bottom: 0.75rem;
+  margin: 0.75rem 0;
 }
 
 .settings-presets button {
@@ -345,6 +409,44 @@ button:disabled {
 
 .settings-controls input[type="checkbox"] {
   accent-color: #3b82f6;
+}
+
+.advanced-settings {
+  margin-top: 0.9rem;
+  border-top: 1px solid #334155;
+  padding-top: 0.75rem;
+}
+
+.advanced-settings summary {
+  cursor: pointer;
+  color: #cbd5e1;
+  font-weight: 700;
+}
+
+.result-card {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 1rem;
+  min-height: 120px;
+}
+
+.result-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+  color: #cbd5e1;
+}
+
+.result-card-header span {
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+.translated-transcript {
+  border-color: #2563eb;
+  background: #0b1730;
 }
 
 .model-progress {

@@ -220,6 +220,9 @@ type TranscriptHistoryEntry = {
   id: string;
   modelId: string;
   text: string;
+  transcriptText?: string;
+  translatedText?: string | null;
+  targetLanguage?: string | null;
   processingTime: number;
   createdAt: string;
 };
@@ -229,6 +232,7 @@ function appendTranscriptHistoryValue(
   text: string,
   modelId: string,
   processingTime = 0,
+  details: Pick<TranscriptHistoryEntry, 'transcriptText' | 'translatedText' | 'targetLanguage'> = {},
 ): TranscriptHistoryEntry[] {
   const normalized = text.trim();
   if (!normalized) {
@@ -243,6 +247,9 @@ function appendTranscriptHistoryValue(
       id: `${Date.now()}-${history.length}`,
       modelId,
       text: normalized,
+      transcriptText: details.transcriptText,
+      translatedText: details.translatedText,
+      targetLanguage: details.targetLanguage,
       processingTime,
       createdAt: new Date().toLocaleTimeString(),
     },
@@ -275,6 +282,7 @@ export default component$(() => {
   // Phase 2: is_final visual distinction
   const finalTranscript = useSignal('');
   const partialTranscript = useSignal('');
+  const translatedTranscript = useSignal('');
   const transcriptHistory = useSignal<TranscriptHistoryEntry[]>([]);
 
   // Phase 2 extension (TDD per 修正指示書): per-chunk processing feedback
@@ -510,6 +518,9 @@ export default component$(() => {
       if (isReconnect && previousText.value) {
         config.previous_text = previousText.value;
       }
+      if (isReconnect && translatedTranscript.value) {
+        config.previous_translated_text = translatedTranscript.value;
+      }
 
       ws.send(JSON.stringify(config));
     };
@@ -556,12 +567,19 @@ export default component$(() => {
         const hadSpeech = data.had_speech !== false;
         const proc = data.processing_time_seconds || 0;
         const latestText = (data.text || '').trim();
-        const accumulatedText = typeof data.accumulated_text === 'string' ? data.accumulated_text.trim() : '';
+        const latestTranscriptText = (data.transcript_text || (data.translated_text ? '' : latestText) || '').trim();
+        const latestTranslatedText = (data.translated_text || '').trim();
+        const accumulatedText = typeof data.accumulated_transcript_text === 'string'
+          ? data.accumulated_transcript_text.trim()
+          : (typeof data.accumulated_text === 'string' ? data.accumulated_text.trim() : '');
+        const accumulatedTranslatedText = typeof data.accumulated_translated_text === 'string'
+          ? data.accumulated_translated_text.trim()
+          : '';
 
         // Always record chunk activity so the user sees "something happened"
         // even when data.text is empty (the previous root cause of "話しかけても何も起きない").
         lastChunkInfo.value = {
-          text: latestText,
+          text: latestTranslatedText || latestTranscriptText || latestText,
           processingTime: proc,
           hadSpeech,
           chunkIndex: data.chunk_index || chunkCount.value,
@@ -571,10 +589,13 @@ export default component$(() => {
         currentChunkStatus.value = 'received';
 
         // Only accumulate when there is actual text (preserves existing behavior exactly).
-        if (latestText) {
+        if (latestTranscriptText || latestTranslatedText || latestText) {
           const isFinal = data.is_final === true;
-          const nextContext = accumulatedText || `${previousText.value} ${latestText}`.trim();
+          const nextContext = accumulatedText || `${previousText.value} ${latestTranscriptText || latestText}`.trim();
           previousText.value = nextContext;
+          if (accumulatedTranslatedText || latestTranslatedText) {
+            translatedTranscript.value = accumulatedTranslatedText || `${translatedTranscript.value} ${latestTranslatedText}`.trim();
+          }
 
           if (isFinal) {
             // 確定した結果 → finalTranscript に蓄積
@@ -584,21 +605,29 @@ export default component$(() => {
             transcript.value = finalTranscript.value; // 後方互換
             transcriptHistory.value = appendTranscriptHistoryValue(
               transcriptHistory.value,
-              finalTranscript.value,
+              translatedTranscript.value || finalTranscript.value,
               String(data.model_id || selectedModel.value),
               proc,
+              {
+                transcriptText: finalTranscript.value,
+                translatedText: translatedTranscript.value || null,
+                targetLanguage: data.target_language || null,
+              },
             );
           } else {
             // 部分結果 → partialTranscript で一時表示
-            const split = splitAccumulatedForPartial(nextContext, latestText);
+            const split = splitAccumulatedForPartial(nextContext, latestTranscriptText || latestText);
             finalTranscript.value = split.finalText;
             partialTranscript.value = split.partialText;
-            transcript.value = nextContext;
+            transcript.value = translatedTranscript.value || nextContext;
           }
         } else if (accumulatedText) {
           previousText.value = accumulatedText;
           finalTranscript.value = accumulatedText;
-          transcript.value = accumulatedText;
+          if (accumulatedTranslatedText) {
+            translatedTranscript.value = accumulatedTranslatedText;
+          }
+          transcript.value = translatedTranscript.value || accumulatedText;
         } else {
           // Empty text but chunk was processed: give subtle feedback in partial area
           // (keeps the transcript container "alive" for the user).
@@ -624,17 +653,24 @@ export default component$(() => {
       }
 
       if (data.type === 'final') {
-        const finalText = String(data.text || previousText.value || '').trim();
+        const finalText = String(data.transcript_text || previousText.value || data.text || '').trim();
+        const finalTranslatedText = String(data.translated_text || translatedTranscript.value || '').trim();
         if (finalText) {
           previousText.value = finalText;
           finalTranscript.value = finalText;
+          translatedTranscript.value = finalTranslatedText;
           partialTranscript.value = '';
-          transcript.value = finalText;
+          transcript.value = finalTranslatedText || finalText;
           transcriptHistory.value = appendTranscriptHistoryValue(
             transcriptHistory.value,
-            finalText,
+            finalTranslatedText || finalText,
             String(data.model_id || selectedModel.value),
             0,
+            {
+              transcriptText: finalText,
+              translatedText: finalTranslatedText || null,
+              targetLanguage: data.target_language || null,
+            },
           );
         }
         status.value = 'Stream ended';
@@ -885,6 +921,7 @@ export default component$(() => {
     // Phase 2: Reset transcripts for new session
     finalTranscript.value = '';
     partialTranscript.value = '';
+    translatedTranscript.value = '';
     transcript.value = '';
     previousText.value = '';
 
@@ -1056,6 +1093,7 @@ export default component$(() => {
 
         finalTranscript.value = '';
         partialTranscript.value = '';
+        translatedTranscript.value = '';
         transcript.value = '';
         previousText.value = '';
         currentChunkStatus.value = 'idle';
@@ -1324,9 +1362,30 @@ export default component$(() => {
       <div data-testid="hydrated-marker" style={{ color: 'red', fontWeight: 'bold' }}>CLIENT RENDERED</div>
       <h1>ASR Real-time Comparison</h1>
       <p style={{ textAlign: 'center', color: '#94a3b8' }}>
-        Whisper (tiny/small/medium/large-v3-turbo), Qwen3-ASR &amp; Voxtral (Real-time Web Audio)
+        Speak or share audio, then read the transcription and optional translation in real time.
       </p>
 
+      <div class="primary-workflow" data-testid="primary-workflow">
+        <div>
+          <strong>1. Choose audio</strong>
+          <span>Microphone, system audio, or a shared window.</span>
+        </div>
+        <div>
+          <strong>2. Choose recognition</strong>
+          <span>Pick one ASR model and whether translation is needed.</span>
+        </div>
+        <div>
+          <strong>3. Start</strong>
+          <span>Results and history stay visible while reconnecting.</span>
+        </div>
+      </div>
+
+      <section class="app-section">
+        <div class="section-heading">
+          <span>Step 1</span>
+          <h2>Recognition Model</h2>
+          <p>Whisper is light for testing. Qwen3-ASR and Voxtral are recommended for Japanese quality.</p>
+        </div>
       <div class="model-selector">
         {models.map((model) => (
           <label key={model.id}>
@@ -1341,7 +1400,14 @@ export default component$(() => {
           </label>
         ))}
       </div>
+      </section>
 
+      <section class="app-section">
+        <div class="section-heading">
+          <span>Step 2</span>
+          <h2>Audio Input</h2>
+          <p>Select what the app should listen to. Browser and OS support may limit shared audio.</p>
+        </div>
       <div class="audio-source-selector" data-testid="audio-source-selector">
         <div class="audio-source-header">
           <strong>Audio Input Source</strong>
@@ -1369,11 +1435,18 @@ export default component$(() => {
           System/window capture uses the browser share picker. Availability depends on the browser, OS, and whether "share audio" is enabled for the selected target.
         </p>
       </div>
+      </section>
 
       {/* Phase 2: Settings Panel */}
+      <section class="app-section">
+        <div class="section-heading">
+          <span>Step 3</span>
+          <h2>Language And Translation</h2>
+          <p>Turn on translation only when you want a second output. The original transcription is always kept.</p>
+        </div>
       <div class="settings-panel">
         <div class="settings-header">
-          <strong>Generation Settings</strong>
+          <strong>Language Settings</strong>
           <span class="settings-note">Applied on next Start / Reconnect</span>
         </div>
 
@@ -1406,38 +1479,42 @@ export default component$(() => {
           </label>
         </div>
 
-        <div class="settings-presets">
-          <button type="button" onClick$={setHighAccuracy}>High Accuracy (ja)</button>
-          <button type="button" onClick$={setBalanced}>Balanced (recommended)</button>
-          <button type="button" onClick$={setFaster}>Faster</button>
-        </div>
+        <details class="advanced-settings" open>
+          <summary>Advanced accuracy settings</summary>
+          <div class="settings-presets">
+            <button type="button" onClick$={setHighAccuracy}>High Accuracy (ja)</button>
+            <button type="button" onClick$={setBalanced}>Balanced (recommended)</button>
+            <button type="button" onClick$={setFaster}>Faster</button>
+          </div>
 
-        <div class="settings-controls">
-          <label>
-            Beam Size
-            <input type="number" min="1" max="10" value={beamSize.value}
-                   onInput$={(e) => { beamSize.value = Number((e.target as HTMLInputElement).value); saveSettings(); }} />
-          </label>
+          <div class="settings-controls">
+            <label>
+              Beam Size
+              <input type="number" min="1" max="10" value={beamSize.value}
+                     onInput$={(e) => { beamSize.value = Number((e.target as HTMLInputElement).value); saveSettings(); }} />
+            </label>
 
-          <label>
-            Temperature
-            <input type="number" step="0.1" min="0" max="1" value={temperature.value}
-                   onInput$={(e) => { temperature.value = Number((e.target as HTMLInputElement).value); saveSettings(); }} />
-          </label>
+            <label>
+              Temperature
+              <input type="number" step="0.1" min="0" max="1" value={temperature.value}
+                     onInput$={(e) => { temperature.value = Number((e.target as HTMLInputElement).value); saveSettings(); }} />
+            </label>
 
-          <label>
-            Repetition Penalty
-            <input type="number" step="0.01" min="1" max="1.5" value={repetitionPenalty.value}
-                   onInput$={(e) => { repetitionPenalty.value = Number((e.target as HTMLInputElement).value); saveSettings(); }} />
-          </label>
+            <label>
+              Repetition Penalty
+              <input type="number" step="0.01" min="1" max="1.5" value={repetitionPenalty.value}
+                     onInput$={(e) => { repetitionPenalty.value = Number((e.target as HTMLInputElement).value); saveSettings(); }} />
+            </label>
 
-          <label class="checkbox">
-            <input type="checkbox" checked={useDedicatedClass.value}
-                   onChange$={(e) => { useDedicatedClass.value = (e.target as HTMLInputElement).checked; saveSettings(); }} />
-            Use Dedicated Class (recommended)
-          </label>
-        </div>
+            <label class="checkbox">
+              <input type="checkbox" checked={useDedicatedClass.value}
+                     onChange$={(e) => { useDedicatedClass.value = (e.target as HTMLInputElement).checked; saveSettings(); }} />
+              Use Dedicated Class (recommended)
+            </label>
+          </div>
+        </details>
       </div>
+      </section>
 
       <div class="controls">
         <button data-testid="start-recording" type="button" disabled={isRecording.value}>
@@ -1553,18 +1630,38 @@ export default component$(() => {
 
       {/* Phase 2: Transcript with is_final visual distinction + copy (C) */}
       <div class="transcript-container">
-        <div class="transcript">
-          {finalTranscript.value && (
-            <span class="final-text" onClick$={copyFinalTranscript} title="Click to copy finalized text">
-              {finalTranscript.value}
-            </span>
+        <div class="transcript" data-testid="transcript-output">
+          <div class="result-card source-transcript" data-testid="source-transcript">
+            <div class="result-card-header">
+              <strong>Heard Text</strong>
+              <span>Original ASR output</span>
+            </div>
+            <div>
+              {finalTranscript.value && (
+                <span class="final-text" onClick$={copyFinalTranscript} title="Click to copy finalized text">
+                  {finalTranscript.value}
+                </span>
+              )}
+              {partialTranscript.value && (
+                <span class="partial-text" data-is-final="false">
+                  {finalTranscript.value ? ' ' : ''}{partialTranscript.value}
+                </span>
+              )}
+              {!finalTranscript.value && !partialTranscript.value && 'Transcription will appear here in real-time...'}
+            </div>
+          </div>
+
+          {(translatedTranscript.value || translationTarget.value !== 'none') && (
+            <div class="result-card translated-transcript" data-testid="translated-transcript">
+              <div class="result-card-header">
+                <strong>Translation</strong>
+                <span>{translationTarget.value === 'none' ? 'Off' : `Target: ${translationTarget.value}`}</span>
+              </div>
+              <div>
+                {translatedTranscript.value || 'Translation will appear here when enabled and speech is detected.'}
+              </div>
+            </div>
           )}
-          {partialTranscript.value && (
-            <span class="partial-text" data-is-final="false">
-              {finalTranscript.value ? ' ' : ''}{partialTranscript.value}
-            </span>
-          )}
-          {!finalTranscript.value && !partialTranscript.value && 'Transcription will appear here in real-time...'}
         </div>
 
         {finalTranscript.value && (
@@ -1589,7 +1686,16 @@ export default component$(() => {
                 <span>{entry.modelId}</span>
                 <span>{entry.processingTime.toFixed(2)}s</span>
               </div>
-              <div class="history-text">{entry.text}</div>
+              <div class="history-text">
+                {entry.translatedText ? (
+                  <>
+                    <div><strong>Heard:</strong> {entry.transcriptText || entry.text}</div>
+                    <div><strong>Translation:</strong> {entry.translatedText}</div>
+                  </>
+                ) : (
+                  entry.text
+                )}
+              </div>
             </div>
           ))
         )}

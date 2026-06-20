@@ -78,6 +78,28 @@ chmod +x run.sh
 ./run.sh --host 0.0.0.0 --port 8000
 ```
 
+## 画面の使い方
+
+AMCP は、音声を選んで文字起こしし、必要に応じて翻訳も確認するためのアプリです。専門知識がなくても、画面上部の 3 つの流れに沿って操作できます。
+
+1. **音声入力を選ぶ**  
+   `Microphone` は自分のマイク音声、`System / tab audio` はブラウザの画面共有で共有した音声、`Window / app audio` は共有ピッカーで選んだウィンドウやアプリの音声を使います。システム音声やウィンドウ音声は、ブラウザと OS が「音声を共有」に対応している必要があります。
+
+2. **認識モデルを選ぶ**  
+   動作確認には軽い `Whisper Tiny`、日本語のリアルタイム認識には `Qwen3-ASR 0.6B` または `Voxtral Mini 4B` を推奨します。モデルは同時に複数使わず、常に 1 つだけ選びます。
+
+3. **言語と翻訳を選ぶ**  
+   `Input Language` は話している言語です。通常は `Japanese` または `Auto Detect` を選びます。翻訳が不要な場合は `Translation Output` を `No Translation` にします。翻訳を有効にした場合も、画面には翻訳前の `Heard Text` と翻訳後の `Translation` の両方が表示されます。
+
+4. **Start Recording を押す**  
+   初回はブラウザからマイクや共有音声の許可を求められます。許可後、モデルの準備が完了するとリアルタイムに文字起こしが始まります。
+
+5. **結果を確認する**  
+   `Heard Text` には音声認識した原文、`Translation` には翻訳結果が表示されます。`Input Level` で音量、`Last chunk` で直近の処理時間とチャンク情報を確認できます。確定した結果は `Transcript History` に残ります。
+
+6. **Stop で終了する**  
+   録音を止めても、直前の結果と履歴は画面に残ります。通信が切れた場合は自動再接続し、再接続後も直前の文脈を引き継ぎます。
+
 ## ビルドと起動
 
 `run.ps1` / `run.sh` / `run.bat` は、`--build-only` を付けない通常起動でも毎回フロントエンドを本番ビルドし、最新の成果物を `backend/static/` にコピーしてからバックエンドを起動します。これにより FastAPI 1プロセスで API と最新フロントエンドを配信できます。
@@ -148,13 +170,17 @@ run.bat --build-only
 {
   "type": "transcription",
   "model_id": "qwen3-asr-0.6b",
-  "text": "認識されたテキスト",
+  "text": "翻訳または認識された表示用テキスト",
+  "transcript_text": "翻訳前の認識テキスト",
+  "translated_text": "翻訳後のテキスト（翻訳無効時は null）",
   "is_final": false,
   "chunks": [],
   "processing_time_seconds": 1.23,
   "had_speech": true,
   "chunk_index": 1,
-  "accumulated_text": "これまでの認識結果"
+  "accumulated_text": "これまでの認識結果",
+  "accumulated_transcript_text": "これまでの翻訳前認識結果",
+  "accumulated_translated_text": "これまでの翻訳結果"
 }
 ```
 
