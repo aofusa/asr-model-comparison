@@ -67,22 +67,25 @@ def test_websocket_practical_connection_and_config():
     The server loads the model only once per connection.
     """
     client = TestClient(app)
+    patcher, _fake_backend, loaded_model_ids = _mock_loader_for("create_qwen3_loader", text="")
 
-    with client.websocket_connect("/api/ws/transcribe") as websocket:
-        # Send initial config (new practical protocol)
-        config = {
-            "type": "config",
-            "model_id": "qwen3-asr-0.6b",
-            "language": "ja",
-            "beam_size": 6,
-            "use_dedicated_class": True,
-        }
-        websocket.send_json(config)
+    with patcher:
+        with client.websocket_connect("/api/ws/transcribe") as websocket:
+            # Send initial config (new practical protocol)
+            config = {
+                "type": "config",
+                "model_id": "qwen3-asr-0.6b",
+                "language": "ja",
+                "beam_size": 6,
+                "use_dedicated_class": True,
+            }
+            websocket.send_json(config)
 
-        # Expect "ready" after model is loaded (once)
-        response = websocket.receive_json()
-        assert response.get("type") == "ready"
-        assert response.get("model_id") == "qwen3-asr-0.6b"
+            # Expect "ready" after model is loaded (once)
+            response = websocket.receive_json()
+            assert response.get("type") == "ready"
+            assert response.get("model_id") == "qwen3-asr-0.6b"
+            assert loaded_model_ids == ["qwen3-asr-0.6b"]
 
 
 @pytest.mark.slow
@@ -157,14 +160,17 @@ def test_websocket_maintains_previous_text_across_chunks():
 def test_websocket_graceful_disconnect():
     """Connection should close cleanly after sending config."""
     client = TestClient(app)
+    patcher, _fake_backend, loaded_model_ids = _mock_loader_for("create_qwen3_loader", text="")
 
-    with client.websocket_connect("/api/ws/transcribe") as websocket:
-        websocket.send_json({"type": "config", "model_id": "qwen3-asr-0.6b"})
-        websocket.receive_json()  # ready
+    with patcher:
+        with client.websocket_connect("/api/ws/transcribe") as websocket:
+            websocket.send_json({"type": "config", "model_id": "qwen3-asr-0.6b"})
+            websocket.receive_json()  # ready
 
-        # Client disconnects
-        pass
+            # Client disconnects
+            pass
 
+    assert loaded_model_ids == ["qwen3-asr-0.6b"]
     assert True
 
 
@@ -279,6 +285,7 @@ def test_websocket_uses_selected_whisper_model_id(model_id: str):
         with client.websocket_connect("/api/ws/transcribe") as websocket:
             websocket.send_json({"type": "config", "model_id": model_id, "language": "en"})
             ready = websocket.receive_json()
+            assert loaded_model_ids == [model_id]
             websocket.send_bytes(b"fake wav chunk")
             response = websocket.receive_json()
 
@@ -297,6 +304,7 @@ def test_websocket_uses_selected_qwen_model_id(model_id: str):
         with client.websocket_connect("/api/ws/transcribe") as websocket:
             websocket.send_json({"type": "config", "model_id": model_id, "language": "en"})
             ready = websocket.receive_json()
+            assert loaded_model_ids == [model_id]
             websocket.send_bytes(b"fake wav chunk")
             response = websocket.receive_json()
 

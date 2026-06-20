@@ -249,6 +249,8 @@ async def websocket_transcribe(websocket: WebSocket):
             f"[WS Model] loader selected model={current_model_id} "
             f"use_dedicated_class={use_dedicated_class}"
         )
+        await manager.load_model(current_model_id)
+        server_log(f"[WS Ready] model loaded and ready model={current_model_id}")
 
         await websocket.send_json({
             "type": "ready",
