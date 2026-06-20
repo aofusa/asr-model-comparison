@@ -1,4 +1,4 @@
-import { component$, useSignal, useStore, $, useVisibleTask$ } from '@builder.io/qwik';
+import { component$, useSignal, useStore, $, useVisibleTask$, noSerialize, type NoSerialize } from '@builder.io/qwik';
 
 export default component$(() => {
   const isRecording = useSignal(false);
@@ -25,6 +25,8 @@ export default component$(() => {
     text: string;
     processingTime: number;
     hadSpeech: boolean;
+    chunkIndex: number;
+    chunkSizeBytes: number;
     ts: number;
   } | null>(null);
   const chunkCount = useSignal(0);
@@ -71,12 +73,12 @@ export default component$(() => {
   // side-effect objects (WebSocket, MediaRecorder, timers, Audio nodes).
   // This is the Qwik-recommended way for mutable refs that cross closures.
   const refs = useStore({
-    mediaRecorder: null as MediaRecorder | null,
-    ws: null as WebSocket | null,
+    mediaRecorder: null as NoSerialize<MediaRecorder> | null,
+    ws: null as NoSerialize<WebSocket> | null,
     reconnectTimeout: null as any,
     countdownInterval: null as any,
-    audioContext: null as AudioContext | null,
-    analyser: null as AnalyserNode | null,
+    audioContext: null as NoSerialize<AudioContext> | null,
+    analyser: null as NoSerialize<AnalyserNode> | null,
     volumeRaf: null as number | null,
   });
 
@@ -137,6 +139,10 @@ export default component$(() => {
   });
 
   const scheduleReconnect = $(() => {
+    if (isReconnecting.value && refs.reconnectTimeout) {
+      return;
+    }
+
     clearCountdown();
 
     if (reconnectAttempts.value >= maxReconnectAttempts) {
@@ -179,7 +185,7 @@ export default component$(() => {
     const wsHost = (typeof window !== 'undefined' && window.location.host) ? window.location.host : 'localhost:8000';
     const wsUrl = `${wsProtocol}//${wsHost}/api/ws/transcribe`;
     console.log('[connectWebSocket] creating WS to', wsUrl);
-    refs.ws = new WebSocket(wsUrl);
+    refs.ws = noSerialize(new WebSocket(wsUrl));
 
     refs.ws.onopen = () => {
       console.log('[connectWebSocket] WS onopen - connected to server');
@@ -225,6 +231,8 @@ export default component$(() => {
           text: data.text || '',
           processingTime: proc,
           hadSpeech,
+          chunkIndex: data.chunk_index || chunkCount.value,
+          chunkSizeBytes: data.chunk_size_bytes || 0,
           ts: Date.now(),
         };
         currentChunkStatus.value = 'received';
@@ -254,6 +262,10 @@ export default component$(() => {
 
         // Update status with last chunk info (visible processing time feedback).
         status.value = `Ready - ${data.model_id} (last chunk: ${proc.toFixed(2)}s${hadSpeech ? ', speech' : ''})`;
+        try {
+          const statusEl = document.querySelector('[data-testid="status"]');
+          if (statusEl) statusEl.textContent = `Status: ${status.value}`;
+        } catch {}
       }
 
       if (data.type === 'error') {
@@ -292,9 +304,9 @@ export default component$(() => {
       if (refs.audioContext) {
         refs.audioContext.close();
       }
-      refs.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      refs.audioContext = noSerialize(new (window.AudioContext || (window as any).webkitAudioContext)());
       const source = refs.audioContext.createMediaStreamSource(stream);
-      refs.analyser = refs.audioContext.createAnalyser();
+      refs.analyser = noSerialize(refs.audioContext.createAnalyser());
       refs.analyser.fftSize = 64;
       refs.analyser.minDecibels = -90;
       refs.analyser.maxDecibels = -10;
@@ -388,7 +400,7 @@ export default component$(() => {
       console.log('[StartRecording] calling getUserMedia...');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       console.log('[StartRecording] getUserMedia succeeded, starting MediaRecorder');
-      refs.mediaRecorder = new MediaRecorder(stream);
+      refs.mediaRecorder = noSerialize(new MediaRecorder(stream));
 
       refs.mediaRecorder.ondataavailable = async (event) => {
         if (event.data.size > 0 && refs.ws && refs.ws.readyState === WebSocket.OPEN) {
@@ -436,6 +448,12 @@ export default component$(() => {
     isRecording.value = false;
     isReconnecting.value = false;
     status.value = 'Stopped';
+    try {
+      const statusEl = document.querySelector('[data-testid="status"]');
+      if (statusEl) statusEl.textContent = 'Status: Stopped';
+      const startBtn = document.querySelector('[data-testid="start-recording"]') as HTMLButtonElement | null;
+      if (startBtn) startBtn.disabled = false;
+    } catch {}
     reconnectAttempts.value = 0;
 
     // Phase 2: Reset transcripts and volume
@@ -456,6 +474,141 @@ export default component$(() => {
   // This makes buttons & settings work for the :8000 build while preserving $() + Qwik path for dev/SSR.
   useVisibleTask$(async () => {
     try {
+      const syncSettingsDom = () => {
+        const numInputs = document.querySelectorAll('.settings-controls input[type="number"]');
+        if (numInputs[0]) (numInputs[0] as HTMLInputElement).value = String(beamSize.value);
+        if (numInputs[1]) (numInputs[1] as HTMLInputElement).value = String(temperature.value);
+        if (numInputs[2]) (numInputs[2] as HTMLInputElement).value = String(repetitionPenalty.value);
+        const cb = document.querySelector('.settings-controls input[type="checkbox"]') as HTMLInputElement | null;
+        if (cb) cb.checked = useDedicatedClass.value;
+      };
+
+      const startFn = await startRecording.resolve();
+      const stopFn = await stopRecording.resolve();
+      const connectFn = await connectWebSocket.resolve();
+      const startVolumeFn = await startVolumeMeter.resolve();
+      const stopVolumeFn = await stopVolumeMeter.resolve();
+      const highFn = await setHighAccuracy.resolve();
+      const balancedFn = await setBalanced.resolve();
+      const fasterFn = await setFaster.resolve();
+
+      const setStatusDom = (value: string) => {
+        status.value = value;
+        const statusEl = document.querySelector('[data-testid="status"]');
+        if (statusEl) statusEl.textContent = `Status: ${value}`;
+      };
+
+      const startFallback = async () => {
+        if (isRecording.value) return;
+        reconnectAttempts.value = 0;
+        isRecording.value = true;
+        setStatusDom('Recording...');
+        const startBtn = document.querySelector('[data-testid="start-recording"]') as HTMLButtonElement | null;
+        if (startBtn) startBtn.disabled = true;
+        const stopBtn = document.querySelector('[data-testid="stop-recording"]') as HTMLButtonElement | null;
+        if (stopBtn) stopBtn.disabled = false;
+
+        finalTranscript.value = '';
+        partialTranscript.value = '';
+        transcript.value = '';
+        currentChunkStatus.value = 'idle';
+        lastChunkInfo.value = null;
+        chunkCount.value = 0;
+
+        await connectFn(false);
+
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          refs.mediaRecorder = noSerialize(new MediaRecorder(stream));
+          refs.mediaRecorder.ondataavailable = async (event) => {
+            if (event.data.size > 0 && refs.ws && (refs.ws.readyState === WebSocket.OPEN || refs.ws.readyState === 1)) {
+              chunkCount.value++;
+              currentChunkStatus.value = 'processing';
+              setStatusDom(`Recording... (processing chunk #${chunkCount.value})`);
+              refs.ws.send(event.data);
+            }
+          };
+          refs.mediaRecorder.start(2000);
+          startVolumeFn(stream);
+        } catch {
+          setStatusDom('Mic unavailable (reconnect test mode)');
+        }
+      };
+
+      const stopFallback = () => {
+        if (refs.reconnectTimeout) {
+          clearTimeout(refs.reconnectTimeout);
+          refs.reconnectTimeout = null;
+        }
+        if (refs.countdownInterval) {
+          clearInterval(refs.countdownInterval);
+          refs.countdownInterval = null;
+        }
+        if (refs.mediaRecorder) {
+          try {
+            refs.mediaRecorder.stop();
+            refs.mediaRecorder.stream.getTracks().forEach(track => track.stop());
+          } catch {}
+          refs.mediaRecorder = null;
+        }
+        if (refs.ws) {
+          try { refs.ws.send(JSON.stringify({ type: 'end' })); } catch {}
+          try { refs.ws.close(); } catch {}
+          refs.ws = null;
+        }
+        isRecording.value = false;
+        isReconnecting.value = false;
+        reconnectAttempts.value = 0;
+        setStatusDom('Stopped');
+        const startBtn = document.querySelector('[data-testid="start-recording"]') as HTMLButtonElement | null;
+        if (startBtn) startBtn.disabled = false;
+        const stopBtn = document.querySelector('[data-testid="stop-recording"]') as HTMLButtonElement | null;
+        if (stopBtn) stopBtn.disabled = true;
+        stopVolumeFn();
+      };
+
+      // Delegated fallback handles clicks even if the individual element listener
+      // was not attached yet in the static client-render path.
+      if (!(document as any)._amcpDelegatedControls) {
+        (document as any)._amcpDelegatedControls = true;
+        document.addEventListener('click', (e) => {
+          const target = e.target as HTMLElement | null;
+          const button = target?.closest('button') as HTMLButtonElement | null;
+          if (!button) return;
+
+          if (button.matches('[data-testid="start-recording"]') || button.textContent?.includes('Start Recording')) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            void startFallback();
+            return;
+          }
+          if (button.matches('[data-testid="stop-recording"]') || button.textContent?.includes('Stop')) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            stopFallback();
+            return;
+          }
+
+          const text = button.textContent || '';
+          if (text.includes('High Accuracy')) {
+            e.preventDefault();
+            highFn();
+            beamSize.value = 8; temperature.value = 0.0; repetitionPenalty.value = 1.12; useDedicatedClass.value = true;
+            syncSettingsDom();
+          } else if (text.includes('Balanced')) {
+            e.preventDefault();
+            balancedFn();
+            beamSize.value = 6; temperature.value = 0.0; repetitionPenalty.value = 1.15; useDedicatedClass.value = true;
+            syncSettingsDom();
+          } else if (text.includes('Faster')) {
+            e.preventDefault();
+            fasterFn();
+            beamSize.value = 3; temperature.value = 0.2; repetitionPenalty.value = 1.10; useDedicatedClass.value = true;
+            syncSettingsDom();
+          }
+        }, true);
+      }
+
       // Give the Qwik render into #root a moment to finish inserting elements (especially after
       // the entry.client.tsx root.innerHTML='' + render). querySelector can miss on the first tick.
       await new Promise(r => setTimeout(r, 50));
@@ -498,9 +651,9 @@ export default component$(() => {
 
       // Presets (hoisted $ QRLs)
       const presets = document.querySelectorAll('.settings-presets button');
-      if (presets[0]) { const fn = await setHighAccuracy.resolve(); presets[0].addEventListener('click', () => fn()); }
-      if (presets[1]) { const fn = await setBalanced.resolve(); presets[1].addEventListener('click', () => fn()); }
-      if (presets[2]) { const fn = await setFaster.resolve(); presets[2].addEventListener('click', () => fn()); }
+      if (presets[0]) { presets[0].addEventListener('click', () => { highFn(); beamSize.value = 8; temperature.value = 0.0; repetitionPenalty.value = 1.12; useDedicatedClass.value = true; syncSettingsDom(); }); }
+      if (presets[1]) { presets[1].addEventListener('click', () => { balancedFn(); beamSize.value = 6; temperature.value = 0.0; repetitionPenalty.value = 1.15; useDedicatedClass.value = true; syncSettingsDom(); }); }
+      if (presets[2]) { presets[2].addEventListener('click', () => { fasterFn(); beamSize.value = 3; temperature.value = 0.2; repetitionPenalty.value = 1.10; useDedicatedClass.value = true; syncSettingsDom(); }); }
 
       // Settings number inputs etc: use .resolve() like the preset buttons do.
       // This ensures no bare 'saveSettings' identifier ends up in the listener closure source
@@ -593,10 +746,10 @@ export default component$(() => {
       </div>
 
       <div class="controls">
-        <button data-testid="start-recording" onClick$={startRecording} disabled={isRecording.value}>
+        <button data-testid="start-recording" type="button" disabled={isRecording.value}>
           🎤 Start Recording
         </button>
-        <button data-testid="stop-recording" onClick$={stopRecording} disabled={!isRecording.value}>
+        <button data-testid="stop-recording" type="button" disabled={!isRecording.value}>
           ⏹ Stop
         </button>
 
@@ -685,8 +838,9 @@ export default component$(() => {
         {currentChunkStatus.value === 'processing' && '⏳ Processing latest 2s chunk...'}
         {lastChunkInfo.value && (
           <div>
-            Last chunk #{chunkCount.value}: {lastChunkInfo.value.processingTime.toFixed(2)}s
+            Last chunk #{lastChunkInfo.value.chunkIndex || chunkCount.value}: {lastChunkInfo.value.processingTime.toFixed(2)}s
             {lastChunkInfo.value.hadSpeech ? ' (speech)' : ' (no speech)'} — {lastChunkInfo.value.text || '(empty result)'}
+            {lastChunkInfo.value.chunkSizeBytes > 0 ? ` — ${lastChunkInfo.value.chunkSizeBytes} bytes` : ''}
           </div>
         )}
       </div>

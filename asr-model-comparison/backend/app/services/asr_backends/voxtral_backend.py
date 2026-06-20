@@ -10,9 +10,6 @@ import tempfile
 import os
 from typing import Any
 
-import torch
-from transformers import pipeline
-
 from app.services.asr_backends.base import ASRBackend
 
 
@@ -27,7 +24,7 @@ class VoxtralBackend:
         self,
         model_id: str,
         device: str = "cpu",
-        torch_dtype: torch.dtype | None = None,
+        torch_dtype: Any | None = None,
         quantization: str = "none",
         use_dedicated_class: bool = True,
         **kwargs: Any,
@@ -43,8 +40,7 @@ class VoxtralBackend:
             print(f"[VoxtralBackend] Warning: 4-bit requested on {device}. Falling back.")
             self._quantization = "none"
 
-        default_dtype = torch.float16 if device in ("cuda", "mps") else torch.float32
-        self._torch_dtype = torch_dtype or default_dtype
+        self._torch_dtype = torch_dtype
 
         self._pipe = None
         self._hf_model_id = self._resolve_hf_model_id(model_id)
@@ -61,6 +57,19 @@ class VoxtralBackend:
 
         print(f"[VoxtralBackend] Loading real model: {self.model_id} ({self._hf_model_id}) on {self._device}...")
 
+        try:
+            import torch
+            from transformers import pipeline
+        except ImportError as exc:
+            raise RuntimeError(
+                "Voxtral requires optional heavy dependencies: torch and transformers. "
+                "Install them before loading Voxtral models."
+            ) from exc
+
+        torch_dtype = self._torch_dtype or (
+            torch.float16 if self._device in ("cuda", "mps") else torch.float32
+        )
+
         quantization_config = None
         if self._quantization == "4bit" and self._device == "cuda":
             from transformers import BitsAndBytesConfig
@@ -75,7 +84,7 @@ class VoxtralBackend:
                 self._processor = AutoProcessor.from_pretrained(self._hf_model_id)
                 self._model = AutoModelForSpeechSeq2Seq.from_pretrained(
                     self._hf_model_id,
-                    torch_dtype=self._torch_dtype,
+                    torch_dtype=torch_dtype,
                     device_map=device_map,
                     quantization_config=quantization_config,
                     low_cpu_mem_usage=True,
@@ -89,7 +98,7 @@ class VoxtralBackend:
             "automatic-speech-recognition",
             model=self._hf_model_id,
             device=0 if self._device == "cuda" else -1,
-            torch_dtype=self._torch_dtype,
+            torch_dtype=torch_dtype,
             model_kwargs={"low_cpu_mem_usage": True},
         )
         print(f"[VoxtralBackend] Model {self.model_id} loaded via pipeline (fallback).")
@@ -155,6 +164,7 @@ class VoxtralBackend:
                 "do_sample": False,
             }
 
+            import torch
             with torch.no_grad():
                 generated_ids = self._model.generate(**inputs, **gen_kwargs)
 
@@ -210,6 +220,7 @@ class VoxtralBackend:
         import gc
         gc.collect()
         try:
+            import torch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         except Exception:

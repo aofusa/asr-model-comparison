@@ -178,6 +178,8 @@ async def websocket_transcribe(websocket: WebSocket):
     use_dedicated_class = True
     previous_text = ""
     return_timestamps = True
+    vad_filter = False
+    chunk_index = 0
 
     try:
         # Wait for initial config
@@ -199,6 +201,7 @@ async def websocket_transcribe(websocket: WebSocket):
             beam_size = config.get("beam_size", beam_size)
             use_dedicated_class = config.get("use_dedicated_class", use_dedicated_class)
             return_timestamps = config.get("return_timestamps", return_timestamps)
+            vad_filter = config.get("vad_filter", vad_filter)
         except Exception:
             await websocket.send_json({"type": "error", "message": "Invalid config JSON"})
             await websocket.close()
@@ -235,6 +238,7 @@ async def websocket_transcribe(websocket: WebSocket):
                 raw_chunk = message["bytes"]
                 if not raw_chunk:
                     continue
+                chunk_index += 1
 
                 # === Key fix for "話しかけても何も起きない" ===
                 # Browser MediaRecorder sends webm/opus (or other) containers.
@@ -242,10 +246,6 @@ async def websocket_transcribe(websocket: WebSocket):
                 # (faster-whisper etc.) + its VAD can actually see speech.
                 # Without this, short 2s chunks frequently decode to empty after VAD.
                 audio_for_model = normalize_to_wav_pcm_16k_mono(raw_chunk)
-
-                # Optional: allow clients to request milder VAD for streaming
-                # (default False for realtime so we don't drop short utterances).
-                use_vad = False  # realtime-friendly default; can be sent in future "update" messages
 
                 try:
                     result = await manager.transcribe(
@@ -257,7 +257,7 @@ async def websocket_transcribe(websocket: WebSocket):
                         return_timestamps=return_timestamps,
                         temperature=0.0,
                         repetition_penalty=1.15 if language == "ja" else 1.0,
-                        vad_filter=use_vad,
+                        vad_filter=vad_filter,
                     )
 
                     new_text = result.get("text", "").strip()
@@ -270,7 +270,7 @@ async def websocket_transcribe(websocket: WebSocket):
                     # Diagnostic log (very useful when user reports "nothing happens")
                     print(
                         f"[WS Chunk] model={current_model_id} raw={len(raw_chunk)}B "
-                        f"norm={len(audio_for_model)}B text_len={len(new_text)} "
+                        f"norm={len(audio_for_model)}B chunk={chunk_index} text_len={len(new_text)} "
                         f"had_speech={had_speech} proc={result.get('processing_time_seconds', 0):.3f}s",
                         flush=True,
                     )
@@ -284,6 +284,8 @@ async def websocket_transcribe(websocket: WebSocket):
                         "language": result.get("language"),
                         "processing_time_seconds": result.get("processing_time_seconds", 0.0),
                         "had_speech": had_speech,
+                        "chunk_index": chunk_index,
+                        "chunk_size_bytes": len(audio_for_model),
                     })
 
                 except Exception as e:
@@ -302,6 +304,7 @@ async def websocket_transcribe(websocket: WebSocket):
                         beam_size = data.get("beam_size", beam_size)
                         language = data.get("language", language)
                         return_timestamps = data.get("return_timestamps", return_timestamps)
+                        vad_filter = data.get("vad_filter", vad_filter)
 
                     elif msg_type == "end":
                         await websocket.send_json({

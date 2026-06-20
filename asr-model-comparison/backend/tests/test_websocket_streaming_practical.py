@@ -19,6 +19,23 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 
+def _mock_whisper_loader(text: str = ""):
+    fake_backend = MagicMock()
+    fake_backend.transcribe.return_value = {
+        "text": text,
+        "processing_time_seconds": 0.01,
+        "chunks": [{"text": text}] if text else [],
+    }
+
+    async def fake_loader(_model_id: str):
+        return fake_backend
+
+    return patch(
+        "app.api.routers.transcribe.create_whisper_loader",
+        return_value=fake_loader,
+    )
+
+
 def test_websocket_practical_connection_and_config():
     """
     Client must send an initial config message after connecting.
@@ -91,21 +108,22 @@ def test_websocket_maintains_previous_text_across_chunks():
     """
     client = TestClient(app)
 
-    with client.websocket_connect("/api/ws/transcribe") as websocket:
-        # Use whisper-tiny so the test runs reliably without heavy model deps (accelerate etc.)
-        websocket.send_json({"type": "config", "model_id": "whisper-tiny", "language": "ja"})
-        websocket.receive_json()  # ready
+    with _mock_whisper_loader(text="こんにちは"):
+        with client.websocket_connect("/api/ws/transcribe") as websocket:
+            # Use whisper-tiny so the test runs reliably without heavy model deps (accelerate etc.)
+            websocket.send_json({"type": "config", "model_id": "whisper-tiny", "language": "ja"})
+            websocket.receive_json()  # ready
 
-        # Use valid tiny WAV (not raw b"chunk1") so whisper backend can decode without error
-        # (plain bytes often cause decode failure -> error response -> WS close in test client).
-        tiny_wav = base64.b64decode(
-            'UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA='
-        )
-        websocket.send_bytes(tiny_wav)
-        response1 = websocket.receive_json()
+            # Use valid tiny WAV (not raw b"chunk1") so whisper backend can decode without error
+            # (plain bytes often cause decode failure -> error response -> WS close in test client).
+            tiny_wav = base64.b64decode(
+                'UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA='
+            )
+            websocket.send_bytes(tiny_wav)
+            response1 = websocket.receive_json()
 
-        websocket.send_bytes(tiny_wav)
-        response2 = websocket.receive_json()
+            websocket.send_bytes(tiny_wav)
+            response2 = websocket.receive_json()
 
         assert response1.get("type") == "transcription"
         assert response2.get("type") == "transcription"
@@ -148,23 +166,24 @@ def test_websocket_chunk_provides_useful_feedback_for_realtime_mic_use_case():
     """
     client = TestClient(app)
 
-    with client.websocket_connect("/api/ws/transcribe") as websocket:
-        websocket.send_json({
-            "type": "config",
-            "model_id": "whisper-tiny",
-            "language": "ja",
-            "beam_size": 1,
-            "return_timestamps": False,
-        })
-        websocket.receive_json()  # ready
+    with _mock_whisper_loader(text=""):
+        with client.websocket_connect("/api/ws/transcribe") as websocket:
+            websocket.send_json({
+                "type": "config",
+                "model_id": "whisper-tiny",
+                "language": "ja",
+                "beam_size": 1,
+                "return_timestamps": False,
+            })
+            websocket.receive_json()  # ready
 
-        # Simulate a 2s mic chunk (currently often leads to empty text in practice)
-        tiny_wav = base64.b64decode(
-            'UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA='
-        )
-        websocket.send_bytes(tiny_wav)
+            # Simulate a 2s mic chunk (currently often leads to empty text in practice)
+            tiny_wav = base64.b64decode(
+                'UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA='
+            )
+            websocket.send_bytes(tiny_wav)
 
-        response = websocket.receive_json()
+            response = websocket.receive_json()
         assert response.get("type") == "transcription"
 
         # These must be present for UI feedback
@@ -179,3 +198,33 @@ def test_websocket_chunk_provides_useful_feedback_for_realtime_mic_use_case():
             # Record that the enhanced feedback is not yet present.
             # We don't hard-fail the whole suite here; the test name + docstring serve the TDD purpose.
             pytest.skip("TDD marker: had_speech / explicit realtime chunk feedback contract not yet present (see 修正指示書 Phase 1)")
+
+
+def test_websocket_chunk_response_includes_chunk_index_and_size_for_ui_feedback():
+    """
+    Realtime UI needs stable per-chunk metadata to show progress even when text is
+    empty. This test uses a mocked ASR backend so it stays fast and does not load
+    whisper/Qwen/Voxtral models.
+    """
+    client = TestClient(app)
+    chunk = b"fake browser mic chunk"
+
+    with _mock_whisper_loader(text=""):
+        with client.websocket_connect("/api/ws/transcribe") as websocket:
+            websocket.send_json({
+                "type": "config",
+                "model_id": "whisper-tiny",
+                "language": "ja",
+                "beam_size": 1,
+                "return_timestamps": False,
+            })
+            websocket.receive_json()  # ready
+
+            websocket.send_bytes(chunk)
+            response = websocket.receive_json()
+
+    assert response["type"] == "transcription"
+    assert response["processing_time_seconds"] == 0.01
+    assert response["had_speech"] is False
+    assert response["chunk_index"] == 1
+    assert response["chunk_size_bytes"] >= len(chunk)
