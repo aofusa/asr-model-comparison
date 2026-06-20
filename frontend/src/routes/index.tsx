@@ -24,6 +24,86 @@ function getMicrophoneUnavailableStatus(error?: unknown): string {
   return `Mic unavailable${errorName ? ` (${errorName})` : ''}.`;
 }
 
+type AudioSourceKind = 'microphone' | 'system' | 'window';
+
+const audioSourceOptions: { value: AudioSourceKind; label: string; description: string }[] = [
+  {
+    value: 'microphone',
+    label: 'Microphone',
+    description: 'Use the browser microphone input.',
+  },
+  {
+    value: 'system',
+    label: 'System / tab audio',
+    description: 'Use browser screen sharing to capture audio played on this device.',
+  },
+  {
+    value: 'window',
+    label: 'Window / app audio',
+    description: 'Choose a specific window, app, or tab when the browser share picker opens.',
+  },
+];
+
+function getAudioSourceLabel(source: AudioSourceKind): string {
+  return audioSourceOptions.find((option) => option.value === source)?.label || 'Microphone';
+}
+
+function getSharedAudioUnavailableStatus(source: AudioSourceKind, error?: unknown): string {
+  const errorName = error && typeof error === 'object' && 'name' in error
+    ? String((error as { name?: unknown }).name)
+    : '';
+  const sourceLabel = getAudioSourceLabel(source);
+
+  if (typeof window !== 'undefined' && !window.isSecureContext) {
+    return `${sourceLabel} unavailable: browser blocks capture on insecure remote HTTP. Use HTTPS or localhost.`;
+  }
+
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) {
+    return `${sourceLabel} unavailable: this browser does not expose getDisplayMedia for this page.`;
+  }
+
+  if (errorName === 'NotAllowedError' || errorName === 'SecurityError') {
+    return `${sourceLabel} unavailable: screen/window audio permission was blocked or cancelled.`;
+  }
+
+  if (errorName === 'NotFoundError' || errorName === 'NotReadableError') {
+    return `${sourceLabel} unavailable: no audio track was shared. Enable "share audio" in the browser picker.`;
+  }
+
+  return `${sourceLabel} unavailable${errorName ? ` (${errorName})` : ''}.`;
+}
+
+async function requestAudioInputStream(source: AudioSourceKind): Promise<MediaStream> {
+  if (source === 'microphone') {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('getUserMedia unavailable');
+    }
+    return navigator.mediaDevices.getUserMedia({ audio: true });
+  }
+
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    throw new Error('getDisplayMedia unavailable');
+  }
+
+  const stream = await navigator.mediaDevices.getDisplayMedia({
+    video: true,
+    audio: {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    },
+  });
+
+  if (stream.getAudioTracks().length === 0) {
+    try { stream.getTracks().forEach(track => track.stop()); } catch {}
+    const error = new Error('No shared audio track was selected');
+    (error as Error & { name: string }).name = 'NotFoundError';
+    throw error;
+  }
+
+  return stream;
+}
+
 function encodePcm16Wav(samples: Float32Array, sampleRate: number): Blob {
   const bytesPerSample = 2;
   const blockAlign = bytesPerSample;
@@ -217,6 +297,7 @@ export default component$(() => {
   const useDedicatedClass = useSignal(true);
   const selectedLanguage = useSignal('auto');
   const translationTarget = useSignal('none');
+  const selectedAudioSource = useSignal<AudioSourceKind>('microphone');
 
   // A: localStorage persistence for settings
   const SETTINGS_KEY = 'asr-settings-v1';
@@ -231,6 +312,7 @@ export default component$(() => {
         selectedModel: selectedModel.value,
         selectedLanguage: selectedLanguage.value,
         translationTarget: translationTarget.value,
+        selectedAudioSource: selectedAudioSource.value,
       }));
     } catch {}
   });
@@ -285,6 +367,9 @@ export default component$(() => {
         if (typeof saved.selectedModel === 'string') selectedModel.value = saved.selectedModel;
         if (typeof saved.selectedLanguage === 'string') selectedLanguage.value = saved.selectedLanguage;
         if (typeof saved.translationTarget === 'string') translationTarget.value = saved.translationTarget;
+        if (['microphone', 'system', 'window'].includes(saved.selectedAudioSource)) {
+          selectedAudioSource.value = saved.selectedAudioSource;
+        }
       }
     } catch {}
   });
@@ -418,6 +503,7 @@ export default component$(() => {
         repetition_penalty: repetitionPenalty.value,
         use_dedicated_class: useDedicatedClass.value,
         return_timestamps: true,
+        audio_source: selectedAudioSource.value,
       };
 
       // Critical for real-time: send accumulated context on reconnect
@@ -753,30 +839,31 @@ export default component$(() => {
     console.log('[StartRecording] handler called, isRecording was:', isRecording.value);
     if (isRecording.value) return;
 
+    const audioSource = selectedAudioSource.value;
+    const audioSourceLabel = getAudioSourceLabel(audioSource);
     reconnectAttempts.value = 0;
     modelReady.value = false;
-    status.value = 'Requesting microphone...';
+    status.value = `Requesting ${audioSourceLabel}...`;
 
     // Belt-and-suspenders for flaky Qwik reactivity in static client-render:
     // Directly mutate DOM for critical feedback elements.
     try {
       const statusEl = document.querySelector('[data-testid="status"]');
-      if (statusEl) statusEl.textContent = 'Status: Requesting microphone...';
+      if (statusEl) statusEl.textContent = `Status: Requesting ${audioSourceLabel}...`;
       const startBtn = document.querySelector('[data-testid="start-recording"]') as HTMLButtonElement | null;
       if (startBtn) startBtn.disabled = true;
     } catch {}
 
     let stream: MediaStream;
     try {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error('getUserMedia unavailable');
-      }
-      console.log('[StartRecording] calling getUserMedia...');
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      console.log('[StartRecording] getUserMedia succeeded, starting MediaRecorder');
+      console.log('[StartRecording] requesting audio source:', audioSource);
+      stream = await requestAudioInputStream(audioSource);
+      console.log('[StartRecording] audio stream acquired, starting MediaRecorder');
     } catch (err) {
-      const message = getMicrophoneUnavailableStatus(err);
-      console.error('[StartRecording] getUserMedia error:', err);
+      const message = audioSource === 'microphone'
+        ? getMicrophoneUnavailableStatus(err)
+        : getSharedAudioUnavailableStatus(audioSource, err);
+      console.error('[StartRecording] audio source error:', err);
       isRecording.value = false;
       status.value = message;
       try {
@@ -789,10 +876,10 @@ export default component$(() => {
     }
 
     isRecording.value = true;
-    status.value = 'Recording...';
+    status.value = `Recording ${audioSourceLabel}...`;
     try {
       const statusEl = document.querySelector('[data-testid="status"]');
-      if (statusEl) statusEl.textContent = 'Status: Recording...';
+      if (statusEl) statusEl.textContent = `Status: Recording ${audioSourceLabel}...`;
     } catch {}
 
     // Phase 2: Reset transcripts for new session
@@ -914,6 +1001,8 @@ export default component$(() => {
         if (languageSelect) languageSelect.value = selectedLanguage.value;
         const translationSelect = document.querySelector('[data-testid="translation-target-select"]') as HTMLSelectElement | null;
         if (translationSelect) translationSelect.value = translationTarget.value;
+        const audioRadio = document.querySelector(`input[name="audio-source"][value="${selectedAudioSource.value}"]`) as HTMLInputElement | null;
+        if (audioRadio) audioRadio.checked = true;
       };
 
       const startFn = await startRecording.resolve();
@@ -937,9 +1026,11 @@ export default component$(() => {
 
       const startFallback = async () => {
         if (isRecording.value) return;
+        const audioSource = selectedAudioSource.value;
+        const audioSourceLabel = getAudioSourceLabel(audioSource);
         reconnectAttempts.value = 0;
         modelReady.value = false;
-        setStatusDom('Requesting microphone...');
+        setStatusDom(`Requesting ${audioSourceLabel}...`);
         const startBtn = document.querySelector('[data-testid="start-recording"]') as HTMLButtonElement | null;
         if (startBtn) startBtn.disabled = true;
         const stopBtn = document.querySelector('[data-testid="stop-recording"]') as HTMLButtonElement | null;
@@ -947,12 +1038,11 @@ export default component$(() => {
 
         let stream: MediaStream;
         try {
-          if (!navigator.mediaDevices?.getUserMedia) {
-            throw new Error('getUserMedia unavailable');
-          }
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream = await requestAudioInputStream(audioSource);
         } catch (err) {
-          const message = getMicrophoneUnavailableStatus(err);
+          const message = audioSource === 'microphone'
+            ? getMicrophoneUnavailableStatus(err)
+            : getSharedAudioUnavailableStatus(audioSource, err);
           isRecording.value = false;
           setStatusDom(message);
           if (startBtn) startBtn.disabled = false;
@@ -961,7 +1051,7 @@ export default component$(() => {
         }
 
         isRecording.value = true;
-        setStatusDom('Recording...');
+        setStatusDom(`Recording ${audioSourceLabel}...`);
         if (stopBtn) stopBtn.disabled = false;
 
         finalTranscript.value = '';
@@ -1122,6 +1212,15 @@ export default component$(() => {
             return;
           }
 
+          if (target.matches('input[name="audio-source"]')) {
+            const radio = target as HTMLInputElement;
+            if (radio.checked && ['microphone', 'system', 'window'].includes(radio.value)) {
+              selectedAudioSource.value = radio.value as AudioSourceKind;
+              saveFn();
+            }
+            return;
+          }
+
           if (target.matches('.settings-controls input[type="checkbox"]')) {
             useDedicatedClass.value = (target as HTMLInputElement).checked;
             saveFn();
@@ -1189,6 +1288,15 @@ export default component$(() => {
       if (languageSelect) languageSelect.addEventListener('change', (e: any) => { selectedLanguage.value = (e.target as HTMLSelectElement).value; saveFn(); });
       const translationSelect = document.querySelector('[data-testid="translation-target-select"]');
       if (translationSelect) translationSelect.addEventListener('change', (e: any) => { translationTarget.value = (e.target as HTMLSelectElement).value; saveFn(); });
+      document.querySelectorAll('input[name="audio-source"]').forEach((r) => {
+        r.addEventListener('change', (e: any) => {
+          const t = e.target as HTMLInputElement;
+          if (t.checked && ['microphone', 'system', 'window'].includes(t.value)) {
+            selectedAudioSource.value = t.value as AudioSourceKind;
+            saveFn();
+          }
+        });
+      });
 
       // Model radios
       document.querySelectorAll('.model-selector input[type="radio"]').forEach((r) => {
@@ -1232,6 +1340,34 @@ export default component$(() => {
             {model.label}
           </label>
         ))}
+      </div>
+
+      <div class="audio-source-selector" data-testid="audio-source-selector">
+        <div class="audio-source-header">
+          <strong>Audio Input Source</strong>
+          <span>Applied on next Start Recording</span>
+        </div>
+        <div class="audio-source-options">
+          {audioSourceOptions.map((source) => (
+            <label key={source.value}>
+              <input
+                type="radio"
+                name="audio-source"
+                value={source.value}
+                checked={selectedAudioSource.value === source.value}
+                disabled={isRecording.value}
+                onChange$={() => { selectedAudioSource.value = source.value; saveSettings(); }}
+              />
+              <span>
+                <strong>{source.label}</strong>
+                <small>{source.description}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+        <p class="audio-source-note" data-testid="audio-source-note">
+          System/window capture uses the browser share picker. Availability depends on the browser, OS, and whether "share audio" is enabled for the selected target.
+        </p>
       </div>
 
       {/* Phase 2: Settings Panel */}

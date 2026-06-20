@@ -209,6 +209,7 @@ async def websocket_transcribe(websocket: WebSocket):
     previous_text = ""
     return_timestamps = True
     vad_filter = False
+    audio_source = "microphone"
     chunk_index = 0
 
     def _is_closed_send_error(exc: Exception) -> bool:
@@ -256,6 +257,9 @@ async def websocket_transcribe(websocket: WebSocket):
             use_dedicated_class = config.get("use_dedicated_class", use_dedicated_class)
             return_timestamps = config.get("return_timestamps", return_timestamps)
             vad_filter = config.get("vad_filter", vad_filter)
+            requested_audio_source = str(config.get("audio_source", audio_source) or audio_source)
+            if requested_audio_source in {"microphone", "system", "window"}:
+                audio_source = requested_audio_source
             previous_text = str(config.get("previous_text", "") or "").strip()
             server_log(
                 f"[WS Config] model={current_model_id} language={language} "
@@ -263,7 +267,7 @@ async def websocket_transcribe(websocket: WebSocket):
                 f"temperature={temperature} repetition_penalty={repetition_penalty} "
                 f"use_dedicated_class={use_dedicated_class} "
                 f"return_timestamps={return_timestamps} vad_filter={vad_filter} "
-                f"previous_text_len={len(previous_text)}"
+                f"audio_source={audio_source} previous_text_len={len(previous_text)}"
             )
         except Exception:
             await safe_send_json({"type": "error", "message": "Invalid config JSON"})
@@ -310,7 +314,8 @@ async def websocket_transcribe(websocket: WebSocket):
             "model_id": current_model_id,
             "language": language,
             "target_language": target_language,
-            "return_timestamps": return_timestamps
+            "return_timestamps": return_timestamps,
+            "audio_source": audio_source,
         }):
             return
 

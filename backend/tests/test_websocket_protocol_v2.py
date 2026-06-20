@@ -104,6 +104,24 @@ def test_client_can_send_end_signal():
             assert final["type"] in ("final", "transcription", "end_ack")
 
 
+def test_ready_response_includes_audio_source_metadata():
+    """The browser-selected audio source should be visible in the WS session metadata."""
+    client = TestClient(app)
+
+    with _mock_qwen_loader("ok"):
+        with client.websocket_connect("/api/ws/transcribe") as ws:
+            ws.send_json({
+                "type": "config",
+                "model_id": "qwen3-asr-0.6b",
+                "audio_source": "window",
+            })
+
+            ready = _receive_until_ready(ws)
+
+            assert ready["type"] == "ready"
+            assert ready["audio_source"] == "window"
+
+
 def test_structured_error_messages():
     """Server should return structured, actionable error messages."""
     client = TestClient(app)

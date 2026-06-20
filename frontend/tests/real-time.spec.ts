@@ -17,6 +17,119 @@ test('model selection works', async ({ page }) => {
   await expect(voxtralRadio).toBeChecked();
 });
 
+test('audio source selection uses display media for window/app capture', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).__userMediaCalls = 0;
+    (window as any).__displayMediaCalls = 0;
+    (window as any).__lastDisplayMediaConstraints = null;
+    (window as any).__lastWsConfig = null;
+
+    class MockWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+
+      readyState = MockWebSocket.CONNECTING;
+      onopen: ((ev: any) => void) | null = null;
+      onclose: ((ev: any) => void) | null = null;
+      onmessage: ((ev: any) => void) | null = null;
+
+      constructor(public url: string) {
+        setTimeout(() => {
+          this.readyState = MockWebSocket.OPEN;
+          this.onopen?.(new Event('open'));
+        }, 0);
+      }
+
+      send(data: any) {
+        if (typeof data !== 'string') return;
+        const parsed = JSON.parse(data);
+        if (parsed.type === 'config') {
+          (window as any).__lastWsConfig = parsed;
+          setTimeout(() => {
+            this.onmessage?.(new MessageEvent('message', {
+              data: JSON.stringify({
+                type: 'ready',
+                model_id: parsed.model_id,
+                audio_source: parsed.audio_source,
+              }),
+            }));
+          }, 0);
+        }
+      }
+
+      close() {
+        this.readyState = MockWebSocket.CLOSED;
+        this.onclose?.(new CloseEvent('close'));
+      }
+
+      addEventListener() {}
+      removeEventListener() {}
+      dispatchEvent() { return true; }
+    }
+
+    class MockMediaRecorder {
+      ondataavailable: ((ev: any) => void) | null = null;
+      stream: any;
+
+      constructor(stream: any) {
+        this.stream = stream;
+      }
+
+      start() {}
+      stop() {}
+    }
+
+    const sharedStream = {
+      getAudioTracks: () => [{ kind: 'audio', stop: () => {} }],
+      getTracks: () => [
+        { kind: 'audio', stop: () => {} },
+        { kind: 'video', stop: () => {} },
+      ],
+    };
+
+    // @ts-ignore - replace browser APIs for deterministic source-selection test
+    (window as any).WebSocket = MockWebSocket;
+    // @ts-ignore
+    (window as any).MediaRecorder = MockMediaRecorder;
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: async () => {
+          (window as any).__userMediaCalls += 1;
+          return sharedStream;
+        },
+        getDisplayMedia: async (constraints: any) => {
+          (window as any).__displayMediaCalls += 1;
+          (window as any).__lastDisplayMediaConstraints = constraints;
+          return sharedStream;
+        },
+      },
+    });
+  });
+
+  await page.goto('/');
+  await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
+
+  await expect(page.getByTestId('audio-source-selector')).toContainText('Window / app audio');
+  await page.locator('input[name="audio-source"][value="window"]').check();
+  await page.getByTestId('start-recording').click();
+
+  await expect.poll(async () => page.evaluate(() => (window as any).__displayMediaCalls), {
+    timeout: 5000,
+  }).toBe(1);
+  await expect.poll(async () => page.evaluate(() => (window as any).__userMediaCalls), {
+    timeout: 5000,
+  }).toBe(0);
+  await expect.poll(async () => page.evaluate(() => (window as any).__lastWsConfig?.audio_source), {
+    timeout: 5000,
+  }).toBe('window');
+  await expect.poll(async () => page.evaluate(() => (window as any).__lastDisplayMediaConstraints?.video), {
+    timeout: 5000,
+  }).toBe(true);
+});
+
 test('reconnect button appears on disconnect/error states', async ({ page }) => {
   await page.goto('/');
 
