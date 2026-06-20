@@ -69,6 +69,37 @@ Write-Host "  ASR Model Comparison Platform (AMCP) - Single App Mode" -Foregroun
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
 
+function Test-PortAvailable {
+    param(
+        [int]$Port
+    )
+
+    $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+    if ($listeners.Count -eq 0) {
+        return
+    }
+
+    Write-Host "ERROR: Port $Port is already in use. Stop the existing server before starting AMCP." -ForegroundColor Red
+    foreach ($listener in $listeners) {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($listener.OwningProcess)" -ErrorAction SilentlyContinue
+        $address = "$($listener.LocalAddress):$($listener.LocalPort)"
+        if ($proc) {
+            Write-Host "  - $address pid=$($listener.OwningProcess)" -ForegroundColor Yellow
+            Write-Host "    $($proc.CommandLine)" -ForegroundColor DarkYellow
+        } else {
+            Write-Host "  - $address pid=$($listener.OwningProcess)" -ForegroundColor Yellow
+        }
+    }
+    Write-Host ""
+    Write-Host "Example cleanup command:" -ForegroundColor Cyan
+    Write-Host "  Get-NetTCPConnection -LocalPort $Port -State Listen | ForEach-Object { Stop-Process -Id `$_.OwningProcess -Force }" -ForegroundColor Cyan
+    exit 1
+}
+
+if (-not $BuildOnly) {
+    Test-PortAvailable -Port $Port
+}
+
 # FrontendDir / StaticDir used by build and watcher
 $FrontendDir = Join-Path $ProjectRoot "frontend"
 $BackendStaticDir = Join-Path $ProjectRoot "backend\static"
