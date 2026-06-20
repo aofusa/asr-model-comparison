@@ -16,6 +16,33 @@ from typing import Any
 from app.services.asr_backends.base import ASRBackend
 
 
+LANGUAGE_NAMES = {
+    "ja": "Japanese",
+    "en": "English",
+    "zh": "Chinese",
+    "ko": "Korean",
+    "fr": "French",
+    "de": "German",
+    "es": "Spanish",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "ru": "Russian",
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "vi": "Vietnamese",
+    "th": "Thai",
+    "id": "Indonesian",
+    "tr": "Turkish",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "sv": "Swedish",
+}
+
+
+def _language_name(code: str | None) -> str:
+    return LANGUAGE_NAMES.get(code or "", "the detected language")
+
+
 class Qwen3ASRBackend:
     """
     Real adapter for Qwen3-ASR models using transformers.
@@ -148,11 +175,19 @@ class Qwen3ASRBackend:
     def _run_inference(self, audio_path: str, **kwargs: Any) -> dict[str, Any]:
         # Dedicated class path (higher quality for real-time Japanese use)
         if getattr(self, "_model", None) is not None and getattr(self, "_processor", None) is not None:
-            language = kwargs.get("language", "ja")
+            language = kwargs.get("language")
+            target_language = kwargs.get("target_language")
             previous_text = kwargs.get("previous_text", "")
 
             # Improved prompting for Japanese ASR quality with real-time chunk context
-            user_text = "Transcribe the following audio into Japanese accurately and naturally."
+            input_language = _language_name(language)
+            if target_language:
+                user_text = (
+                    f"Transcribe the following audio in {input_language}, then translate the output "
+                    f"accurately and naturally into {_language_name(target_language)}."
+                )
+            else:
+                user_text = f"Transcribe the following audio accurately and naturally in {input_language}."
             if previous_text:
                 user_text += f"\nPrevious transcript context (for continuity): {previous_text}"
 
@@ -186,7 +221,7 @@ class Qwen3ASRBackend:
 
             text = self._processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
-            result = {"text": text, "model_id": self.model_id, "language": language}
+            result = {"text": text, "model_id": self.model_id, "language": language, "target_language": target_language}
 
             if kwargs.get("return_timestamps"):
                 # Structured timestamps (improved in dedicated path)
@@ -198,7 +233,7 @@ class Qwen3ASRBackend:
         assert self._pipe is not None
         generate_kwargs = kwargs.get("generate_kwargs", {}) or {}
 
-        language = kwargs.get("language", "ja")
+        language = kwargs.get("language")
         if language == "ja":
             if "num_beams" not in generate_kwargs and "beam_size" not in generate_kwargs:
                 generate_kwargs["num_beams"] = kwargs.get("beam_size", 6)
@@ -219,6 +254,7 @@ class Qwen3ASRBackend:
             "text": text,
             "model_id": self.model_id,
             "language": result.get("language") if isinstance(result, dict) else None,
+            "target_language": kwargs.get("target_language"),
         }
 
         if kwargs.get("return_timestamps") and isinstance(result, dict) and "chunks" in result:

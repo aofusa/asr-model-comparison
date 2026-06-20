@@ -36,6 +36,30 @@ def _mock_whisper_loader(text: str = ""):
     )
 
 
+def _mock_loader_for(router_factory_name: str, text: str = ""):
+    fake_backend = MagicMock()
+    fake_backend.transcribe.return_value = {
+        "text": text,
+        "processing_time_seconds": 0.01,
+        "chunks": [{"text": text}] if text else [],
+        "language": "en",
+    }
+    loaded_model_ids: list[str] = []
+
+    async def fake_loader(model_id: str):
+        loaded_model_ids.append(model_id)
+        return fake_backend
+
+    return (
+        patch(
+            f"app.api.routers.transcribe.{router_factory_name}",
+            return_value=fake_loader,
+        ),
+        fake_backend,
+        loaded_model_ids,
+    )
+
+
 def test_websocket_practical_connection_and_config():
     """
     Client must send an initial config message after connecting.
@@ -228,3 +252,92 @@ def test_websocket_chunk_response_includes_chunk_index_and_size_for_ui_feedback(
     assert response["had_speech"] is False
     assert response["chunk_index"] == 1
     assert response["chunk_size_bytes"] >= len(chunk)
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "whisper-tiny",
+        "whisper-small",
+        "whisper-medium",
+        "whisper-large-v3-turbo",
+    ],
+)
+def test_websocket_uses_selected_whisper_model_id(model_id: str):
+    client = TestClient(app)
+    patcher, fake_backend, loaded_model_ids = _mock_loader_for("create_whisper_loader", text="ok")
+
+    with patcher:
+        with client.websocket_connect("/api/ws/transcribe") as websocket:
+            websocket.send_json({"type": "config", "model_id": model_id, "language": "en"})
+            ready = websocket.receive_json()
+            websocket.send_bytes(b"fake wav chunk")
+            response = websocket.receive_json()
+
+    assert ready["model_id"] == model_id
+    assert response["model_id"] == model_id
+    assert loaded_model_ids == [model_id]
+    fake_backend.transcribe.assert_called_once()
+
+
+@pytest.mark.parametrize("model_id", ["qwen3-asr-0.6b", "qwen3-asr-1.7b"])
+def test_websocket_uses_selected_qwen_model_id(model_id: str):
+    client = TestClient(app)
+    patcher, fake_backend, loaded_model_ids = _mock_loader_for("create_qwen3_loader", text="ok")
+
+    with patcher:
+        with client.websocket_connect("/api/ws/transcribe") as websocket:
+            websocket.send_json({"type": "config", "model_id": model_id, "language": "en"})
+            ready = websocket.receive_json()
+            websocket.send_bytes(b"fake wav chunk")
+            response = websocket.receive_json()
+
+    assert ready["model_id"] == model_id
+    assert response["model_id"] == model_id
+    assert loaded_model_ids == [model_id]
+    fake_backend.transcribe.assert_called_once()
+
+
+def test_websocket_passes_language_and_translation_to_qwen_backend():
+    client = TestClient(app)
+    patcher, fake_backend, _loaded_model_ids = _mock_loader_for("create_qwen3_loader", text="translated")
+
+    with patcher:
+        with client.websocket_connect("/api/ws/transcribe") as websocket:
+            websocket.send_json({
+                "type": "config",
+                "model_id": "qwen3-asr-0.6b",
+                "language": "en",
+                "target_language": "ja",
+                "beam_size": 6,
+                "temperature": 0.2,
+                "repetition_penalty": 1.1,
+                "return_timestamps": False,
+            })
+            websocket.receive_json()
+            websocket.send_bytes(b"fake wav chunk")
+            response = websocket.receive_json()
+
+    assert response["type"] == "transcription"
+    assert response["model_id"] == "qwen3-asr-0.6b"
+    assert response["target_language"] == "ja"
+    _, kwargs = fake_backend.transcribe.call_args
+    assert kwargs["language"] == "en"
+    assert kwargs["target_language"] == "ja"
+    assert kwargs["temperature"] == 0.2
+    assert kwargs["repetition_penalty"] == 1.1
+
+
+def test_qwen_backend_maps_public_ids_to_expected_hf_ids():
+    from app.services.asr_backends.qwen3_backend import Qwen3ASRBackend
+
+    assert Qwen3ASRBackend("qwen3-asr-0.6b")._hf_model_id == "Qwen/Qwen3-ASR-0.6B"
+    assert Qwen3ASRBackend("qwen3-asr-1.7b")._hf_model_id == "Qwen/Qwen3-ASR-1.7B"
+
+
+def test_whisper_backend_maps_public_ids_to_expected_sizes():
+    from app.services.asr_backends.whisper_backend import WhisperBackend
+
+    assert WhisperBackend("whisper-small")._internal_size == "small"
+    assert WhisperBackend("whisper-medium")._internal_size == "medium"
+    assert WhisperBackend("whisper-large-v3-turbo")._internal_size == "large-v3-turbo"

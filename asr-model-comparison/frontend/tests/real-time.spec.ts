@@ -575,6 +575,92 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
     await expect(chunkFeedback).toContainText(/13 bytes/);
     await expect(page.getByTestId('status')).toContainText(/last chunk: 0\.23s/i);
   });
+
+  test('Qwen3 0.6B selection sends model, input language, and translation target in config', async ({ page }) => {
+    await page.addInitScript(() => {
+      class MockWebSocket {
+        static CONNECTING = 0;
+        static OPEN = 1;
+        static CLOSING = 2;
+        static CLOSED = 3;
+
+        readyState = MockWebSocket.CONNECTING;
+        onopen: ((ev: any) => void) | null = null;
+        onclose: ((ev: any) => void) | null = null;
+        onmessage: ((ev: any) => void) | null = null;
+
+        constructor(public url: string) {
+          setTimeout(() => {
+            this.readyState = MockWebSocket.OPEN;
+            this.onopen?.(new Event('open'));
+          }, 0);
+        }
+
+        send(data: any) {
+          if (typeof data === 'string') {
+            const parsed = JSON.parse(data);
+            if (parsed.type === 'config') {
+              (window as any).__lastWsConfig = parsed;
+              setTimeout(() => {
+                this.onmessage?.(new MessageEvent('message', {
+                  data: JSON.stringify({ type: 'ready', model_id: parsed.model_id }),
+                }));
+              }, 0);
+            }
+          }
+        }
+
+        close() {
+          this.readyState = MockWebSocket.CLOSED;
+          this.onclose?.(new CloseEvent('close'));
+        }
+
+        addEventListener() {}
+        removeEventListener() {}
+        dispatchEvent() { return true; }
+      }
+
+      // @ts-ignore
+      (window as any).WebSocket = MockWebSocket;
+      class MockMediaRecorder {
+        ondataavailable: ((ev: any) => void) | null = null;
+        stream: any;
+        constructor(stream: any) {
+          this.stream = stream;
+        }
+        start() {}
+        stop() {}
+      }
+      // @ts-ignore
+      (window as any).MediaRecorder = MockMediaRecorder;
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: {
+          getUserMedia: async () => ({
+            getTracks: () => [{ stop: () => {} }],
+          }),
+        },
+      });
+    });
+
+    await page.goto('/');
+    await page.getByTestId('hydrated-marker').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+    await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
+
+    await page.locator('input[value="qwen3-asr-0.6b"]').check();
+    await page.getByTestId('language-select').selectOption('en');
+    await expect(page.getByTestId('translation-target-select')).toBeVisible({ timeout: 5000 });
+    await page.getByTestId('translation-target-select').selectOption('ja');
+    await page.getByTestId('start-recording').click();
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__lastWsConfig), {
+      timeout: 10000,
+    }).toMatchObject({
+      model_id: 'qwen3-asr-0.6b',
+      language: 'en',
+      target_language: 'ja',
+    });
+  });
 });
 
 

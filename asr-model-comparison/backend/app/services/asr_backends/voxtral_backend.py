@@ -13,6 +13,33 @@ from typing import Any
 from app.services.asr_backends.base import ASRBackend
 
 
+LANGUAGE_NAMES = {
+    "ja": "Japanese",
+    "en": "English",
+    "zh": "Chinese",
+    "ko": "Korean",
+    "fr": "French",
+    "de": "German",
+    "es": "Spanish",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "ru": "Russian",
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "vi": "Vietnamese",
+    "th": "Thai",
+    "id": "Indonesian",
+    "tr": "Turkish",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "sv": "Swedish",
+}
+
+
+def _language_name(code: str | None) -> str:
+    return LANGUAGE_NAMES.get(code or "", "the detected language")
+
+
 class VoxtralBackend:
     """
     Real adapter for Voxtral models using transformers.
@@ -134,17 +161,20 @@ class VoxtralBackend:
         if getattr(self, "_model", None) is not None and getattr(self, "_processor", None) is not None:
             # Deepened dedicated class path for practical real-time Japanese use
             previous_text = kwargs.get("previous_text", "")
-            language = kwargs.get("language", "ja")
+            language = kwargs.get("language")
+            target_language = kwargs.get("target_language")
 
             # Deepened dedicated class prompting for practical real-time Japanese use
-            if language == "ja":
-                base_prompt = "以下の音声を正確で自然な日本語に書き起こしてください。"
-                if previous_text:
-                    base_prompt += f"\n\n前の音声チャンクからの文脈（連続性を保つため）:\n{previous_text}"
+            input_language = _language_name(language)
+            if target_language:
+                base_prompt = (
+                    f"Transcribe the following audio in {input_language}, then translate the output "
+                    f"accurately and naturally into {_language_name(target_language)}."
+                )
             else:
-                base_prompt = "Transcribe the audio below into accurate and natural English."
-                if previous_text:
-                    base_prompt += f"\n\nPrevious context (for continuity with previous audio chunk):\n{previous_text}"
+                base_prompt = f"Transcribe the audio below accurately and naturally in {input_language}."
+            if previous_text:
+                base_prompt += f"\n\nPrevious context (for continuity with previous audio chunk):\n{previous_text}"
 
             # Use the processor in a more deliberate way for dedicated class
             inputs = self._processor(
@@ -170,7 +200,7 @@ class VoxtralBackend:
 
             text = self._processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
-            result = {"text": text, "model_id": self.model_id, "language": language}
+            result = {"text": text, "model_id": self.model_id, "language": language, "target_language": target_language}
 
             if kwargs.get("return_timestamps"):
                 # Better structured timestamps for real-time applications
@@ -188,7 +218,7 @@ class VoxtralBackend:
         assert self._pipe is not None
         generate_kwargs = kwargs.get("generate_kwargs", {}) or {}
 
-        language = kwargs.get("language", "ja")
+        language = kwargs.get("language")
         if language == "ja":
             if "num_beams" not in generate_kwargs:
                 generate_kwargs["num_beams"] = kwargs.get("beam_size", 5)
@@ -204,7 +234,7 @@ class VoxtralBackend:
             generate_kwargs=generate_kwargs,
         )
         text = result.get("text", "").strip() if isinstance(result, dict) else str(result)
-        out = {"text": text, "model_id": self.model_id}
+        out = {"text": text, "model_id": self.model_id, "target_language": kwargs.get("target_language")}
         if kwargs.get("return_timestamps") and isinstance(result, dict) and "chunks" in result:
             out["chunks"] = result.get("chunks", [])
         return out

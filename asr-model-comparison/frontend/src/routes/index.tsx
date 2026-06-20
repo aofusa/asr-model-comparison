@@ -72,6 +72,29 @@ function mergeFloatChunks(chunks: Float32Array[], totalLength: number): Float32A
   return merged;
 }
 
+const languageOptions = [
+  { value: 'auto', label: 'Auto Detect' },
+  { value: 'ja', label: 'Japanese' },
+  { value: 'en', label: 'English' },
+  { value: 'zh', label: 'Chinese' },
+  { value: 'ko', label: 'Korean' },
+  { value: 'fr', label: 'French' },
+  { value: 'de', label: 'German' },
+  { value: 'es', label: 'Spanish' },
+  { value: 'it', label: 'Italian' },
+  { value: 'pt', label: 'Portuguese' },
+  { value: 'ru', label: 'Russian' },
+  { value: 'ar', label: 'Arabic' },
+  { value: 'hi', label: 'Hindi' },
+  { value: 'vi', label: 'Vietnamese' },
+  { value: 'th', label: 'Thai' },
+  { value: 'id', label: 'Indonesian' },
+  { value: 'tr', label: 'Turkish' },
+  { value: 'nl', label: 'Dutch' },
+  { value: 'pl', label: 'Polish' },
+  { value: 'sv', label: 'Swedish' },
+];
+
 export default component$(() => {
   const isRecording = useSignal(false);
   const transcript = useSignal('');
@@ -108,6 +131,8 @@ export default component$(() => {
   const temperature = useSignal(0.0);
   const repetitionPenalty = useSignal(1.15);
   const useDedicatedClass = useSignal(true);
+  const selectedLanguage = useSignal('auto');
+  const translationTarget = useSignal('none');
 
   // A: localStorage persistence for settings
   const SETTINGS_KEY = 'asr-settings-v1';
@@ -120,6 +145,8 @@ export default component$(() => {
         repetitionPenalty: repetitionPenalty.value,
         useDedicatedClass: useDedicatedClass.value,
         selectedModel: selectedModel.value,
+        selectedLanguage: selectedLanguage.value,
+        translationTarget: translationTarget.value,
       }));
     } catch {}
   });
@@ -170,6 +197,8 @@ export default component$(() => {
         if (typeof saved.repetitionPenalty === 'number') repetitionPenalty.value = saved.repetitionPenalty;
         if (typeof saved.useDedicatedClass === 'boolean') useDedicatedClass.value = saved.useDedicatedClass;
         if (typeof saved.selectedModel === 'string') selectedModel.value = saved.selectedModel;
+        if (typeof saved.selectedLanguage === 'string') selectedLanguage.value = saved.selectedLanguage;
+        if (typeof saved.translationTarget === 'string') translationTarget.value = saved.translationTarget;
       }
     } catch {}
   });
@@ -274,7 +303,10 @@ export default component$(() => {
       const config: any = {
         type: 'config',
         model_id: selectedModel.value,
-        language: 'ja',
+        language: selectedLanguage.value,
+        target_language: (selectedModel.value.startsWith('qwen3-asr') || selectedModel.value.startsWith('voxtral'))
+          ? translationTarget.value
+          : 'none',
         beam_size: beamSize.value,
         temperature: temperature.value,
         repetition_penalty: repetitionPenalty.value,
@@ -666,6 +698,10 @@ export default component$(() => {
         if (numInputs[2]) (numInputs[2] as HTMLInputElement).value = String(repetitionPenalty.value);
         const cb = document.querySelector('.settings-controls input[type="checkbox"]') as HTMLInputElement | null;
         if (cb) cb.checked = useDedicatedClass.value;
+        const languageSelect = document.querySelector('[data-testid="language-select"]') as HTMLSelectElement | null;
+        if (languageSelect) languageSelect.value = selectedLanguage.value;
+        const translationSelect = document.querySelector('[data-testid="translation-target-select"]') as HTMLSelectElement | null;
+        if (translationSelect) translationSelect.value = translationTarget.value;
       };
 
       const startFn = await startRecording.resolve();
@@ -678,6 +714,7 @@ export default component$(() => {
       const highFn = await setHighAccuracy.resolve();
       const balancedFn = await setBalanced.resolve();
       const fasterFn = await setFaster.resolve();
+      const saveFn = await saveSettings.resolve();
 
       const setStatusDom = (value: string) => {
         status.value = value;
@@ -829,6 +866,43 @@ export default component$(() => {
           }
         }, true);
       }
+      if (!(document as any)._amcpDelegatedSettings) {
+        (document as any)._amcpDelegatedSettings = true;
+        document.addEventListener('change', (e) => {
+          const target = e.target as HTMLInputElement | HTMLSelectElement | null;
+          if (!target) return;
+
+          if (target.matches('.model-selector input[type="radio"]')) {
+            const radio = target as HTMLInputElement;
+            if (radio.checked) {
+              selectedModel.value = radio.value;
+              if (!(radio.value.startsWith('qwen3-asr') || radio.value.startsWith('voxtral'))) {
+                translationTarget.value = 'none';
+                syncSettingsDom();
+              }
+              saveFn();
+            }
+            return;
+          }
+
+          if (target.matches('[data-testid="language-select"]')) {
+            selectedLanguage.value = (target as HTMLSelectElement).value;
+            saveFn();
+            return;
+          }
+
+          if (target.matches('[data-testid="translation-target-select"]')) {
+            translationTarget.value = (target as HTMLSelectElement).value;
+            saveFn();
+            return;
+          }
+
+          if (target.matches('.settings-controls input[type="checkbox"]')) {
+            useDedicatedClass.value = (target as HTMLInputElement).checked;
+            saveFn();
+          }
+        }, true);
+      }
       document.documentElement.setAttribute('data-amcp-controls-wired', 'true');
 
       // Give the Qwik render into #root a moment to finish inserting elements (especially after
@@ -878,7 +952,6 @@ export default component$(() => {
       // Settings number inputs etc: use .resolve() like the preset buttons do.
       // This ensures no bare 'saveSettings' identifier ends up in the listener closure source
       // that gets serialized by the Qwik optimizer into the client chunks (the root cause of the ReferenceError).
-      const saveFn = await saveSettings.resolve();
       const numInputs = document.querySelectorAll('.settings-controls input[type="number"]');
       if (numInputs[0]) numInputs[0].addEventListener('input', (e: any) => { beamSize.value = Number((e.target as HTMLInputElement).value); saveFn(); });
       if (numInputs[1]) numInputs[1].addEventListener('input', (e: any) => { temperature.value = Number((e.target as HTMLInputElement).value); saveFn(); });
@@ -887,12 +960,23 @@ export default component$(() => {
       // Checkbox
       const cb = document.querySelector('.settings-controls input[type="checkbox"]');
       if (cb) cb.addEventListener('change', (e: any) => { useDedicatedClass.value = (e.target as HTMLInputElement).checked; saveFn(); });
+      const languageSelect = document.querySelector('[data-testid="language-select"]');
+      if (languageSelect) languageSelect.addEventListener('change', (e: any) => { selectedLanguage.value = (e.target as HTMLSelectElement).value; saveFn(); });
+      const translationSelect = document.querySelector('[data-testid="translation-target-select"]');
+      if (translationSelect) translationSelect.addEventListener('change', (e: any) => { translationTarget.value = (e.target as HTMLSelectElement).value; saveFn(); });
 
       // Model radios
       document.querySelectorAll('.model-selector input[type="radio"]').forEach((r) => {
         r.addEventListener('change', (e: any) => {
           const t = e.target as HTMLInputElement;
-          if (t.checked) { selectedModel.value = t.value; saveFn(); }
+          if (t.checked) {
+            selectedModel.value = t.value;
+            if (!(t.value.startsWith('qwen3-asr') || t.value.startsWith('voxtral'))) {
+              translationTarget.value = 'none';
+              syncSettingsDom();
+            }
+            saveFn();
+          }
         });
       });
     } catch (e) {
@@ -930,6 +1014,35 @@ export default component$(() => {
         <div class="settings-header">
           <strong>Generation Settings</strong>
           <span class="settings-note">Applied on next Start / Reconnect</span>
+        </div>
+
+        <div class="settings-controls">
+          <label>
+            Input Language
+            <select
+              data-testid="language-select"
+              value={selectedLanguage.value}
+              onChange$={(e) => { selectedLanguage.value = (e.target as HTMLSelectElement).value; saveSettings(); }}
+            >
+              {languageOptions.map((language) => (
+                <option key={language.value} value={language.value}>{language.label}</option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            Translation Output (Qwen/Voxtral)
+            <select
+              data-testid="translation-target-select"
+              value={translationTarget.value}
+              onChange$={(e) => { translationTarget.value = (e.target as HTMLSelectElement).value; saveSettings(); }}
+            >
+              <option value="none">No Translation</option>
+              {languageOptions.filter((language) => language.value !== 'auto').map((language) => (
+                <option key={language.value} value={language.value}>{language.label}</option>
+              ))}
+            </select>
+          </label>
         </div>
 
         <div class="settings-presets">

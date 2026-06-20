@@ -173,8 +173,11 @@ async def websocket_transcribe(websocket: WebSocket):
 
     manager: ModelManager | None = None
     current_model_id = "qwen3-asr-0.6b"
-    language = "ja"
+    language = "auto"
+    target_language = "none"
     beam_size = 6
+    temperature = 0.0
+    repetition_penalty = 1.15
     use_dedicated_class = True
     previous_text = ""
     return_timestamps = True
@@ -198,7 +201,10 @@ async def websocket_transcribe(websocket: WebSocket):
 
             current_model_id = config.get("model_id", current_model_id)
             language = config.get("language", language)
+            target_language = config.get("target_language", target_language)
             beam_size = config.get("beam_size", beam_size)
+            temperature = config.get("temperature", temperature)
+            repetition_penalty = config.get("repetition_penalty", repetition_penalty)
             use_dedicated_class = config.get("use_dedicated_class", use_dedicated_class)
             return_timestamps = config.get("return_timestamps", return_timestamps)
             vad_filter = config.get("vad_filter", vad_filter)
@@ -227,6 +233,7 @@ async def websocket_transcribe(websocket: WebSocket):
             "type": "ready",
             "model_id": current_model_id,
             "language": language,
+            "target_language": target_language,
             "return_timestamps": return_timestamps
         })
 
@@ -248,15 +255,18 @@ async def websocket_transcribe(websocket: WebSocket):
                 audio_for_model = normalize_to_wav_pcm_16k_mono(raw_chunk)
 
                 try:
+                    asr_language = None if language in (None, "", "auto") else language
+                    translation_target = None if target_language in (None, "", "none") else target_language
                     result = await manager.transcribe(
                         audio=audio_for_model,
                         model_id=current_model_id,
-                        language=language,
+                        language=asr_language,
+                        target_language=translation_target,
                         beam_size=beam_size,
                         previous_text=previous_text,
                         return_timestamps=return_timestamps,
-                        temperature=0.0,
-                        repetition_penalty=1.15 if language == "ja" else 1.0,
+                        temperature=temperature,
+                        repetition_penalty=repetition_penalty,
                         vad_filter=vad_filter,
                     )
 
@@ -282,6 +292,7 @@ async def websocket_transcribe(websocket: WebSocket):
                         "is_final": False,
                         "chunks": result.get("chunks", []),
                         "language": result.get("language"),
+                        "target_language": translation_target,
                         "processing_time_seconds": result.get("processing_time_seconds", 0.0),
                         "had_speech": had_speech,
                         "chunk_index": chunk_index,
@@ -303,6 +314,7 @@ async def websocket_transcribe(websocket: WebSocket):
                     if msg_type == "update":
                         beam_size = data.get("beam_size", beam_size)
                         language = data.get("language", language)
+                        target_language = data.get("target_language", target_language)
                         return_timestamps = data.get("return_timestamps", return_timestamps)
                         vad_filter = data.get("vad_filter", vad_filter)
 
