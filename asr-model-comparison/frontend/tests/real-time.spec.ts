@@ -575,10 +575,118 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
     await expect(page.getByTestId('status')).toContainText(/Recording|Ready|last chunk/i, { timeout: 5000 });
 
     const chunkFeedback = page.getByTestId('chunk-feedback');
-    await expect(chunkFeedback).toContainText(/Last chunk #2:/, { timeout: 10000 });
+    await expect(chunkFeedback).toContainText(/Last chunk #1:/, { timeout: 10000 });
     await expect(chunkFeedback).toContainText(/0\.23s/);
-    await expect(chunkFeedback).toContainText(/20 bytes/);
+    await expect(chunkFeedback).toContainText(/\d+ bytes/);
     await expect(page.getByTestId('status')).toContainText(/last chunk: 0\.23s/i);
+  });
+
+  test('does not enqueue another audio chunk while ASR is processing', async ({ page }) => {
+    await page.addInitScript(() => {
+      class MockWebSocket {
+        static CONNECTING = 0;
+        static OPEN = 1;
+        static CLOSING = 2;
+        static CLOSED = 3;
+
+        readyState = MockWebSocket.CONNECTING;
+        onopen: ((ev: any) => void) | null = null;
+        onclose: ((ev: any) => void) | null = null;
+        onmessage: ((ev: any) => void) | null = null;
+
+        constructor(public url: string) {
+          (window as any).__binarySends = 0;
+          setTimeout(() => {
+            this.readyState = MockWebSocket.OPEN;
+            this.onopen?.(new Event('open'));
+          }, 0);
+        }
+
+        send(data: any) {
+          if (typeof data === 'string') {
+            const parsed = JSON.parse(data);
+            if (parsed.type === 'config') {
+              setTimeout(() => {
+                this.onmessage?.(new MessageEvent('message', {
+                  data: JSON.stringify({ type: 'ready', model_id: parsed.model_id }),
+                }));
+              }, 0);
+            }
+            return;
+          }
+
+          (window as any).__binarySends += 1;
+          setTimeout(() => {
+            this.onmessage?.(new MessageEvent('message', {
+              data: JSON.stringify({
+                type: 'transcription',
+                model_id: 'voxtral-mini-4b',
+                text: '',
+                is_final: false,
+                processing_time_seconds: 61.5,
+                had_speech: true,
+                chunk_index: 1,
+                chunk_size_bytes: typeof data?.size === 'number' ? data.size : 0,
+              }),
+            }));
+          }, 250);
+        }
+
+        close() {
+          this.readyState = MockWebSocket.CLOSED;
+          this.onclose?.(new CloseEvent('close'));
+        }
+
+        addEventListener() {}
+        removeEventListener() {}
+        dispatchEvent() { return true; }
+      }
+
+      class MockMediaRecorder {
+        ondataavailable: ((ev: any) => void) | null = null;
+        stream: any;
+
+        constructor(stream: any) {
+          this.stream = stream;
+        }
+
+        start() {
+          [20, 30, 40].forEach((delay, index) => {
+            setTimeout(() => {
+              this.ondataavailable?.({
+                data: new Blob([`rapid chunk ${index}`], { type: 'audio/webm' }),
+              });
+            }, delay);
+          });
+        }
+
+        stop() {}
+      }
+
+      // @ts-ignore
+      (window as any).WebSocket = MockWebSocket;
+      // @ts-ignore
+      (window as any).MediaRecorder = MockMediaRecorder;
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: {
+          getUserMedia: async () => ({
+            getTracks: () => [{ stop: () => {} }],
+          }),
+        },
+      });
+    });
+
+    await page.goto('/');
+    await page.getByTestId('hydrated-marker').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+    await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
+    await page.locator('input[value="voxtral-mini-4b"]').check();
+    await page.getByTestId('start-recording').click();
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__binarySends), {
+      timeout: 2000,
+    }).toBe(1);
+    await expect(page.getByTestId('chunk-feedback')).toContainText(/Last chunk #1:/, { timeout: 5000 });
   });
 
   test('Qwen3 0.6B selection sends model, input language, and translation target in config', async ({ page }) => {

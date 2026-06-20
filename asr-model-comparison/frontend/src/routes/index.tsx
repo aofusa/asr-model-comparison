@@ -384,15 +384,6 @@ export default component$(() => {
           ts: Date.now(),
         };
         currentChunkStatus.value = 'received';
-        try {
-          const chunkEl = document.querySelector('[data-testid="chunk-feedback"]');
-          if (chunkEl) {
-            chunkEl.textContent =
-              `Last chunk #${lastChunkInfo.value.chunkIndex || chunkCount.value}: ${proc.toFixed(2)}s` +
-              `${hadSpeech ? ' (speech)' : ' (no speech)'} — ${latestText || '(empty result)'}` +
-              `${lastChunkInfo.value.chunkSizeBytes > 0 ? ` — ${lastChunkInfo.value.chunkSizeBytes} bytes` : ''}`;
-          }
-        } catch {}
 
         // Only accumulate when there is actual text (preserves existing behavior exactly).
         if (latestText) {
@@ -430,12 +421,11 @@ export default component$(() => {
         try {
           const statusEl = document.querySelector('[data-testid="status"]');
           if (statusEl) statusEl.textContent = `Status: ${status.value}`;
-          const transcriptEl = document.querySelector('.transcript');
-          if (transcriptEl && transcript.value) transcriptEl.textContent = transcript.value;
         } catch {}
       }
 
       if (data.type === 'error') {
+        currentChunkStatus.value = 'received';
         status.value = `Error: ${data.message || data.code}`;
         if (isRecording.value) {
           scheduleReconnect();
@@ -451,10 +441,6 @@ export default component$(() => {
           transcript.value = finalText;
         }
         status.value = 'Stream ended';
-        try {
-          const transcriptEl = document.querySelector('.transcript');
-          if (transcriptEl && transcript.value) transcriptEl.textContent = transcript.value;
-        } catch {}
       }
     };
 
@@ -565,6 +551,9 @@ export default component$(() => {
 
       processor.onaudioprocess = (event) => {
         if (!isRecording.value || !refs.ws || refs.ws.readyState !== WebSocket.OPEN) {
+          return;
+        }
+        if (currentChunkStatus.value === 'processing') {
           return;
         }
 
@@ -701,6 +690,9 @@ export default component$(() => {
         refs.mediaRecorder = noSerialize(new MediaRecorder(stream));
         refs.mediaRecorder.ondataavailable = async (event) => {
           if (event.data.size > 0 && refs.ws && refs.ws.readyState === WebSocket.OPEN) {
+            if (currentChunkStatus.value === 'processing') {
+              return;
+            }
             chunkCount.value++;
             currentChunkStatus.value = 'processing';
             status.value = `Recording... (processing chunk #${chunkCount.value})`;
@@ -862,6 +854,9 @@ export default component$(() => {
             refs.mediaRecorder = noSerialize(new MediaRecorder(stream));
             refs.mediaRecorder.ondataavailable = async (event) => {
               if (event.data.size > 0 && refs.ws && (refs.ws.readyState === WebSocket.OPEN || refs.ws.readyState === 1)) {
+                if (currentChunkStatus.value === 'processing') {
+                  return;
+                }
                 chunkCount.value++;
                 currentChunkStatus.value = 'processing';
                 setStatusDom(`Recording... (processing chunk #${chunkCount.value})`);
