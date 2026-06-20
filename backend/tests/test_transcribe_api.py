@@ -20,6 +20,13 @@ from httpx import ASGITransport, AsyncClient
 from app.main import app
 
 
+@pytest.fixture(autouse=True)
+def use_mock_model_manager(monkeypatch):
+    """These HTTP contract tests use the lightweight mocked manager path."""
+    monkeypatch.delenv("USE_REAL_MODELS", raising=False)
+    monkeypatch.delenv("USE_REAL_WHISPER", raising=False)
+
+
 @pytest.mark.asyncio
 async def test_transcribe_success_returns_text_and_time():
     """Basic happy path: send audio + model → get text and positive processing time."""

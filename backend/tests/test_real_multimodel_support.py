@@ -11,6 +11,7 @@ Goals of this reinforcement phase:
 from __future__ import annotations
 
 import os
+import asyncio
 
 import pytest
 
@@ -25,8 +26,7 @@ def real_whisper_manager():
     manager = ModelManager(model_loader=loader)
     yield manager
     # Ensure cleanup
-    import asyncio
-    asyncio.get_event_loop().run_until_complete(manager.unload_current())
+    asyncio.run(manager.unload_current())
 
 
 def test_qwen3_and_voxtral_have_metadata_but_no_real_backend_yet():
@@ -59,11 +59,8 @@ def test_loading_qwen3_in_real_mode_attempts_actual_model_load(real_whisper_mana
 
     # It should no longer raise "not implemented" — it will try real loading
     # (which may take time / memory on first run)
-    import asyncio
     try:
-        asyncio.get_event_loop().run_until_complete(
-            manager.load_model("qwen3-asr-0.6b")
-        )
+        asyncio.run(manager.load_model("qwen3-asr-0.6b"))
     except Exception as e:
         # Acceptable failures: download, OOM, or model-specific inference error
         # The important thing is it did not hit the old NotImplemented skeleton
@@ -82,11 +79,8 @@ def test_loading_voxtral_in_real_mode_attempts_actual_model_load(real_whisper_ma
     """
     manager = real_whisper_manager
 
-    import asyncio
     try:
-        asyncio.get_event_loop().run_until_complete(
-            manager.load_model("voxtral-mini-4b")
-        )
+        asyncio.run(manager.load_model("voxtral-mini-4b"))
     except Exception as e:
         assert "not implemented" not in str(e).lower()
 
@@ -101,8 +95,6 @@ def test_attempting_unsupported_family_with_real_loader_fails_cleanly():
 
     loader = create_whisper_loader(device="cpu", compute_type="int8")
     manager = ModelManager(model_loader=loader)
-
-    import asyncio
 
     # Load a real Whisper model first
     asyncio.run(manager.load_model("whisper-tiny"))
