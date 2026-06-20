@@ -33,6 +33,23 @@ from app.utils.audio import normalize_to_wav_pcm_16k_mono
 router = APIRouter(prefix="/api", tags=["transcribe"])
 
 
+def _merge_realtime_context(previous_text: str, new_text: str) -> str:
+    """Append a chunk result without growing duplicate context."""
+    previous_text = (previous_text or "").strip()
+    new_text = (new_text or "").strip()
+
+    if not new_text:
+        return previous_text
+    if not previous_text:
+        return new_text
+    if new_text == previous_text or previous_text.endswith(new_text):
+        return previous_text
+    if new_text.startswith(previous_text):
+        return new_text
+
+    return f"{previous_text} {new_text}".strip()
+
+
 def _get_real_loader_for_model(model_id: str):
     """Select the appropriate real loader based on model family."""
     model_info = next((m for m in AVAILABLE_MODELS if m.id == model_id), None)
@@ -239,12 +256,14 @@ async def websocket_transcribe(websocket: WebSocket):
             use_dedicated_class = config.get("use_dedicated_class", use_dedicated_class)
             return_timestamps = config.get("return_timestamps", return_timestamps)
             vad_filter = config.get("vad_filter", vad_filter)
+            previous_text = str(config.get("previous_text", "") or "").strip()
             server_log(
                 f"[WS Config] model={current_model_id} language={language} "
                 f"target_language={target_language} beam_size={beam_size} "
                 f"temperature={temperature} repetition_penalty={repetition_penalty} "
                 f"use_dedicated_class={use_dedicated_class} "
-                f"return_timestamps={return_timestamps} vad_filter={vad_filter}"
+                f"return_timestamps={return_timestamps} vad_filter={vad_filter} "
+                f"previous_text_len={len(previous_text)}"
             )
         except Exception:
             await safe_send_json({"type": "error", "message": "Invalid config JSON"})
@@ -321,7 +340,7 @@ async def websocket_transcribe(websocket: WebSocket):
 
                     new_text = result.get("text", "").strip()
                     if new_text:
-                        previous_text = (previous_text + " " + new_text).strip()
+                        previous_text = _merge_realtime_context(previous_text, new_text)
 
                     # had_speech heuristic: if the backend returned segments/chunks or we got text
                     had_speech = bool(new_text or result.get("chunks") or result.get("segments"))
@@ -345,6 +364,7 @@ async def websocket_transcribe(websocket: WebSocket):
                         "had_speech": had_speech,
                         "chunk_index": chunk_index,
                         "chunk_size_bytes": len(audio_for_model),
+                        "accumulated_text": previous_text,
                     }):
                         break
 

@@ -72,6 +72,23 @@ function mergeFloatChunks(chunks: Float32Array[], totalLength: number): Float32A
   return merged;
 }
 
+function splitAccumulatedForPartial(accumulatedText: string, latestText: string): { finalText: string; partialText: string } {
+  const accumulated = accumulatedText.trim();
+  const latest = latestText.trim();
+
+  if (!accumulated || !latest) {
+    return { finalText: accumulated, partialText: latest };
+  }
+  if (accumulated === latest) {
+    return { finalText: '', partialText: latest };
+  }
+  if (accumulated.endsWith(latest)) {
+    return { finalText: accumulated.slice(0, -latest.length).trim(), partialText: latest };
+  }
+
+  return { finalText: accumulated, partialText: latest };
+}
+
 const languageOptions = [
   { value: 'auto', label: 'Auto Detect' },
   { value: 'ja', label: 'Japanese' },
@@ -185,6 +202,7 @@ export default component$(() => {
     pcmSampleCount: 0,
     volumeRaf: null as number | null,
     reconnectNow: null as NoSerialize<((isReconnect?: boolean) => void | Promise<void>)> | null,
+    intentionalStop: false,
   });
 
   // Load persisted settings on mount (client only)
@@ -346,13 +364,19 @@ export default component$(() => {
       }
 
       if (data.type === 'transcription') {
+        if (!isRecording.value && refs.intentionalStop) {
+          return;
+        }
+
         const hadSpeech = data.had_speech !== false;
         const proc = data.processing_time_seconds || 0;
+        const latestText = (data.text || '').trim();
+        const accumulatedText = typeof data.accumulated_text === 'string' ? data.accumulated_text.trim() : '';
 
         // Always record chunk activity so the user sees "something happened"
         // even when data.text is empty (the previous root cause of "話しかけても何も起きない").
         lastChunkInfo.value = {
-          text: data.text || '',
+          text: latestText,
           processingTime: proc,
           hadSpeech,
           chunkIndex: data.chunk_index || chunkCount.value,
@@ -360,22 +384,39 @@ export default component$(() => {
           ts: Date.now(),
         };
         currentChunkStatus.value = 'received';
+        try {
+          const chunkEl = document.querySelector('[data-testid="chunk-feedback"]');
+          if (chunkEl) {
+            chunkEl.textContent =
+              `Last chunk #${lastChunkInfo.value.chunkIndex || chunkCount.value}: ${proc.toFixed(2)}s` +
+              `${hadSpeech ? ' (speech)' : ' (no speech)'} — ${latestText || '(empty result)'}` +
+              `${lastChunkInfo.value.chunkSizeBytes > 0 ? ` — ${lastChunkInfo.value.chunkSizeBytes} bytes` : ''}`;
+          }
+        } catch {}
 
         // Only accumulate when there is actual text (preserves existing behavior exactly).
-        if (data.text) {
+        if (latestText) {
           const isFinal = data.is_final === true;
+          const nextContext = accumulatedText || `${previousText.value} ${latestText}`.trim();
+          previousText.value = nextContext;
 
           if (isFinal) {
             // 確定した結果 → finalTranscript に蓄積
-            finalTranscript.value = (finalTranscript.value + ' ' + data.text).trim();
+            finalTranscript.value = nextContext;
             partialTranscript.value = ''; // partial をクリア
             previousText.value = finalTranscript.value;
             transcript.value = finalTranscript.value; // 後方互換
           } else {
             // 部分結果 → partialTranscript で一時表示
-            partialTranscript.value = data.text;
-            transcript.value = (finalTranscript.value + ' ' + data.text).trim();
+            const split = splitAccumulatedForPartial(nextContext, latestText);
+            finalTranscript.value = split.finalText;
+            partialTranscript.value = split.partialText;
+            transcript.value = nextContext;
           }
+        } else if (accumulatedText) {
+          previousText.value = accumulatedText;
+          finalTranscript.value = accumulatedText;
+          transcript.value = accumulatedText;
         } else {
           // Empty text but chunk was processed: give subtle feedback in partial area
           // (keeps the transcript container "alive" for the user).
@@ -389,6 +430,8 @@ export default component$(() => {
         try {
           const statusEl = document.querySelector('[data-testid="status"]');
           if (statusEl) statusEl.textContent = `Status: ${status.value}`;
+          const transcriptEl = document.querySelector('.transcript');
+          if (transcriptEl && transcript.value) transcriptEl.textContent = transcript.value;
         } catch {}
       }
 
@@ -400,7 +443,18 @@ export default component$(() => {
       }
 
       if (data.type === 'final') {
+        const finalText = String(data.text || previousText.value || '').trim();
+        if (finalText) {
+          previousText.value = finalText;
+          finalTranscript.value = finalText;
+          partialTranscript.value = '';
+          transcript.value = finalText;
+        }
         status.value = 'Stream ended';
+        try {
+          const transcriptEl = document.querySelector('.transcript');
+          if (transcriptEl && transcript.value) transcriptEl.textContent = transcript.value;
+        } catch {}
       }
     };
 
@@ -419,7 +473,12 @@ export default component$(() => {
         return;
       }
       const wasRecording = isRecording.value;
-      status.value = 'Disconnected';
+      if (refs.intentionalStop) {
+        refs.intentionalStop = false;
+        status.value = status.value === 'Stream ended' ? status.value : 'Stopped';
+      } else {
+        status.value = 'Disconnected';
+      }
       refs.ws = null;
 
       if (wasRecording) {
@@ -627,6 +686,7 @@ export default component$(() => {
     finalTranscript.value = '';
     partialTranscript.value = '';
     transcript.value = '';
+    previousText.value = '';
 
     // Phase 2 chunk feedback reset
     currentChunkStatus.value = 'idle';
@@ -689,11 +749,17 @@ export default component$(() => {
     }
 
     if (refs.ws) {
+      const wsToClose = refs.ws;
+      refs.intentionalStop = true;
       try {
-        refs.ws.send(JSON.stringify({ type: 'end' }));
+        wsToClose.send(JSON.stringify({ type: 'end' }));
       } catch {}
-      refs.ws.close();
-      refs.ws = null;
+      setTimeout(() => {
+        if (refs.ws === wsToClose) {
+          try { wsToClose.close(); } catch {}
+          refs.ws = null;
+        }
+      }, 5000);
     }
 
     status.value = 'Stopped';
@@ -705,10 +771,7 @@ export default component$(() => {
     } catch {}
     reconnectAttempts.value = 0;
 
-    // Phase 2: Reset transcripts and volume
-    finalTranscript.value = '';
-    partialTranscript.value = '';
-    transcript.value = '';
+    // Phase 2: Reset volume only. Keep transcript visible after Stop.
     stopVolumeMeter();
 
     // Phase 2 chunk feedback reset
@@ -786,6 +849,7 @@ export default component$(() => {
         finalTranscript.value = '';
         partialTranscript.value = '';
         transcript.value = '';
+        previousText.value = '';
         currentChunkStatus.value = 'idle';
         lastChunkInfo.value = null;
         chunkCount.value = 0;
@@ -845,9 +909,15 @@ export default component$(() => {
           refs.micStream = null;
         }
         if (refs.ws) {
-          try { refs.ws.send(JSON.stringify({ type: 'end' })); } catch {}
-          try { refs.ws.close(); } catch {}
-          refs.ws = null;
+          const wsToClose = refs.ws;
+          refs.intentionalStop = true;
+          try { wsToClose.send(JSON.stringify({ type: 'end' })); } catch {}
+          setTimeout(() => {
+            if (refs.ws === wsToClose) {
+              try { wsToClose.close(); } catch {}
+              refs.ws = null;
+            }
+          }, 5000);
         }
         reconnectAttempts.value = 0;
         setStatusDom('Stopped');

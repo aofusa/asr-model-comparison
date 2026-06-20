@@ -540,6 +540,11 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
               data: new Blob(['chunk payload'], { type: 'audio/webm' }),
             });
           }, 25);
+          setTimeout(() => {
+            this.ondataavailable?.({
+              data: new Blob(['second chunk payload'], { type: 'audio/webm' }),
+            });
+          }, 60);
         }
 
         stop() {}
@@ -570,9 +575,9 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
     await expect(page.getByTestId('status')).toContainText(/Recording|Ready|last chunk/i, { timeout: 5000 });
 
     const chunkFeedback = page.getByTestId('chunk-feedback');
-    await expect(chunkFeedback).toContainText(/Last chunk #1:/, { timeout: 10000 });
+    await expect(chunkFeedback).toContainText(/Last chunk #2:/, { timeout: 10000 });
     await expect(chunkFeedback).toContainText(/0\.23s/);
-    await expect(chunkFeedback).toContainText(/13 bytes/);
+    await expect(chunkFeedback).toContainText(/20 bytes/);
     await expect(page.getByTestId('status')).toContainText(/last chunk: 0\.23s/i);
   });
 
@@ -660,6 +665,233 @@ test.describe('Phase 2 - Chunk processing feedback (TDD skeletons for mic realti
       language: 'en',
       target_language: 'ja',
     });
+  });
+
+  test('Qwen3 reconnect sends latest transcript as previous_text after first chunk', async ({ page }) => {
+    await page.addInitScript(() => {
+      class MockWebSocket {
+        static CONNECTING = 0;
+        static OPEN = 1;
+        static CLOSING = 2;
+        static CLOSED = 3;
+
+        readyState = MockWebSocket.CONNECTING;
+        onopen: ((ev: any) => void) | null = null;
+        onclose: ((ev: any) => void) | null = null;
+        onmessage: ((ev: any) => void) | null = null;
+        private binarySent = false;
+        private isAsrSocket = false;
+
+        constructor(public url: string) {
+          (window as any).__wsConfigs = ((window as any).__wsConfigs || []);
+          setTimeout(() => {
+            this.readyState = MockWebSocket.OPEN;
+            this.onopen?.(new Event('open'));
+          }, 0);
+        }
+
+        send(data: any) {
+          if (typeof data === 'string') {
+            let parsed: any;
+            try {
+              parsed = JSON.parse(data);
+            } catch {
+              return;
+            }
+            if (parsed.type === 'config') {
+              this.isAsrSocket = true;
+              (window as any).__wsConfigs.push(parsed);
+              setTimeout(() => {
+                this.onmessage?.(new MessageEvent('message', {
+                  data: JSON.stringify({ type: 'ready', model_id: parsed.model_id }),
+                }));
+              }, 0);
+            }
+            return;
+          }
+
+          if (!this.isAsrSocket || this.binarySent || (window as any).__firstAsrChunkAnswered) {
+            return;
+          }
+          (window as any).__firstAsrChunkAnswered = true;
+          this.binarySent = true;
+          setTimeout(() => {
+            this.onmessage?.(new MessageEvent('message', {
+              data: JSON.stringify({
+                type: 'transcription',
+                model_id: 'qwen3-asr-0.6b',
+                text: '一回目の結果',
+                accumulated_text: '一回目の結果',
+                is_final: false,
+                processing_time_seconds: 0.31,
+                had_speech: true,
+                chunk_index: 1,
+                chunk_size_bytes: 11,
+              }),
+            }));
+          }, 10);
+          setTimeout(() => {
+            this.readyState = MockWebSocket.CLOSED;
+            this.onclose?.(new CloseEvent('close', { code: 1006, reason: 'mock reconnect' }));
+          }, 40);
+        }
+
+        close() {
+          this.readyState = MockWebSocket.CLOSED;
+          this.onclose?.(new CloseEvent('close'));
+        }
+
+        addEventListener() {}
+        removeEventListener() {}
+        dispatchEvent() { return true; }
+      }
+
+      class MockMediaRecorder {
+        ondataavailable: ((ev: any) => void) | null = null;
+        stream: any;
+        constructor(stream: any) {
+          this.stream = stream;
+        }
+        start() {
+          setTimeout(() => {
+            this.ondataavailable?.({
+              data: new Blob(['first chunk'], { type: 'audio/webm' }),
+            });
+          }, 25);
+        }
+        stop() {}
+      }
+
+      // @ts-ignore
+      (window as any).WebSocket = MockWebSocket;
+      // @ts-ignore
+      (window as any).MediaRecorder = MockMediaRecorder;
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: {
+          getUserMedia: async () => ({
+            getTracks: () => [{ stop: () => {} }],
+          }),
+        },
+      });
+    });
+
+    await page.goto('/');
+    await page.getByTestId('hydrated-marker').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+    await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
+
+    await page.locator('input[value="qwen3-asr-0.6b"]').check();
+    await page.getByTestId('start-recording').click();
+
+    await expect(page.getByTestId('chunk-feedback')).toContainText(/一回目の結果/, { timeout: 10000 });
+    await expect.poll(async () => page.evaluate(() => (window as any).__wsConfigs), {
+      timeout: 8000,
+    }).toEqual(expect.arrayContaining([
+      expect.objectContaining({ model_id: 'qwen3-asr-0.6b' }),
+      expect.objectContaining({
+        model_id: 'qwen3-asr-0.6b',
+        previous_text: '一回目の結果',
+      }),
+    ]));
+  });
+
+  test('Stop Recording ignores late transcription chunks from an intentional close', async ({ page }) => {
+    await page.addInitScript(() => {
+      class MockWebSocket {
+        static CONNECTING = 0;
+        static OPEN = 1;
+        static CLOSING = 2;
+        static CLOSED = 3;
+
+        readyState = MockWebSocket.CONNECTING;
+        onopen: ((ev: any) => void) | null = null;
+        onclose: ((ev: any) => void) | null = null;
+        onmessage: ((ev: any) => void) | null = null;
+
+        constructor(public url: string) {
+          setTimeout(() => {
+            this.readyState = MockWebSocket.OPEN;
+            this.onopen?.(new Event('open'));
+          }, 0);
+        }
+
+        send(data: any) {
+          if (typeof data !== 'string') {
+            return;
+          }
+          const parsed = JSON.parse(data);
+          if (parsed.type === 'config') {
+            setTimeout(() => {
+              this.onmessage?.(new MessageEvent('message', {
+                data: JSON.stringify({ type: 'ready', model_id: parsed.model_id }),
+              }));
+            }, 0);
+          }
+          if (parsed.type === 'end') {
+            setTimeout(() => {
+              this.onmessage?.(new MessageEvent('message', {
+                data: JSON.stringify({
+                  type: 'transcription',
+                  model_id: 'qwen3-asr-0.6b',
+                  text: 'late chunk should be ignored',
+                  accumulated_text: 'late chunk should be ignored',
+                  processing_time_seconds: 0.44,
+                  had_speech: true,
+                  chunk_index: 99,
+                  chunk_size_bytes: 99,
+                }),
+              }));
+            }, 20);
+          }
+        }
+
+        close() {
+          this.readyState = MockWebSocket.CLOSED;
+          this.onclose?.(new CloseEvent('close'));
+        }
+
+        addEventListener() {}
+        removeEventListener() {}
+        dispatchEvent() { return true; }
+      }
+
+      class MockMediaRecorder {
+        ondataavailable: ((ev: any) => void) | null = null;
+        stream: any;
+        constructor(stream: any) {
+          this.stream = stream;
+        }
+        start() {}
+        stop() {}
+      }
+
+      // @ts-ignore
+      (window as any).WebSocket = MockWebSocket;
+      // @ts-ignore
+      (window as any).MediaRecorder = MockMediaRecorder;
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: {
+          getUserMedia: async () => ({
+            getTracks: () => [{ stop: () => {} }],
+          }),
+        },
+      });
+    });
+
+    await page.goto('/');
+    await page.getByTestId('hydrated-marker').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+    await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
+
+    await page.locator('input[value="qwen3-asr-0.6b"]').check();
+    await page.getByTestId('start-recording').click();
+    await expect(page.getByTestId('status')).toContainText(/Ready - qwen3-asr-0\.6b|Recording/, { timeout: 5000 });
+    await page.getByTestId('stop-recording').click({ force: true });
+    await page.waitForTimeout(150);
+
+    await expect(page.getByTestId('status')).toContainText(/Stopped|Stream ended/);
+    await expect(page.getByTestId('status')).not.toContainText(/last chunk: 0\.44s/);
+    await expect(page.locator('.transcript')).not.toContainText(/late chunk should be ignored/);
   });
 
   test('rapid model switches and reconnects do not throw stale WebSocket errors', async ({ page }) => {

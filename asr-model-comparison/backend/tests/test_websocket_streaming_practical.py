@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.api.routers.transcribe import _merge_realtime_context
 
 
 def _mock_whisper_loader(text: str = ""):
@@ -155,6 +156,49 @@ def test_websocket_maintains_previous_text_across_chunks():
 
         assert response1.get("type") == "transcription"
         assert response2.get("type") == "transcription"
+
+
+def test_realtime_context_merge_avoids_duplicate_qwen_chunk_context():
+    assert _merge_realtime_context("", "こんにちは") == "こんにちは"
+    assert _merge_realtime_context("こんにちは", "こんにちは") == "こんにちは"
+    assert _merge_realtime_context("こんにちは", "こんにちは 世界") == "こんにちは 世界"
+    assert _merge_realtime_context("こんにちは", "世界") == "こんにちは 世界"
+
+
+def test_websocket_config_previous_text_is_passed_to_qwen_backend_and_not_duplicated():
+    """
+    Reconnects from the browser send previous_text in the initial config.
+    Qwen must receive it as context for the first post-reconnect chunk, and
+    repeated chunk output must not grow the accumulated context indefinitely.
+    """
+    client = TestClient(app)
+    patcher, fake_backend, _loaded_model_ids = _mock_loader_for(
+        "create_qwen3_loader",
+        text="前回の認識結果",
+    )
+
+    with patcher:
+        with client.websocket_connect("/api/ws/transcribe") as websocket:
+            websocket.send_json({
+                "type": "config",
+                "model_id": "qwen3-asr-0.6b",
+                "language": "ja",
+                "previous_text": "前回の認識結果",
+                "return_timestamps": False,
+            })
+            websocket.receive_json()  # ready
+
+            websocket.send_bytes(b"fake wav chunk")
+            response = websocket.receive_json()
+
+            websocket.send_json({"type": "end"})
+            final_response = websocket.receive_json()
+
+    assert response["type"] == "transcription"
+    assert response["accumulated_text"] == "前回の認識結果"
+    assert final_response["text"] == "前回の認識結果"
+    _, kwargs = fake_backend.transcribe.call_args
+    assert kwargs["previous_text"] == "前回の認識結果"
 
 
 def test_websocket_graceful_disconnect():
