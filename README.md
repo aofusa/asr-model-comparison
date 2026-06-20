@@ -78,9 +78,11 @@ chmod +x run.sh
 ./run.sh --host 0.0.0.0 --port 8000
 ```
 
-## 本番ビルド
+## ビルドと起動
 
-ビルドのみを実行したい場合は `--build-only` オプションを使用してください。
+`run.ps1` / `run.sh` / `run.bat` は、`--build-only` を付けない通常起動でも毎回フロントエンドを本番ビルドし、最新の成果物を `backend/static/` にコピーしてからバックエンドを起動します。これにより FastAPI 1プロセスで API と最新フロントエンドを配信できます。
+
+ビルドだけ実行したい場合は `--build-only` オプションを使用してください。
 
 ```bash
 # Windows
@@ -94,7 +96,7 @@ run.bat --build-only
 
 ## リアルタイム利用のための推奨設定（日本語）
 
-日本語で高精度なリアルタイム認識を行う場合、以下の設定を推奨します。
+日本語で高精度なリアルタイム認識を行う場合、Qwen3-ASR または Voxtral を選択し、以下の設定を推奨します。Whisper は軽量検証や比較用として有用ですが、本プロジェクトでは Qwen3-ASR / Voxtral を主軸にしています。
 
 ```json
 {
@@ -110,14 +112,15 @@ run.bat --build-only
 
 ### 主なパラメータの意味
 - `language="ja"`：日本語出力を強制
-- `beam_size=6`：認識精度を大幅に向上（特にQwen3/Voxtralで有効）
+- `beam_size=6`：認識精度を向上（特にQwen3/Voxtralで有効。5〜8程度が目安）
 - `temperature=0.0`：幻覚を抑え一貫性を高める
-- `repetition_penalty=1.15`：長い日本語文で繰り返しを防ぐ
-- `previous_text`：直前の認識結果を渡すことで、文脈を維持し精度を向上させる（リアルタイムで非常に重要）
+- `repetition_penalty=1.1〜1.15`：長い日本語文で繰り返しを防ぐ
+- `previous_text`：直前の認識結果を渡すことで、文脈を維持し精度を向上させる
+- `return_timestamps=true`：ライブ字幕やチャンク単位のUI更新で扱いやすくする
 
 ## WebSocket ストリーミング（推奨）
 
-低遅延で実用的なリアルタイム認識には WebSocket (`/api/ws/transcribe`) を使用します。
+低遅延で実用的なリアルタイム認識には WebSocket (`/api/ws/transcribe`) を使用します。ブラウザ側はマイク入力を短い音声チャンクに分けて送信し、バックエンドは接続ごとにモデルを1回だけロードします。
 
 ### 基本的な流れ
 1. WebSocket に接続
@@ -140,6 +143,21 @@ run.bat --build-only
 }
 ```
 
+### 受信メッセージ例
+```json
+{
+  "type": "transcription",
+  "model_id": "qwen3-asr-0.6b",
+  "text": "認識されたテキスト",
+  "is_final": false,
+  "chunks": [],
+  "processing_time_seconds": 1.23,
+  "had_speech": true,
+  "chunk_index": 1,
+  "accumulated_text": "これまでの認識結果"
+}
+```
+
 ### ストリーム終了
 クライアントから `{"type": "end"}` を送信すると、蓄積された最終結果が返されます。
 
@@ -147,12 +165,20 @@ run.bat --build-only
 
 - エラーや予期しない切断時は 1〜3 秒待ってから再接続
 - 再接続時に最新の `previous_text` を config に含めて送信
-- これにより文脈が途切れず、高い精度を維持できます
+- フロントエンドは指数バックオフ、即時再試行、録音停止、現在の文字起こし保持をUIで表示
+- これにより文脈が途切れず、長いリアルタイムセッションでも精度を維持できます
+
+### 運用上の注意
+- 初回利用時は Hugging Face などからモデルがダウンロードされるため、時間とディスク容量が必要です。
+- Qwen3-ASR 1.7B や Voxtral Mini 4B は重いため、CPU環境ではチャンク処理に数秒かかることがあります。
+- メモリ不足やモデルロード失敗時は 503 エラーになります。まず `qwen3-asr-0.6b` または `whisper-tiny` で動作確認してください。
+- ブラウザマイクはHTTPSまたはlocalhostでの利用が前提です。リモートHTTPではブラウザがマイクをブロックします。
 
 ## モデル選択の目安
 
 | モデル                | おすすめ用途                     | 特徴 |
 |-----------------------|----------------------------------|------|
+| whisper-tiny          | 動作確認・軽量E2E                | CPUでも軽く、プロトコル検証に向く |
 | qwen3-asr-0.6b        | バランス最強（推奨）             | 高速で実用的 |
 | qwen3-asr-1.7b        | 最高精度を求める場合             | 重いが認識品質が高い |
 | voxtral-mini-4b       | 音響特性が異なる代替案           | 専用クラス対応が良好 |
@@ -171,7 +197,7 @@ asr-model-comparison-project/
 │   ├── tests/                   # Playwright E2Eテスト
 │   └── README.md                # フロントエンド固有のドキュメント
 ├── run.sh / run.bat / run.ps1   # 統合起動スクリプト（--build-only 対応）
-├── docs/                        # 仕様、利用ガイド、バックログ
+├── docs/                        # 仕様、バックログ
 └── README.md                    # 本ファイル（プロジェクト全体）
 ```
 
@@ -180,7 +206,7 @@ asr-model-comparison-project/
 - ROG Ally X でメモリ不足になる場合は、`whisper-tiny` や `whisper-small` から試してください。
 - 初回推論が遅い場合は、モデルのダウンロードや初期ロード中の可能性があります。
 - `"CUDA not available"` は AMD / CPU 環境では正常です。CPU または利用可能なアクセラレーションへフォールバックします。
-- フロントエンド配信に必要な `backend/static/` は `run.ps1 -BuildOnly` または `./run.sh --build-only` で再生成してください。
+- フロントエンド配信に必要な `backend/static/` は通常起動時にも自動更新されます。サーバーを起動せずに更新だけしたい場合は `run.ps1 -BuildOnly` または `./run.sh --build-only` を使ってください。
 
 ## ライセンス
 

@@ -111,7 +111,7 @@ function Invoke-FrontendBuild {
     $feDir = Join-Path $ProjectRoot "frontend"
     $staticDir = Join-Path $ProjectRoot "backend\static"
 
-    Write-Host ">>> Building frontend (Qwik City static build)..." -ForegroundColor Yellow
+    Write-Host ">>> Building frontend (Pure Qwik + Vite static build)..." -ForegroundColor Yellow
 
     Push-Location $feDir
 
@@ -121,7 +121,7 @@ function Invoke-FrontendBuild {
             npm install
         }
 
-        # Use the project build script (Qwik City + qwik build).
+        # Use the project build script (Pure Qwik + Vite static SPA build).
         # This ensures proper static output including index.html for backend serving.
         npm run build
     } finally {

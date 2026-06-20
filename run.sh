@@ -87,7 +87,7 @@ echo ""
 FRONTEND_DIR="$PROJECT_ROOT/frontend"
 BACKEND_STATIC_DIR="$PROJECT_ROOT/backend/static"
 
-echo ">>> Building frontend (Qwik City static build)..."
+echo ">>> Building frontend (Pure Qwik + Vite static build)..."
 
 pushd "$FRONTEND_DIR" > /dev/null
 

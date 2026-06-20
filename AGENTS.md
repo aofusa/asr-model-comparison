@@ -17,9 +17,9 @@ ASR Model Comparison Platform (AMCP) — 同一の音声サンプルに対して
 
 ## 現在の状態
 
-プロジェクト本体はリポジトリルートにあります。FastAPI バックエンド、Pure Qwik + Vite フロントエンド、WebSocket リアルタイム文字起こし、再接続UX、Qwen3-ASR / Voxtral / Whisper の単一モデル運用が実装済みです。
+プロジェクト本体はリポジトリルートにあります。FastAPI バックエンド、Pure Qwik + Vite フロントエンド、WebSocket リアルタイム文字起こし、詳細な再接続UX、音量メーター、チャンク処理フィードバック、履歴表示、Qwen3-ASR / Voxtral / Whisper の単一モデル運用が実装済みです。
 
-ワークスペース側の `docs/` には仕様・バックログ・利用ガイドを置きます。AI生成の修正指示書、調査メモ、実行ログ、ビルド成果物は Git 管理外にしてください。
+`docs/` には仕様とバックログを置きます。公開ユーザー向けの起動方法、WebSocket利用方法、日本語リアルタイム推奨設定は `README.md` に集約します。AI生成の修正指示書、調査メモ、実行ログ、ビルド成果物は Git 管理外にしてください。
 
 ## 目標フォルダ構造
 
@@ -41,9 +41,10 @@ repository root/
     public/
     package.json
     playwright.config.ts # E2Eテスト
-  logs/
   run.sh / run.bat       # 統合起動スクリプト
-  docker-compose.yml     # オプション
+  docs/
+    specs.md
+    backlog/
 ```
 
 ## コマンド
@@ -54,11 +55,14 @@ repository root/
 .\run.ps1                # Windows
 ./run.sh --build-only    # ビルドのみ
 .\run.ps1 -BuildOnly     # Windows ビルドのみ
+./run.sh --reload        # Python reload + frontend auto rebuild
+.\run.ps1 --reload       # Windows reload mode
 
 # Backend 単独
 cd backend
 python -m uvicorn app.main:app --reload
 pytest
+USE_REAL_MODELS=1 USE_REAL_WHISPER=1 pytest -s
 pytest tests/test_specific.py::test_name
 
 # Frontend
@@ -108,7 +112,7 @@ ruff check .
 
 ## 主要な依存関係
 
-**Python 3.12** (`.python-version` を参照)
+**Python 3.12+**（現在のローカル検証は Python 3.13 でも通過）
 
 Backend: `fastapi`, `faster-whisper`, `qwen-asr`, `transformers`, `torchaudio`, `pydub`, `python-multipart`, `pytest`, `pytest-asyncio`, `httpx`, `psutil`（リソース監視用、オプション）
 
@@ -123,17 +127,22 @@ Frontend: `qwik`, `playwright` (Vite)
   - 詳細なオレンジ色再接続バナー（ライブカウントダウン、指数バックオフ、Attempt X/5、「Retry Immediately」ボタン、「Stop Recording」ボタン、「transcript is preserved」注記）。
   - Qwik Signals で `isReconnecting` / `nextReconnectIn` / `reconnectAttempts` を精密管理。
   - 再接続時に自動で最新 `previous_text` を送信し文脈継続。
+- 音量メーター、無音PCM送信抑止、チャンク処理中の多重送信防止、処理時間/チャンク番号/バイト数の表示を実装済み。
+- 確定結果は履歴ペインに蓄積し、過去の文字起こしをスクロールで確認可能。
 - モデル選択は単一（ラジオボタン）。複数モデル同時比較はスコープ外。
 - Qwen3-ASR（0.6B/1.7B）とVoxtral Mini 4B をメイン、Whisper はサブ。
 
 **テスト状況**:
-- Playwright E2E: 基本ロード・モデル選択・再接続ボタン存在は安定パス。
-- 詳細再接続シナリオは WS モック注入でカバー（自動実行で一部タイミング差あり。手動/headed で機能検証済み）。
+- Backend pytest: `USE_REAL_MODELS=1 USE_REAL_WHISPER=1 pytest -s` で slow / 実モデル系を含めて通過済み。
+- Playwright dev E2E: `npm run test:e2e` で通過済み。
+- Playwright production E2E: `run.ps1 -BuildOnly` 後にバックエンド起動し、`npm run test:e2e:prod` で通過済み。
+- 詳細再接続シナリオは WS モック注入でカバー。
 - TDD 遵守継続中（新機能追加時は Playwright テスト先行）。
 
 **Phase 進行**:
 - Phase 1（WebSocket安定化 + 詳細再接続UI + ドキュメント + TDD）完了。
-- 次は Phase 2（リアルタイム視覚的フィードバック：音量メーター/波形、is_final区別、設定パネル、日本語プリセット）へ移行。
+- Phase 2（音量メーター、チャンク処理フィードバック、is_final区別、設定パネル、日本語プリセット）も主要項目は実装済み。
+- 次の大きな候補は入力元音声の選択機能、または Rust/Tauri 化。
 
 **制約の継続遵守**:
 - 単一モデルメモリ制約厳守。
