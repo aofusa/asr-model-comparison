@@ -36,6 +36,8 @@ test('model selection works', async ({ page }) => {
 test('hardware acceleration setting is sent in websocket config', async ({ page }) => {
   await page.addInitScript(() => {
     (window as any).__lastWsConfig = null;
+    (window as any).__lastWsUrl = null;
+    (window as any).__TAURI_INTERNALS__ = {};
 
     class MockWebSocket {
       static CONNECTING = 0;
@@ -49,6 +51,7 @@ test('hardware acceleration setting is sent in websocket config', async ({ page 
       onmessage: ((ev: any) => void) | null = null;
 
       constructor(public url: string) {
+        (window as any).__lastWsUrl = url;
         setTimeout(() => {
           this.readyState = MockWebSocket.OPEN;
           this.onopen?.(new Event('open'));
@@ -123,6 +126,9 @@ test('hardware acceleration setting is sent in websocket config', async ({ page 
   await expect.poll(async () => page.evaluate(() => (window as any).__lastWsConfig?.hardware_accelerator), {
     timeout: 5000,
   }).toBe('gpu');
+  await expect.poll(async () => page.evaluate(() => (window as any).__lastWsUrl), {
+    timeout: 5000,
+  }).toBe('ws://127.0.0.1:8765/api/ws/transcribe');
 });
 
 test('compact top workflow controls are visible', async ({ page }) => {

@@ -27,6 +27,14 @@ function getMicrophoneUnavailableStatus(error?: unknown): string {
 type AudioSourceKind = 'microphone' | 'system' | 'window';
 type HardwareAcceleratorKind = 'auto' | 'gpu' | 'cpu';
 
+declare global {
+  interface Window {
+    __AMCP_API_BASE_URL__?: string;
+    __TAURI__?: unknown;
+    __TAURI_INTERNALS__?: unknown;
+  }
+}
+
 const audioSourceOptions: { value: AudioSourceKind; label: string; description: string }[] = [
   {
     value: 'microphone',
@@ -65,6 +73,35 @@ const hardwareAcceleratorOptions: { value: HardwareAcceleratorKind; label: strin
 
 function getAudioSourceLabel(source: AudioSourceKind): string {
   return audioSourceOptions.find((option) => option.value === source)?.label || 'Microphone';
+}
+
+function getApiBaseUrl(): string {
+  if (typeof window === 'undefined') {
+    return 'http://localhost:8000';
+  }
+
+  const configured = window.__AMCP_API_BASE_URL__?.trim();
+  if (configured) {
+    return configured.replace(/\/$/, '');
+  }
+
+  const runningInTauri =
+    Boolean(window.__TAURI__ || window.__TAURI_INTERNALS__) ||
+    window.location.protocol === 'tauri:' ||
+    window.location.hostname === 'tauri.localhost';
+
+  if (runningInTauri) {
+    return 'http://127.0.0.1:8765';
+  }
+
+  return window.location.origin || 'http://localhost:8000';
+}
+
+function getTranscribeWebSocketUrl(): string {
+  const apiBase = getApiBaseUrl();
+  const url = new URL('/api/ws/transcribe', apiBase);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString();
 }
 
 function getSharedAudioUnavailableStatus(source: AudioSourceKind, error?: unknown): string {
@@ -533,10 +570,9 @@ export default component$(() => {
       try { previousWs.close(); } catch {}
     }
 
-    // Dynamic WS URL so it works if served on non-8000 or via proxy (while keeping dev on :8000).
-    const wsProtocol = (typeof window !== 'undefined' && window.location.protocol === 'https:') ? 'wss:' : 'ws:';
-    const wsHost = (typeof window !== 'undefined' && window.location.host) ? window.location.host : 'localhost:8000';
-    const wsUrl = `${wsProtocol}//${wsHost}/api/ws/transcribe`;
+    // Dynamic WS URL so browser server mode, Tauri desktop, and mobile webviews
+    // can all route to the Rust API host that is actually running ASR.
+    const wsUrl = getTranscribeWebSocketUrl();
     console.log('[connectWebSocket] creating WS to', wsUrl);
     const ws = new WebSocket(wsUrl);
     refs.ws = noSerialize(ws);

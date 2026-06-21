@@ -13,7 +13,33 @@
   - `POST /api/transcribe`
   - `GET /api/ws/transcribe`
 - `auto` / `gpu` / `cpu` のアクセラレータ設定に対応しています。
+- Tauriデスクトップ/モバイル環境では、UIから同一アプリ内のRust APIサーバー (`http://127.0.0.1:8765`) へ接続します。
 - 実ASR推論本体はまだ軽量プレースホルダーです。`whisper-rs`、Qwen C FFI、ONNX Runtime連携用のfeature境界を先に用意しています。
+
+## Python版との機能網羅状況
+
+現時点のRust/Tauri版は、Python製バックエンドと既存フロントエンドの全機能を完全には網羅していません。
+
+実装済み:
+
+- 既存UIの主要WebSocket config契約
+- モデル一覧API
+- ステータスAPI
+- HTTP/WS文字起こしAPIのレスポンス形状
+- 単一モデルロード制約の管理
+- モデル準備進捗イベント
+- `auto` / `gpu` / `cpu` の選択と安全なCPUフォールバック
+- Tauriデスクトップ/モバイルWebViewからRust APIへ接続するための埋め込みサーバー
+- Android/iOS向けTauriビルドスクリプト
+
+未完了:
+
+- Whisper / Qwen3-ASR / Voxtral の実モデル推論
+- Python版と同等の音声前処理、無音判定、翻訳処理
+- 実モデルのダウンロード/ロード進捗
+- 実機GPU/Metal/CoreML/NNAPI/CUDA/Vulkanの可用性検出
+- Android/iOS実機でのマイク・画面音声取得制約の検証
+- Android/iOS向けの実モデルバイナリ、モデル配置、アプリサイズ最適化
 
 ## 必要な環境
 
@@ -42,6 +68,8 @@ npm run dev
 ```
 
 `npm run dev` はTauri開発モードを起動します。Tauri設定では `frontend/` のVite開発サーバーを利用します。
+
+Tauri環境では、アプリ起動時にRust APIサーバーが `127.0.0.1:8765` で起動し、UIのWebSocket通信は自動的にそのサーバーへ向きます。
 
 ### Rust serverモード
 
@@ -79,6 +107,52 @@ npm run build
 cd app
 cargo build --manifest-path src-tauri/Cargo.toml --bin amcp-server
 ```
+
+### Androidビルド
+
+初回のみAndroidプロジェクトを初期化します。
+
+```powershell
+cd app
+npm run android:init
+```
+
+開発実行:
+
+```powershell
+npm run android:dev
+```
+
+リリースビルド:
+
+```powershell
+npm run android:build
+```
+
+Androidでは、WhisperはVulkan優先、VoxtralはNNAPI -> Vulkan -> CPU、Qwen3-ASRはBLAS -> CPUの順で利用する設計です。実機でのアクセラレータ利用可否は端末、OS、ドライバ、ONNX Runtime/ネイティブ依存の組み込み状況に依存します。
+
+### iOSビルド
+
+初回のみiOSプロジェクトを初期化します。
+
+```bash
+cd app
+npm run ios:init
+```
+
+開発実行:
+
+```bash
+npm run ios:dev
+```
+
+リリースビルド:
+
+```bash
+npm run ios:build
+```
+
+iOSでは、WhisperはMetal優先、VoxtralはCoreML -> CPU、Qwen3-ASRはAccelerate/BLAS -> CPUの順で利用する設計です。iOSビルドにはmacOS、Xcode、iOS向けTauri前提環境が必要です。
 
 ## テスト方法
 
@@ -155,13 +229,19 @@ npm run test:e2e:headed
 - Whisper
   - Windows/Linux: CUDA -> Vulkan -> CPU
   - macOS: Metal -> Vulkan -> CPU
+  - iOS: Metal -> CPU
+  - Android: Vulkan -> CPU
 - Qwen3-ASR
   - macOS: Accelerate/BLAS -> CPU
   - Linux: OpenBLAS -> CPU
   - Windows: BLAS -> CPU
+  - iOS: Accelerate/BLAS -> CPU
+  - Android: BLAS -> CPU
 - Voxtral
   - Windows/Linux: CUDA -> CPU
   - macOS: CoreML -> CPU
+  - iOS: CoreML -> CPU
+  - Android: NNAPI -> Vulkan -> CPU
 
 ## 関連ドキュメント
 

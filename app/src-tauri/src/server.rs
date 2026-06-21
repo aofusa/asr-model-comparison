@@ -12,6 +12,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
 use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
@@ -42,6 +43,18 @@ pub fn default_available_backends() -> Vec<HardwareBackend> {
         "linux" => vec![
             HardwareBackend::Cuda,
             HardwareBackend::Vulkan,
+            HardwareBackend::Blas,
+            HardwareBackend::Cpu,
+        ],
+        "ios" => vec![
+            HardwareBackend::Metal,
+            HardwareBackend::CoreMl,
+            HardwareBackend::Blas,
+            HardwareBackend::Cpu,
+        ],
+        "android" => vec![
+            HardwareBackend::Vulkan,
+            HardwareBackend::NnApi,
             HardwareBackend::Blas,
             HardwareBackend::Cpu,
         ],
@@ -82,6 +95,33 @@ pub async fn run(config: AppConfig) -> anyhow::Result<()> {
     tracing::info!("AMCP Rust server listening on http://{addr}");
     axum::serve(listener, router(config)).await?;
     Ok(())
+}
+
+pub fn spawn_embedded_server(
+    port: u16,
+    accelerator: AcceleratorPreference,
+) -> anyhow::Result<SocketAddr> {
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    std::thread::Builder::new()
+        .name("amcp-embedded-server".to_string())
+        .spawn(move || {
+            let runtime = tokio::runtime::Runtime::new()
+                .expect("failed to create embedded AMCP server runtime");
+            runtime.block_on(async move {
+                if let Err(error) = run(AppConfig {
+                    mode: crate::config::RunMode::Desktop,
+                    host: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                    port,
+                    accelerator,
+                    static_dir: None,
+                })
+                .await
+                {
+                    tracing::error!("embedded AMCP server failed: {error}");
+                }
+            });
+        })?;
+    Ok(addr)
 }
 
 async fn health() -> Json<serde_json::Value> {

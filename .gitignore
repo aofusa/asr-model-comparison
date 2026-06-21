@@ -91,6 +91,7 @@ frontend/test-results/
 app/playwright-report/
 app/test-results/
 app/src-tauri/target/
+app/src-tauri/gen/schemas/
 
 # Generated frontend build copied for backend serving
 backend/static/

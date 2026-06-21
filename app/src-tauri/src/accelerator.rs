@@ -65,13 +65,17 @@ pub enum HardwareBackend {
     Metal,
     CoreMl,
     Vulkan,
+    NnApi,
     Blas,
     Cpu,
 }
 
 impl HardwareBackend {
-    pub fn is_gpu(self) -> bool {
-        matches!(self, Self::Cuda | Self::Metal | Self::CoreMl | Self::Vulkan)
+    pub fn is_accelerated(self) -> bool {
+        matches!(
+            self,
+            Self::Cuda | Self::Metal | Self::CoreMl | Self::Vulkan | Self::NnApi
+        )
     }
 }
 
@@ -82,6 +86,7 @@ impl fmt::Display for HardwareBackend {
             Self::Metal => "metal",
             Self::CoreMl => "coreml",
             Self::Vulkan => "vulkan",
+            Self::NnApi => "nnapi",
             Self::Blas => "blas",
             Self::Cpu => "cpu",
         };
@@ -138,11 +143,19 @@ fn prioritized_plan(
     family: ModelFamily,
     preference: AcceleratorPreference,
 ) -> Vec<HardwareBackend> {
+    prioritized_plan_for_os(std::env::consts::OS, family, preference)
+}
+
+fn prioritized_plan_for_os(
+    os: &str,
+    family: ModelFamily,
+    preference: AcceleratorPreference,
+) -> Vec<HardwareBackend> {
     if preference == AcceleratorPreference::Cpu {
         return vec![HardwareBackend::Cpu];
     }
 
-    let mut plan = match (std::env::consts::OS, family) {
+    let mut plan = match (os, family) {
         ("macos", ModelFamily::Whisper) => vec![
             HardwareBackend::Metal,
             HardwareBackend::Vulkan,
@@ -164,13 +177,23 @@ fn prioritized_plan(
         ],
         ("linux", ModelFamily::Qwen3) => vec![HardwareBackend::Blas, HardwareBackend::Cpu],
         ("linux", ModelFamily::Voxtral) => vec![HardwareBackend::Cuda, HardwareBackend::Cpu],
+        ("ios", ModelFamily::Whisper) => vec![HardwareBackend::Metal, HardwareBackend::Cpu],
+        ("ios", ModelFamily::Qwen3) => vec![HardwareBackend::Blas, HardwareBackend::Cpu],
+        ("ios", ModelFamily::Voxtral) => vec![HardwareBackend::CoreMl, HardwareBackend::Cpu],
+        ("android", ModelFamily::Whisper) => vec![HardwareBackend::Vulkan, HardwareBackend::Cpu],
+        ("android", ModelFamily::Qwen3) => vec![HardwareBackend::Blas, HardwareBackend::Cpu],
+        ("android", ModelFamily::Voxtral) => vec![
+            HardwareBackend::NnApi,
+            HardwareBackend::Vulkan,
+            HardwareBackend::Cpu,
+        ],
         (_, ModelFamily::Whisper) => vec![HardwareBackend::Vulkan, HardwareBackend::Cpu],
         (_, ModelFamily::Qwen3) => vec![HardwareBackend::Blas, HardwareBackend::Cpu],
         (_, ModelFamily::Voxtral) => vec![HardwareBackend::Cpu],
     };
 
     if preference == AcceleratorPreference::Gpu {
-        plan.retain(|backend| backend.is_gpu() || *backend == HardwareBackend::Cpu);
+        plan.retain(|backend| backend.is_accelerated() || *backend == HardwareBackend::Cpu);
         if !plan.contains(&HardwareBackend::Cpu) {
             plan.push(HardwareBackend::Cpu);
         }
@@ -203,5 +226,33 @@ mod tests {
         assert_eq!(selected.selected, HardwareBackend::Cpu);
         assert!(selected.fallback_used);
         assert!(selected.attempted.contains(&HardwareBackend::Cpu));
+    }
+
+    #[test]
+    fn ios_prefers_metal_and_coreml() {
+        assert_eq!(
+            prioritized_plan_for_os("ios", ModelFamily::Whisper, AcceleratorPreference::Auto),
+            vec![HardwareBackend::Metal, HardwareBackend::Cpu]
+        );
+        assert_eq!(
+            prioritized_plan_for_os("ios", ModelFamily::Voxtral, AcceleratorPreference::Auto),
+            vec![HardwareBackend::CoreMl, HardwareBackend::Cpu]
+        );
+    }
+
+    #[test]
+    fn android_prefers_vulkan_or_nnapi() {
+        assert_eq!(
+            prioritized_plan_for_os("android", ModelFamily::Whisper, AcceleratorPreference::Auto),
+            vec![HardwareBackend::Vulkan, HardwareBackend::Cpu]
+        );
+        assert_eq!(
+            prioritized_plan_for_os("android", ModelFamily::Voxtral, AcceleratorPreference::Auto),
+            vec![
+                HardwareBackend::NnApi,
+                HardwareBackend::Vulkan,
+                HardwareBackend::Cpu
+            ]
+        );
     }
 }
