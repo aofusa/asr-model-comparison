@@ -1,0 +1,21 @@
+{
+  "name": "amcp-tauri-app",
+  "version": "0.1.0",
+  "description": "Rust + Tauri rewrite of ASR Model Comparison Platform",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "server": "cargo run --manifest-path src-tauri/Cargo.toml --bin amcp-server -- server",
+    "server:local": "cargo run --manifest-path src-tauri/Cargo.toml --bin amcp-server -- server --host 127.0.0.1 --port 8000",
+    "test": "npm run test:rust && npm run test:e2e",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}
