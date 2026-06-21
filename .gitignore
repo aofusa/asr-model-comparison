@@ -43,7 +43,6 @@ coverage.xml
 .pytest_cache/
 
 # ASR / ML Model caches (very large - do not commit)
-# Only match cache directories, not our source app/models/
 **/model_cache/
 **/models/*.bin
 **/models/*.safetensors
@@ -56,6 +55,7 @@ faster-whisper/
 __pycache__/
 *.pt
 *.pth
+
 # Explicitly allow our Pydantic models directory
 !backend/app/models/
 !backend/app/models/*.py
@@ -88,6 +88,10 @@ docs/artifact/
 # Playwright generated artifacts
 frontend/playwright-report/
 frontend/test-results/
+app/playwright-report/
+app/test-results/
+app/src-tauri/target/
+app/src-tauri/gen/schemas/
 
 # Generated frontend build copied for backend serving
 backend/static/

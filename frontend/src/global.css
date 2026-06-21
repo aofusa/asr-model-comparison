@@ -405,7 +405,7 @@ button:disabled {
 }
 
 .settings-controls select {
-  max-width: 160px;
+  max-width: 220px;
   background: #0f172a;
   border: 1px solid #475569;
   border-radius: 999px;

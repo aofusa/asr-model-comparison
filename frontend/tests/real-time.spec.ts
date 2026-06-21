@@ -33,6 +33,105 @@ test('model selection works', async ({ page }) => {
   await expect(voxtralRadio).toBeChecked();
 });
 
+test('hardware acceleration setting is sent in websocket config', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).__lastWsConfig = null;
+    (window as any).__lastWsUrl = null;
+    (window as any).__TAURI_INTERNALS__ = {};
+
+    class MockWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+
+      readyState = MockWebSocket.CONNECTING;
+      onopen: ((ev: any) => void) | null = null;
+      onclose: ((ev: any) => void) | null = null;
+      onmessage: ((ev: any) => void) | null = null;
+
+      constructor(public url: string) {
+        (window as any).__lastWsUrl = url;
+        setTimeout(() => {
+          this.readyState = MockWebSocket.OPEN;
+          this.onopen?.(new Event('open'));
+        }, 0);
+      }
+
+      send(data: any) {
+        if (typeof data !== 'string') return;
+        const parsed = JSON.parse(data);
+        if (parsed.type === 'config') {
+          (window as any).__lastWsConfig = parsed;
+          setTimeout(() => {
+            this.onmessage?.(new MessageEvent('message', {
+              data: JSON.stringify({
+                type: 'ready',
+                model_id: parsed.model_id,
+                accelerator: parsed.accelerator,
+              }),
+            }));
+          }, 0);
+        }
+      }
+
+      close() {
+        this.readyState = MockWebSocket.CLOSED;
+        this.onclose?.(new CloseEvent('close'));
+      }
+
+      addEventListener() {}
+      removeEventListener() {}
+      dispatchEvent() { return true; }
+    }
+
+    class MockMediaRecorder {
+      ondataavailable: ((ev: any) => void) | null = null;
+      stream: any;
+
+      constructor(stream: any) {
+        this.stream = stream;
+      }
+
+      start() {}
+      stop() {}
+    }
+
+    const mediaStream = {
+      getAudioTracks: () => [{ kind: 'audio', stop: () => {} }],
+      getTracks: () => [{ kind: 'audio', stop: () => {} }],
+    };
+
+    // @ts-ignore - replace browser APIs for deterministic config test
+    (window as any).WebSocket = MockWebSocket;
+    // @ts-ignore
+    (window as any).MediaRecorder = MockMediaRecorder;
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: async () => mediaStream,
+      },
+    });
+  });
+
+  await page.goto('/');
+  await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
+
+  await openAdvancedSettings(page);
+  await page.getByTestId('hardware-accelerator-select').selectOption('gpu');
+  await page.getByTestId('start-recording').click();
+
+  await expect.poll(async () => page.evaluate(() => (window as any).__lastWsConfig?.accelerator), {
+    timeout: 5000,
+  }).toBe('gpu');
+  await expect.poll(async () => page.evaluate(() => (window as any).__lastWsConfig?.hardware_accelerator), {
+    timeout: 5000,
+  }).toBe('gpu');
+  await expect.poll(async () => page.evaluate(() => (window as any).__lastWsUrl), {
+    timeout: 5000,
+  }).toBe('ws://127.0.0.1:8765/api/ws/transcribe');
+});
+
 test('compact top workflow controls are visible', async ({ page }) => {
   await page.goto('/');
 
@@ -42,6 +141,10 @@ test('compact top workflow controls are visible', async ({ page }) => {
   await expect(page.getByTestId('language-select')).toBeVisible();
   await expect(page.getByTestId('translation-target-select')).toBeVisible();
   await expect(page.locator('details.advanced-settings summary')).toContainText('Advanced settings');
+  await expect(page.getByTestId('hardware-accelerator-select')).toBeHidden();
+
+  await openAdvancedSettings(page);
+  await expect(page.getByTestId('hardware-accelerator-select')).toBeVisible();
 });
 
 test('audio source selection uses display media for window/app capture', async ({ page }) => {

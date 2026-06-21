@@ -25,6 +25,15 @@ function getMicrophoneUnavailableStatus(error?: unknown): string {
 }
 
 type AudioSourceKind = 'microphone' | 'system' | 'window';
+type HardwareAcceleratorKind = 'auto' | 'gpu' | 'cpu';
+
+declare global {
+  interface Window {
+    __AMCP_API_BASE_URL__?: string;
+    __TAURI__?: unknown;
+    __TAURI_INTERNALS__?: unknown;
+  }
+}
 
 const audioSourceOptions: { value: AudioSourceKind; label: string; description: string }[] = [
   {
@@ -44,8 +53,55 @@ const audioSourceOptions: { value: AudioSourceKind; label: string; description: 
   },
 ];
 
+const hardwareAcceleratorOptions: { value: HardwareAcceleratorKind; label: string; description: string }[] = [
+  {
+    value: 'auto',
+    label: 'Auto (prefer GPU)',
+    description: 'Use CUDA, Metal, CoreML, Vulkan, or BLAS when available, then fall back safely.',
+  },
+  {
+    value: 'gpu',
+    label: 'GPU first',
+    description: 'Require a GPU-first attempt, with CPU fallback if no accelerator is usable.',
+  },
+  {
+    value: 'cpu',
+    label: 'CPU only',
+    description: 'Skip GPU accelerators for predictable compatibility.',
+  },
+];
+
 function getAudioSourceLabel(source: AudioSourceKind): string {
   return audioSourceOptions.find((option) => option.value === source)?.label || 'Microphone';
+}
+
+function getApiBaseUrl(): string {
+  if (typeof window === 'undefined') {
+    return 'http://localhost:8000';
+  }
+
+  const configured = window.__AMCP_API_BASE_URL__?.trim();
+  if (configured) {
+    return configured.replace(/\/$/, '');
+  }
+
+  const runningInTauri =
+    Boolean(window.__TAURI__ || window.__TAURI_INTERNALS__) ||
+    window.location.protocol === 'tauri:' ||
+    window.location.hostname === 'tauri.localhost';
+
+  if (runningInTauri) {
+    return 'http://127.0.0.1:8765';
+  }
+
+  return window.location.origin || 'http://localhost:8000';
+}
+
+function getTranscribeWebSocketUrl(): string {
+  const apiBase = getApiBaseUrl();
+  const url = new URL('/api/ws/transcribe', apiBase);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString();
 }
 
 function getSharedAudioUnavailableStatus(source: AudioSourceKind, error?: unknown): string {
@@ -343,6 +399,7 @@ export default component$(() => {
   const selectedLanguage = useSignal('auto');
   const translationTarget = useSignal('none');
   const selectedAudioSource = useSignal<AudioSourceKind>('microphone');
+  const selectedHardwareAccelerator = useSignal<HardwareAcceleratorKind>('auto');
 
   // A: localStorage persistence for settings
   const SETTINGS_KEY = 'asr-settings-v1';
@@ -358,6 +415,7 @@ export default component$(() => {
         selectedLanguage: selectedLanguage.value,
         translationTarget: translationTarget.value,
         selectedAudioSource: selectedAudioSource.value,
+        selectedHardwareAccelerator: selectedHardwareAccelerator.value,
       }));
     } catch {}
   });
@@ -414,6 +472,9 @@ export default component$(() => {
         if (typeof saved.translationTarget === 'string') translationTarget.value = saved.translationTarget;
         if (['microphone', 'system', 'window'].includes(saved.selectedAudioSource)) {
           selectedAudioSource.value = saved.selectedAudioSource;
+        }
+        if (['auto', 'gpu', 'cpu'].includes(saved.selectedHardwareAccelerator)) {
+          selectedHardwareAccelerator.value = saved.selectedHardwareAccelerator;
         }
       }
     } catch {}
@@ -509,10 +570,9 @@ export default component$(() => {
       try { previousWs.close(); } catch {}
     }
 
-    // Dynamic WS URL so it works if served on non-8000 or via proxy (while keeping dev on :8000).
-    const wsProtocol = (typeof window !== 'undefined' && window.location.protocol === 'https:') ? 'wss:' : 'ws:';
-    const wsHost = (typeof window !== 'undefined' && window.location.host) ? window.location.host : 'localhost:8000';
-    const wsUrl = `${wsProtocol}//${wsHost}/api/ws/transcribe`;
+    // Dynamic WS URL so browser server mode, Tauri desktop, and mobile webviews
+    // can all route to the Rust API host that is actually running ASR.
+    const wsUrl = getTranscribeWebSocketUrl();
     console.log('[connectWebSocket] creating WS to', wsUrl);
     const ws = new WebSocket(wsUrl);
     refs.ws = noSerialize(ws);
@@ -549,6 +609,8 @@ export default component$(() => {
         use_dedicated_class: useDedicatedClass.value,
         return_timestamps: true,
         audio_source: selectedAudioSource.value,
+        accelerator: selectedHardwareAccelerator.value,
+        hardware_accelerator: selectedHardwareAccelerator.value,
       };
 
       // Critical for real-time: send accumulated context on reconnect
@@ -1098,6 +1160,8 @@ export default component$(() => {
         if (languageSelect) languageSelect.value = selectedLanguage.value;
         const translationSelect = document.querySelector('[data-testid="translation-target-select"]') as HTMLSelectElement | null;
         if (translationSelect) translationSelect.value = translationTarget.value;
+        const acceleratorSelect = document.querySelector('[data-testid="hardware-accelerator-select"]') as HTMLSelectElement | null;
+        if (acceleratorSelect) acceleratorSelect.value = selectedHardwareAccelerator.value;
         const audioRadio = document.querySelector(`input[name="audio-source"][value="${selectedAudioSource.value}"]`) as HTMLInputElement | null;
         if (audioRadio) audioRadio.checked = true;
       };
@@ -1311,6 +1375,15 @@ export default component$(() => {
             return;
           }
 
+          if (target.matches('[data-testid="hardware-accelerator-select"]')) {
+            const value = (target as HTMLSelectElement).value;
+            if (['auto', 'gpu', 'cpu'].includes(value)) {
+              selectedHardwareAccelerator.value = value as HardwareAcceleratorKind;
+              saveFn();
+            }
+            return;
+          }
+
           if (target.matches('input[name="audio-source"]')) {
             const radio = target as HTMLInputElement;
             if (radio.checked && ['microphone', 'system', 'window'].includes(radio.value)) {
@@ -1387,6 +1460,14 @@ export default component$(() => {
       if (languageSelect) languageSelect.addEventListener('change', (e: any) => { selectedLanguage.value = (e.target as HTMLSelectElement).value; saveFn(); });
       const translationSelect = document.querySelector('[data-testid="translation-target-select"]');
       if (translationSelect) translationSelect.addEventListener('change', (e: any) => { translationTarget.value = (e.target as HTMLSelectElement).value; saveFn(); });
+      const acceleratorSelect = document.querySelector('[data-testid="hardware-accelerator-select"]');
+      if (acceleratorSelect) acceleratorSelect.addEventListener('change', (e: any) => {
+        const value = (e.target as HTMLSelectElement).value;
+        if (['auto', 'gpu', 'cpu'].includes(value)) {
+          selectedHardwareAccelerator.value = value as HardwareAcceleratorKind;
+          saveFn();
+        }
+      });
       document.querySelectorAll('input[name="audio-source"]').forEach((r) => {
         r.addEventListener('change', (e: any) => {
           const t = e.target as HTMLInputElement;
@@ -1491,6 +1572,7 @@ export default component$(() => {
                   ))}
                 </select>
               </label>
+
             </div>
 
             <details class="advanced-settings">
@@ -1517,6 +1599,25 @@ export default component$(() => {
               </div>
 
               <div class="settings-controls">
+                <label>
+                  Hardware Acceleration
+                  <select
+                    data-testid="hardware-accelerator-select"
+                    value={selectedHardwareAccelerator.value}
+                    onChange$={(e) => {
+                      const value = (e.target as HTMLSelectElement).value;
+                      if (['auto', 'gpu', 'cpu'].includes(value)) {
+                        selectedHardwareAccelerator.value = value as HardwareAcceleratorKind;
+                        saveSettings();
+                      }
+                    }}
+                  >
+                    {hardwareAcceleratorOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+
                 <label>
                   Beam Size
                   <input type="number" min="1" max="10" value={beamSize.value}
