@@ -21,6 +21,9 @@ const VOXTRAL_AUDIO_TOKEN_ID: i64 = 24;
 const VOXTRAL_BEGIN_AUDIO_TOKEN_ID: i64 = 25;
 #[cfg(feature = "voxtral")]
 const VOXTRAL_TRANSCRIBE_TOKEN_ID: i64 = 34;
+#[cfg(feature = "voxtral")]
+const VOXTRAL_SUPPORTED_TRANSCRIPTION_LANGUAGES: &[&str] =
+    &["en", "fr", "de", "es", "it", "pt", "nl", "hi"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VoxtralOnnxConfig {
@@ -343,6 +346,7 @@ pub fn transcribe_voxtral_audio(
     previous_text: Option<&str>,
     available_backends: &[HardwareBackend],
 ) -> Result<Option<VoxtralOnnxTranscription>, String> {
+    validate_voxtral_transcription_language(language)?;
     let _ = ensure_default_voxtral_model_cached()?;
     let Some(config) = configure_voxtral_onnx(available_backends) else {
         return Ok(None);
@@ -470,25 +474,25 @@ fn build_voxtral_transcription_prompt_tokens(
     audio_frames: usize,
     language: Option<&str>,
 ) -> Result<Vec<i64>, String> {
-    let language_tokens = normalize_transcription_language(language)
-        .map(|language| encode_prompt_text(tokenizer, &format!("lang:{language}")))
-        .transpose()?
-        .unwrap_or_default();
-    Ok(build_voxtral_transcription_prompt_from_language_tokens(
+    let instruction_tokens = if let Some(language) = normalize_transcription_language(language) {
+        encode_prompt_text(tokenizer, &format!("lang:{language} [TRANSCRIBE]"))?
+    } else {
+        vec![VOXTRAL_TRANSCRIBE_TOKEN_ID]
+    };
+    Ok(build_voxtral_transcription_prompt_from_instruction_tokens(
         audio_frames,
-        &language_tokens,
+        &instruction_tokens,
     ))
 }
 
 #[cfg(feature = "voxtral")]
-fn build_voxtral_transcription_prompt_from_language_tokens(
+fn build_voxtral_transcription_prompt_from_instruction_tokens(
     audio_frames: usize,
-    language_tokens: &[i64],
+    instruction_tokens: &[i64],
 ) -> Vec<i64> {
     let mut prompt_tokens = build_voxtral_audio_inst_prefix(audio_frames);
+    prompt_tokens.extend_from_slice(instruction_tokens);
     prompt_tokens.push(VOXTRAL_INST_END_TOKEN_ID);
-    prompt_tokens.extend_from_slice(language_tokens);
-    prompt_tokens.push(VOXTRAL_TRANSCRIBE_TOKEN_ID);
     prompt_tokens
 }
 
@@ -533,6 +537,20 @@ fn normalize_transcription_language(language: Option<&str>) -> Option<String> {
         "chinese" => "zh".to_string(),
         other => other.to_string(),
     })
+}
+
+#[cfg(feature = "voxtral")]
+fn validate_voxtral_transcription_language(language: Option<&str>) -> Result<(), String> {
+    let Some(language) = normalize_transcription_language(language) else {
+        return Ok(());
+    };
+    if VOXTRAL_SUPPORTED_TRANSCRIPTION_LANGUAGES.contains(&language.as_str()) {
+        return Ok(());
+    }
+    Err(format!(
+        "Voxtral Mini ONNX transcription does not support language '{language}'. Supported languages are: {}. Use Qwen3-ASR for Japanese transcription.",
+        VOXTRAL_SUPPORTED_TRANSCRIPTION_LANGUAGES.join(", ")
+    ))
 }
 
 #[cfg(feature = "voxtral")]
@@ -736,7 +754,13 @@ fn encode_audio_embeddings(
         let outputs = session
             .run(ort::inputs![input_name => input_tensor])
             .map_err(|error| format!("Voxtral audio encoder inference failed: {error}"))?;
-        let (shape, data) = outputs[0]
+        if outputs.len() == 0 {
+            return Err("Voxtral audio encoder returned no outputs".to_string());
+        }
+        let output = outputs
+            .get("pooler_output")
+            .unwrap_or_else(|| &outputs[outputs.len().saturating_sub(1)]);
+        let (shape, data) = output
             .try_extract_tensor::<f32>()
             .map_err(|error| format!("failed to read Voxtral audio embeddings: {error}"))?;
         let dims = shape.iter().map(|dim| *dim as usize).collect::<Vec<_>>();
@@ -824,9 +848,9 @@ fn generate_tokens(
         .ok_or_else(|| "invalid Voxtral prompt embedding length".to_string())?;
     let mut generated = Vec::new();
     let mut past_cache: Option<Vec<(Vec<usize>, Vec<f32>)>> = None;
-    // ONNX Runtime requires all tensor dimensions to be >= 1, so the physical
-    // cache starts with a masked dummy token while logical positions still
-    // begin at zero.
+    // ONNX Runtime cannot create a raw tensor with a zero-length dimension, so
+    // the first call uses a masked dummy cache entry while logical token
+    // positions still start at zero.
     let mut physical_past_len = 1usize;
     let mut logical_past_len = 0usize;
 
@@ -1111,7 +1135,10 @@ mod tests {
     #[cfg(feature = "voxtral")]
     #[test]
     fn transcription_prompt_uses_voxtral_transcribe_mode() {
-        let prompt = build_voxtral_transcription_prompt_from_language_tokens(3, &[9909, 1058, 123]);
+        let prompt = build_voxtral_transcription_prompt_from_instruction_tokens(
+            3,
+            &[9909, 1058, 2922, 1032, VOXTRAL_TRANSCRIBE_TOKEN_ID],
+        );
 
         assert_eq!(
             prompt,
@@ -1122,11 +1149,12 @@ mod tests {
                 VOXTRAL_AUDIO_TOKEN_ID,
                 VOXTRAL_AUDIO_TOKEN_ID,
                 VOXTRAL_AUDIO_TOKEN_ID,
-                VOXTRAL_INST_END_TOKEN_ID,
                 9909,
                 1058,
-                123,
+                2922,
+                1032,
                 VOXTRAL_TRANSCRIBE_TOKEN_ID,
+                VOXTRAL_INST_END_TOKEN_ID,
             ]
         );
     }
@@ -1134,7 +1162,10 @@ mod tests {
     #[cfg(feature = "voxtral")]
     #[test]
     fn transcription_prompt_allows_language_auto_detect() {
-        let prompt = build_voxtral_transcription_prompt_from_language_tokens(1, &[]);
+        let prompt = build_voxtral_transcription_prompt_from_instruction_tokens(
+            1,
+            &[VOXTRAL_TRANSCRIBE_TOKEN_ID],
+        );
 
         assert_eq!(
             prompt,
@@ -1143,8 +1174,8 @@ mod tests {
                 VOXTRAL_INST_START_TOKEN_ID,
                 VOXTRAL_BEGIN_AUDIO_TOKEN_ID,
                 VOXTRAL_AUDIO_TOKEN_ID,
-                VOXTRAL_INST_END_TOKEN_ID,
                 VOXTRAL_TRANSCRIBE_TOKEN_ID,
+                VOXTRAL_INST_END_TOKEN_ID,
             ]
         );
     }
@@ -1154,6 +1185,17 @@ mod tests {
     fn dummy_cache_attention_mask_hides_seed_token() {
         assert_eq!(build_voxtral_attention_mask(4, true), vec![0, 1, 1, 1]);
         assert_eq!(build_voxtral_attention_mask(4, false), vec![1, 1, 1, 1]);
+    }
+
+    #[cfg(feature = "voxtral")]
+    #[test]
+    fn transcription_language_guard_rejects_japanese_for_voxtral() {
+        assert!(validate_voxtral_transcription_language(Some("auto")).is_ok());
+        assert!(validate_voxtral_transcription_language(Some("en")).is_ok());
+
+        let error = validate_voxtral_transcription_language(Some("ja")).unwrap_err();
+        assert!(error.contains("does not support language 'ja'"));
+        assert!(error.contains("Use Qwen3-ASR for Japanese transcription"));
     }
 
     #[cfg(feature = "voxtral")]
