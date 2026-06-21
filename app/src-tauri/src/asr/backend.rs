@@ -1,4 +1,5 @@
 use crate::accelerator::{HardwareBackend, ModelFamily};
+use crate::asr::voxtral_onnx;
 use crate::models::{available_models, family_for_model};
 use serde::{Deserialize, Serialize};
 
@@ -136,12 +137,12 @@ fn voxtral_status(
     available_backends: &[HardwareBackend],
 ) -> RuntimeBackendStatus {
     let configured = cfg!(feature = "voxtral");
-    let onnx_configured = env_any(&[
-        "AMCP_VOXTRAL_ONNX_MODEL_PATH",
-        "AMCP_VOXTRAL_MODEL_DIR",
-        "ORT_DYLIB_PATH",
-    ]);
-    let real_inference_available = configured && onnx_configured;
+    let onnx_config = voxtral_onnx::configure_voxtral_onnx(available_backends);
+    let model_file_available = onnx_config
+        .as_ref()
+        .map(|config| config.model_path.is_file())
+        .unwrap_or(false);
+    let real_inference_available = configured && model_file_available;
     RuntimeBackendStatus {
         model_id: model_id.to_string(),
         family,
@@ -152,20 +153,26 @@ fn voxtral_status(
         },
         real_inference_available,
         configured,
-        selected_accelerators: filter_backends(
-            available_backends,
-            &[
-                HardwareBackend::Cuda,
-                HardwareBackend::CoreMl,
-                HardwareBackend::NnApi,
-                HardwareBackend::Vulkan,
-                HardwareBackend::Cpu,
-            ],
-        ),
+        selected_accelerators: onnx_config
+            .as_ref()
+            .map(|config| config.providers.clone())
+            .unwrap_or_else(|| {
+                filter_backends(
+                    available_backends,
+                    &[
+                        HardwareBackend::Cuda,
+                        HardwareBackend::DirectMl,
+                        HardwareBackend::CoreMl,
+                        HardwareBackend::NnApi,
+                        HardwareBackend::Vulkan,
+                        HardwareBackend::Cpu,
+                    ],
+                )
+            }),
         reason: if real_inference_available {
-            "voxtral feature and ONNX/ORT paths are configured.".to_string()
+            "voxtral feature is enabled and a Voxtral ONNX model file is configured.".to_string()
         } else if configured {
-            "voxtral feature is enabled, but AMCP_VOXTRAL_ONNX_MODEL_PATH/AMCP_VOXTRAL_MODEL_DIR/ORT_DYLIB_PATH is not configured."
+            "voxtral feature is enabled, but AMCP_VOXTRAL_ONNX_MODEL_PATH or AMCP_VOXTRAL_MODEL_DIR/model.onnx does not point to an existing model file."
                 .to_string()
         } else {
             "voxtral feature is not enabled; using placeholder inference.".to_string()

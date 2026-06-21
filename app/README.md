@@ -41,6 +41,7 @@
 - Qwen3-ASR向けのCUDA/DirectML/Metal/CoreML/Vulkan/WGPU/OpenVINO/NNAPI/BLAS優先戦略
 - `/api/status`とWS応答でのランタイムバックエンド状態 (`whisper-rs` / `qwen-c` / `voxtral-onnx` / `placeholder`) の可視化
 - Qwen3-ASR C FFI / Voxtral ONNX のfeature境界と設定検証 (`AMCP_QWEN_*`、`AMCP_VOXTRAL_*`、`ORT_DYLIB_PATH`)
+- Voxtral ONNX Runtimeセッション初期化、入出力メタデータ取得、DirectML/CUDA featureコンパイル
 - Tauriデスクトップ/モバイルWebViewからRust APIへ接続するための埋め込みサーバー
 - Android/iOS向けTauriビルドスクリプト
 
@@ -49,7 +50,7 @@
 - Qwen3-ASR / Voxtral の実モデル推論
 - Python版と同等の実翻訳モデル推論
 - 実モデルの詳細なダウンロード/ロード進捗
-- Qwen3-ASR C FFI / Voxtral ONNX の実推論本体とアクセラレータ初期化
+- Qwen3-ASR C FFIの実推論本体、Voxtral ONNXの入力テンソル生成/出力デコード処理
 - Android/iOS実機でのマイク・画面音声取得制約の検証
 - Android/iOS向けの実モデルバイナリ、モデル配置、アプリサイズ最適化
 
@@ -142,6 +143,28 @@ npm run server:whisper:cuda
 
 対象モデルのダウンロードURLを解決できない場合、アプリは開発用プレースホルダー推論へ安全にフォールバックします。
 
+### Voxtral ONNX初期化
+
+Voxtralは `ort` / ONNX Runtime のfeature付きでセッション初期化に対応しています。現段階ではONNXモデルのロード、Execution Provider登録、入出力メタデータ取得までを実装しています。
+
+```powershell
+$env:AMCP_VOXTRAL_ONNX_MODEL_PATH="C:\models\voxtral\model.onnx"
+cd app
+npm run server:voxtral
+```
+
+WindowsでDirectMLまたはCUDAを優先する場合:
+
+```powershell
+# DirectML
+npm run server:voxtral:directml
+
+# CUDA
+npm run server:voxtral:cuda
+```
+
+`AMCP_VOXTRAL_MODEL_DIR` を指定した場合は、その配下の `model.onnx` を参照します。ONNX Runtimeの動的ライブラリを手動指定する場合は `ORT_DYLIB_PATH` を設定してください。
+
 ## ビルド方法
 
 ### Tauriアプリをビルド
@@ -231,6 +254,14 @@ Whisper featureのコンパイル確認:
 
 ```powershell
 npm run test:whisper:compile
+```
+
+Voxtral ONNX featureのコンパイル確認:
+
+```powershell
+npm run test:voxtral:compile
+npm run test:voxtral:directml:compile
+npm run test:voxtral:cuda:compile
 ```
 
 主に以下を検証します。

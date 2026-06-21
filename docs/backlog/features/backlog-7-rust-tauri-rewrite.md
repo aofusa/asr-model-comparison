@@ -76,11 +76,12 @@ Tauriデスクトップ/モバイルでは、WebViewから同一アプリ内Rust
 - `whisper-rs` feature有効時に、環境変数で指定したwhisper.cpp互換モデルを使うWhisper実推論を追加済み。
 - Whisperモデルのローカルキャッシュ確認と自動ダウンロードを追加済み。
 - `/api/status`とWS応答でランタイムバックエンド状態を返し、Qwen3-ASR C FFI / Voxtral ONNX のfeature境界と設定検証を追加済み。
+- Voxtral ONNX Runtimeセッション初期化、入出力メタデータ取得、DirectML/CUDA featureコンパイルを追加済み。
 - 翻訳レスポンス契約と、日本語->英語翻訳前の小さい日本語数字正規化をRustで追加済み。
 - 実モデル統合はfeature境界を定義済み。各ネイティブ依存のCI整備後に有効化する。
 
 ## 未完了・残タスク
 
 - Qwen3-ASR / Voxtral の実ASR推論、実翻訳モデル推論は未実装。
-- 実モデルの詳細なダウンロード/ロード進捗、Qwen3-ASR C FFI / Voxtral ONNX の実推論本体とアクセラレータ初期化は未実装。
+- 実モデルの詳細なダウンロード/ロード進捗、Qwen3-ASR C FFI の実推論本体、Voxtral ONNX の入力テンソル生成/出力デコード処理は未実装。
 - Android/iOS実機でのマイク/共有音声取得、モデル配置、バイナリサイズ、権限設定の検証が必要。
