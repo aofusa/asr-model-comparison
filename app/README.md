@@ -171,6 +171,8 @@ npm run server:qwen:cuda
 
 Voxtralは `ort` feature付きで、分割ONNXモデル (`audio_encoder.onnx`、`embed_tokens.onnx`、`decoder_model_merged.onnx`) と `tokenizer.json` を組み合わせた実推論に対応しています。Rust側で30秒チャンクのlog-mel特徴量を生成し、音声埋め込みをプロンプトへ差し込んで、KV cache付き自己回帰デコードを実行します。`target_language` 指定時は同じONNXセッションで翻訳指示プロンプトを追加実行します。WindowsではDirectMLを優先し、CUDA環境ではCUDA featureも利用できます。
 
+Voxtral Rust実装は Python backend の `mistralai/Voxtral-Mini-3B-2507` Transformers checkpoint ではなく、`onnx-community` 系の分割ONNX成果物を使います。そのため Python backend の Hugging Face Hub キャッシュとは同じファイルを共有できず、`AMCP_VOXTRAL_MODEL_DIR` または `AMCP_MODEL_DIR\voxtral` 配下のONNX一式が必要です。
+
 ```powershell
 $env:AMCP_VOXTRAL_MODEL_DIR="C:\models\voxtral"
 cd app
