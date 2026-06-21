@@ -1,5 +1,7 @@
 use super::audio::PreprocessedAudio;
 use super::TranscriptionOptions;
+use crate::accelerator::HardwareBackend;
+use crate::asr::qwen_ffi;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,9 +14,13 @@ pub struct BackendTranscription {
 pub fn try_transcribe_real(
     audio: &PreprocessedAudio,
     options: &TranscriptionOptions,
+    available_backends: &[HardwareBackend],
 ) -> Result<Option<BackendTranscription>, String> {
     if options.model_id.starts_with("whisper") {
         return try_transcribe_whisper(audio, options);
+    }
+    if options.model_id.starts_with("qwen3-asr") {
+        return try_transcribe_qwen(audio, options, available_backends);
     }
 
     Ok(None)
@@ -35,6 +41,34 @@ pub fn transcribe_placeholder(audio: &PreprocessedAudio, options: &Transcription
         samples = audio.samples.len(),
         model = options.model_id
     )
+}
+
+fn try_transcribe_qwen(
+    audio: &PreprocessedAudio,
+    options: &TranscriptionOptions,
+    available_backends: &[HardwareBackend],
+) -> Result<Option<BackendTranscription>, String> {
+    let Some(result) = qwen_ffi::transcribe_qwen_audio(
+        &audio.samples,
+        options.language.as_deref(),
+        options.previous_text.as_deref(),
+        available_backends,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(BackendTranscription {
+        text: result.text,
+        language: options.language.clone(),
+        chunks: vec![serde_json::json!({
+            "backend": "qwen-c",
+            "model_dir": result.model_dir,
+            "library_path": result.library_path,
+            "sample_rate": audio.sample_rate,
+            "duration_seconds": audio.duration_seconds,
+        })],
+    }))
 }
 
 #[cfg(feature = "whisper")]

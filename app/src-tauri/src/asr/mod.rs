@@ -202,7 +202,8 @@ impl HybridModelManager {
         let preprocessed = audio::load_and_preprocess_wav(audio)?;
         let previous = options.previous_text.as_deref().unwrap_or("").trim();
         let backend_result = if preprocessed.had_speech {
-            hybrid::try_transcribe_real(&preprocessed, &options).map_err(AsrError::Backend)?
+            hybrid::try_transcribe_real(&preprocessed, &options, &self.available_backends)
+                .map_err(AsrError::Backend)?
         } else {
             None
         };

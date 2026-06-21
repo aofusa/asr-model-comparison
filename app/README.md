@@ -14,7 +14,7 @@
   - `GET /api/ws/transcribe`
 - `auto` / `gpu` / `cpu` のアクセラレータ設定に対応しています。
 - Tauriデスクトップ/モバイル環境では、UIから同一アプリ内のRust APIサーバー (`http://127.0.0.1:8765`) へ接続します。
-- 実ASR推論本体はまだ軽量プレースホルダーです。`whisper-rs`、Qwen C FFI、ONNX Runtime連携用のfeature境界を先に用意しています。
+- WhisperとQwen3-ASRはfeature有効時に実推論へ接続します。Voxtral ONNXと実翻訳はまだ軽量プレースホルダーへフォールバックします。
 
 ## Python版との機能網羅状況
 
@@ -41,17 +41,17 @@
 - Qwen3-ASR向けのCUDA/DirectML/Metal/CoreML/Vulkan/WGPU/OpenVINO/NNAPI/BLAS優先戦略
 - `/api/status`とWS応答でのランタイムバックエンド状態 (`whisper-rs` / `qwen-c` / `voxtral-onnx` / `placeholder`) の可視化
 - Qwen3-ASR C FFI / Voxtral ONNX のfeature境界と設定検証 (`AMCP_QWEN_*`、`AMCP_VOXTRAL_*`、`ORT_DYLIB_PATH`)
-- Qwen3-ASR C FFIの動的ライブラリロード、`qwen_load`/`qwen_free`シンボル検証、モデルディレクトリ検証
+- Qwen3-ASR C FFIの動的ライブラリロード、`qwen_load`/`qwen_transcribe_audio`/`qwen_free`シンボル検証、モデルディレクトリ検証、実音声サンプル推論呼び出し
 - Voxtral ONNX Runtimeセッション初期化、入出力メタデータ取得、DirectML/CUDA featureコンパイル
 - Tauriデスクトップ/モバイルWebViewからRust APIへ接続するための埋め込みサーバー
 - Android/iOS向けTauriビルドスクリプト
 
 未完了:
 
-- Qwen3-ASR / Voxtral の実モデル推論
+- Voxtral の実モデル推論
 - Python版と同等の実翻訳モデル推論
 - 実モデルの詳細なダウンロード/ロード進捗
-- Qwen3-ASR C FFIの実推論本体、Voxtral ONNXの入力テンソル生成/出力デコード処理
+- Voxtral ONNXの分割モデル構成 (`audio_encoder.onnx`、`embed_tokens.onnx`、`decoder_model_merged.onnx`、`tokenizer.json`) に対する入力テンソル生成/自己回帰デコード処理
 - Android/iOS実機でのマイク・画面音声取得制約の検証
 - Android/iOS向けの実モデルバイナリ、モデル配置、アプリサイズ最適化
 
@@ -144,9 +144,9 @@ npm run server:whisper:cuda
 
 対象モデルのダウンロードURLを解決できない場合、アプリは開発用プレースホルダー推論へ安全にフォールバックします。
 
-### Qwen3-ASR C FFI初期化
+### Qwen3-ASR C FFI実推論
 
-Qwen3-ASRは `qwen` feature付きでC実装の動的ライブラリを検証できます。Windowsではビルド済みDLLとモデルディレクトリを指定します。
+Qwen3-ASRは `qwen` feature付きでC実装の動的ライブラリをロードし、`qwen_transcribe_audio` へ16kHz mono f32サンプルを渡して実推論します。Windowsではビルド済みDLLとモデルディレクトリを指定します。
 
 ```powershell
 $env:AMCP_QWEN_ASR_LIB="C:\models\qwen-asr\qwen_asr.dll"
@@ -157,9 +157,11 @@ npm run server:qwen
 
 `AMCP_QWEN_ASR_DIR` を指定した場合は、Windowsでは `qwen_asr.dll`、macOSでは `libqwen_asr.dylib`、Linuxでは `libqwen_asr.so` を配下から解決します。
 
+Qwen C APIの返却文字列はC側の `free(text)` 前提です。WindowsではDLLとRustプロセスが互換CRTを使っているビルドを利用してください。言語指定が `auto` 以外の場合は、対応するQwen言語名へ変換して `qwen_set_force_language` が存在する場合だけ設定します。前回認識文は `qwen_set_prompt` が存在する場合だけ文脈プロンプトとして渡します。
+
 ### Voxtral ONNX初期化
 
-Voxtralは `ort` / ONNX Runtime のfeature付きでセッション初期化に対応しています。現段階ではONNXモデルのロード、Execution Provider登録、入出力メタデータ取得までを実装しています。
+Voxtralは `ort` / ONNX Runtime のfeature付きでセッション初期化に対応しています。現段階ではONNXモデルのロード、Execution Provider登録、入出力メタデータ取得までを実装しています。実推論には分割ONNXモデル (`audio_encoder.onnx`、`embed_tokens.onnx`、`decoder_model_merged.onnx`) と `tokenizer.json` を組み合わせた自己回帰生成ループが必要で、次の実装対象です。
 
 ```powershell
 $env:AMCP_VOXTRAL_ONNX_MODEL_PATH="C:\models\voxtral\model.onnx"
