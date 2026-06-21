@@ -133,6 +133,16 @@ test('hardware acceleration setting is sent in websocket config', async ({ page 
 });
 
 test('compact top workflow controls are visible', async ({ page }) => {
+  await page.route('**/api/status', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        service: 'amcp-rust-backend',
+        available_backends: ['cuda', 'vulkan', 'cpu'],
+      }),
+    });
+  });
+
   await page.goto('/');
 
   await expect(page.getByTestId('start-recording')).toBeVisible();
@@ -145,6 +155,13 @@ test('compact top workflow controls are visible', async ({ page }) => {
 
   await openAdvancedSettings(page);
   await expect(page.getByTestId('hardware-accelerator-select')).toBeVisible();
+  await expect(page.getByTestId('detected-accelerators')).toContainText('CUDA, VULKAN, CPU');
+
+  const generationRow = await page.getByTestId('generation-settings-row').boundingBox();
+  const hardwareRow = await page.getByTestId('hardware-settings-row').boundingBox();
+  expect(generationRow).not.toBeNull();
+  expect(hardwareRow).not.toBeNull();
+  expect(hardwareRow!.y).toBeGreaterThan(generationRow!.y);
 });
 
 test('audio source selection uses display media for window/app capture', async ({ page }) => {
