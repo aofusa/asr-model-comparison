@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 pub mod audio;
 pub mod backend;
 pub mod hybrid;
+pub mod qwen_ffi;
 pub mod voxtral_onnx;
 
 #[derive(Debug, Error)]

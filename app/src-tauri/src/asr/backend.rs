@@ -1,4 +1,5 @@
 use crate::accelerator::{HardwareBackend, ModelFamily};
+use crate::asr::qwen_ffi;
 use crate::asr::voxtral_onnx;
 use crate::models::{available_models, family_for_model};
 use serde::{Deserialize, Serialize};
@@ -92,12 +93,12 @@ fn qwen_status(
     available_backends: &[HardwareBackend],
 ) -> RuntimeBackendStatus {
     let configured = cfg!(feature = "qwen");
-    let ffi_configured = env_any(&[
-        "AMCP_QWEN_ASR_LIB",
-        "AMCP_QWEN_ASR_DIR",
-        "AMCP_QWEN_MODEL_DIR",
-    ]);
-    let real_inference_available = configured && ffi_configured;
+    let ffi_config = qwen_ffi::configure_qwen_ffi(available_backends);
+    let ffi_paths_available = ffi_config
+        .as_ref()
+        .map(|config| config.library_path.is_file() && config.model_dir.is_dir())
+        .unwrap_or(false);
+    let real_inference_available = configured && ffi_paths_available;
     RuntimeBackendStatus {
         model_id: model_id.to_string(),
         family,
@@ -108,22 +109,27 @@ fn qwen_status(
         },
         real_inference_available,
         configured,
-        selected_accelerators: filter_backends(
-            available_backends,
-            &[
-                HardwareBackend::Cuda,
-                HardwareBackend::DirectMl,
-                HardwareBackend::Vulkan,
-                HardwareBackend::Wgpu,
-                HardwareBackend::OpenVino,
-                HardwareBackend::Blas,
-                HardwareBackend::Cpu,
-            ],
-        ),
+        selected_accelerators: ffi_config
+            .as_ref()
+            .map(|config| config.backends.clone())
+            .unwrap_or_else(|| {
+                filter_backends(
+                    available_backends,
+                    &[
+                        HardwareBackend::Cuda,
+                        HardwareBackend::DirectMl,
+                        HardwareBackend::Vulkan,
+                        HardwareBackend::Wgpu,
+                        HardwareBackend::OpenVino,
+                        HardwareBackend::Blas,
+                        HardwareBackend::Cpu,
+                    ],
+                )
+            }),
         reason: if real_inference_available {
-            "qwen feature and C/BLAS model paths are configured.".to_string()
+            "qwen feature is enabled and Qwen ASR library/model paths exist.".to_string()
         } else if configured {
-            "qwen feature is enabled, but AMCP_QWEN_ASR_LIB/AMCP_QWEN_ASR_DIR/AMCP_QWEN_MODEL_DIR is not configured."
+            "qwen feature is enabled, but AMCP_QWEN_ASR_LIB or AMCP_QWEN_ASR_DIR plus AMCP_QWEN_MODEL_DIR does not point to existing paths."
                 .to_string()
         } else {
             "qwen feature is not enabled; using placeholder inference.".to_string()
@@ -193,14 +199,6 @@ fn filter_backends(
         filtered.push(HardwareBackend::Cpu);
     }
     filtered
-}
-
-fn env_any(keys: &[&str]) -> bool {
-    keys.iter().any(|key| {
-        std::env::var(key)
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false)
-    })
 }
 
 #[cfg(test)]

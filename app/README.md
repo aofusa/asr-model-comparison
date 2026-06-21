@@ -41,6 +41,7 @@
 - Qwen3-ASR向けのCUDA/DirectML/Metal/CoreML/Vulkan/WGPU/OpenVINO/NNAPI/BLAS優先戦略
 - `/api/status`とWS応答でのランタイムバックエンド状態 (`whisper-rs` / `qwen-c` / `voxtral-onnx` / `placeholder`) の可視化
 - Qwen3-ASR C FFI / Voxtral ONNX のfeature境界と設定検証 (`AMCP_QWEN_*`、`AMCP_VOXTRAL_*`、`ORT_DYLIB_PATH`)
+- Qwen3-ASR C FFIの動的ライブラリロード、`qwen_load`/`qwen_free`シンボル検証、モデルディレクトリ検証
 - Voxtral ONNX Runtimeセッション初期化、入出力メタデータ取得、DirectML/CUDA featureコンパイル
 - Tauriデスクトップ/モバイルWebViewからRust APIへ接続するための埋め込みサーバー
 - Android/iOS向けTauriビルドスクリプト
@@ -142,6 +143,19 @@ npm run server:whisper:cuda
 ```
 
 対象モデルのダウンロードURLを解決できない場合、アプリは開発用プレースホルダー推論へ安全にフォールバックします。
+
+### Qwen3-ASR C FFI初期化
+
+Qwen3-ASRは `qwen` feature付きでC実装の動的ライブラリを検証できます。Windowsではビルド済みDLLとモデルディレクトリを指定します。
+
+```powershell
+$env:AMCP_QWEN_ASR_LIB="C:\models\qwen-asr\qwen_asr.dll"
+$env:AMCP_QWEN_MODEL_DIR="C:\models\qwen3-asr-0.6b"
+cd app
+npm run server:qwen
+```
+
+`AMCP_QWEN_ASR_DIR` を指定した場合は、Windowsでは `qwen_asr.dll`、macOSでは `libqwen_asr.dylib`、Linuxでは `libqwen_asr.so` を配下から解決します。
 
 ### Voxtral ONNX初期化
 
@@ -254,6 +268,12 @@ Whisper featureのコンパイル確認:
 
 ```powershell
 npm run test:whisper:compile
+```
+
+Qwen C FFI featureのコンパイル確認:
+
+```powershell
+npm run test:qwen:compile
 ```
 
 Voxtral ONNX featureのコンパイル確認:
