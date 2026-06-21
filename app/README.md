@@ -36,11 +36,11 @@
 - 日本語 -> 英語翻訳前の小さい日本語数字正規化
 - 翻訳コマンドランナー境界 (`AMCP_TRANSLATION_COMMAND` / `AMCP_TRANSLATION_JA_EN_COMMAND`) と、Python版と同じ `Helsinki-NLP/opus-mt-ja-en` を使う `scripts/translate_hf.py`
 - 単一モデルロード制約の管理
-- モデル準備進捗イベント
+- モデル準備進捗イベント (`loading` / `validating` / `ready`)
 - `auto` / `gpu` / `cpu` の選択と安全なCPUフォールバック
 - Windows優先の実機アクセラレータ検出 (`CUDA_PATH`/`nvidia-smi`、`VK_SDK`/`vulkaninfo`、DirectML、OpenVINO、WGPU等)
 - Qwen3-ASR向けのCUDA/DirectML/Metal/CoreML/Vulkan/WGPU/OpenVINO/NNAPI/BLAS優先戦略
-- `/api/status`とWS応答でのランタイムバックエンド状態 (`whisper-rs` / `qwen-c` / `voxtral-onnx` / `placeholder`) の可視化
+- `/api/status`とWS応答でのランタイムバックエンド状態 (`whisper-rs` / `qwen-c` / `voxtral-onnx` / `placeholder`) と、モデルファイル/ディレクトリ/翻訳ランナー設定のartifact診断
 - Qwen3-ASR C FFI / Voxtral ONNX のfeature境界と設定検証 (`AMCP_QWEN_*`、`AMCP_VOXTRAL_*`、`ORT_DYLIB_PATH`)
 - Qwen3-ASR C FFIの動的ライブラリロード、`qwen_load`/`qwen_transcribe_audio`/`qwen_free`シンボル検証、モデルディレクトリ検証、実音声サンプル推論呼び出し
 - Voxtral ONNX Runtimeセッション初期化、分割ONNX構成 (`audio_encoder.onnx`、`embed_tokens.onnx`、`decoder_model_merged.onnx`、`tokenizer.json`) の設定解決、log-mel入力生成、KV cache付き自己回帰デコード、DirectML/CUDA featureコンパイル
@@ -49,7 +49,7 @@
 
 未完了:
 
-- 実モデルの詳細なダウンロード/ロード進捗
+- 実モデルの詳細なバイト単位ダウンロード/ロード進捗
 - Voxtral ONNX実モデルファイルを配置したWindows実機での出力品質・速度検証
 - Android/iOS実機でのマイク・画面音声取得制約の検証
 - Android/iOS向けの実モデルバイナリ、モデル配置、アプリサイズ最適化
@@ -350,6 +350,8 @@ npm run test:voxtral:cuda:compile
 - 単一モデルロード制約
 - CPU/GPUアクセラレータ選択とフォールバック
 - `/api/models`、`/api/status` のAPI形状
+- `/api/status.runtime_backends[].artifacts` による不足モデルファイル診断
+- `/api/status.translation` による翻訳ランナー設定診断
 
 ### Playwright E2Eのみ
 

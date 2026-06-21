@@ -94,6 +94,7 @@ pub struct ManagerStatus {
     pub loaded_backend: Option<HardwareBackend>,
     pub available_backends: Vec<HardwareBackend>,
     pub runtime_backends: Vec<backend::RuntimeBackendStatus>,
+    pub translation: translation::TranslationRuntimeStatus,
     pub service: &'static str,
 }
 
@@ -126,6 +127,7 @@ impl HybridModelManager {
             loaded_backend: inner.loaded_backend,
             available_backends: self.available_backends.clone(),
             runtime_backends: backend::runtime_backend_statuses(&self.available_backends),
+            translation: translation::runtime_status(),
             service: "amcp-rust-backend",
         }
     }
@@ -157,6 +159,15 @@ impl HybridModelManager {
                     elapsed_seconds: Some(started.elapsed().as_secs_f64()),
                 });
             }
+
+            progress.push(ModelProgress {
+                r#type: "model_progress",
+                model_id: options.model_id.clone(),
+                phase: "validating".to_string(),
+                message: artifact_validation_message(&runtime_backend),
+                progress: Some(45),
+                elapsed_seconds: Some(started.elapsed().as_secs_f64()),
+            });
 
             progress.push(ModelProgress {
                 r#type: "model_progress",
@@ -265,6 +276,30 @@ impl HybridModelManager {
             runtime_backend,
             accelerator,
         })
+    }
+}
+
+fn artifact_validation_message(status: &backend::RuntimeBackendStatus) -> String {
+    let missing_required = status
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.required && !artifact.exists)
+        .map(|artifact| {
+            artifact
+                .path
+                .clone()
+                .or_else(|| artifact.env_var.clone())
+                .unwrap_or_else(|| artifact.name.clone())
+        })
+        .collect::<Vec<_>>();
+
+    if missing_required.is_empty() {
+        format!("Validated runtime artifacts for {:?}.", status.backend)
+    } else {
+        format!(
+            "Runtime artifact check found missing requirements: {}.",
+            missing_required.join(", ")
+        )
     }
 }
 

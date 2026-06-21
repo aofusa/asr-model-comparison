@@ -12,6 +12,16 @@ pub struct TranslationOutcome {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TranslationRuntimeStatus {
+    pub configured: bool,
+    pub engine: &'static str,
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub supported_pairs: Vec<String>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct TranslationCommandRequest<'a> {
     text: &'a str,
     source_language: Option<&'a str>,
@@ -75,6 +85,42 @@ pub fn translate_optional(
     }
 }
 
+pub fn runtime_status() -> TranslationRuntimeStatus {
+    let configured_pair = translation_command_for("ja", "en");
+    let configured_generic = std::env::var("AMCP_TRANSLATION_COMMAND")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|command| {
+            let args = std::env::var("AMCP_TRANSLATION_ARGS")
+                .ok()
+                .map(|args| split_command_args(&args))
+                .unwrap_or_default();
+            (command, args)
+        });
+    let command = configured_pair.or(configured_generic);
+
+    if let Some((command, args)) = command {
+        TranslationRuntimeStatus {
+            configured: true,
+            engine: "command",
+            command: Some(command),
+            args,
+            supported_pairs: vec!["ja->en".to_string()],
+            reason: "translation command runner is configured".to_string(),
+        }
+    } else {
+        TranslationRuntimeStatus {
+            configured: false,
+            engine: "unavailable",
+            command: None,
+            args: Vec::new(),
+            supported_pairs: vec!["ja->en".to_string()],
+            reason: "AMCP_TRANSLATION_JA_EN_COMMAND or AMCP_TRANSLATION_COMMAND is not configured"
+                .to_string(),
+        }
+    }
+}
+
 fn translate_with_command(
     text: &str,
     source_language: Option<&str>,
@@ -84,28 +130,21 @@ fn translate_with_command(
         return Ok(None);
     };
     let source_language = source_language.unwrap_or("auto");
-    let command_key = format!(
-        "AMCP_TRANSLATION_{}_{}_COMMAND",
-        source_language.to_ascii_uppercase(),
-        target_language.to_ascii_uppercase()
-    );
-    let command = std::env::var(&command_key)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| std::env::var("AMCP_TRANSLATION_COMMAND").ok())
-        .filter(|value| !value.trim().is_empty());
-    let Some(command) = command else {
+    let command = translation_command_for(source_language, target_language).or_else(|| {
+        std::env::var("AMCP_TRANSLATION_COMMAND")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|command| {
+                let args = std::env::var("AMCP_TRANSLATION_ARGS")
+                    .ok()
+                    .map(|args| split_command_args(&args))
+                    .unwrap_or_default();
+                (command, args)
+            })
+    });
+    let Some((command, args)) = command else {
         return Ok(None);
     };
-    let args = std::env::var(format!(
-        "AMCP_TRANSLATION_{}_{}_ARGS",
-        source_language.to_ascii_uppercase(),
-        target_language.to_ascii_uppercase()
-    ))
-    .ok()
-    .or_else(|| std::env::var("AMCP_TRANSLATION_ARGS").ok())
-    .map(|args| split_command_args(&args))
-    .unwrap_or_default();
 
     let normalized_source = normalize_language_code(Some(source_language));
     let request = TranslationCommandRequest {
@@ -149,6 +188,29 @@ fn translate_with_command(
     parse_translation_output(&stdout)
         .map(Some)
         .map_err(|error| format!("invalid translation command output: {error}"))
+}
+
+fn translation_command_for(
+    source_language: &str,
+    target_language: &str,
+) -> Option<(String, Vec<String>)> {
+    let command_key = format!(
+        "AMCP_TRANSLATION_{}_{}_COMMAND",
+        source_language.to_ascii_uppercase(),
+        target_language.to_ascii_uppercase()
+    );
+    let command = std::env::var(command_key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())?;
+    let args = std::env::var(format!(
+        "AMCP_TRANSLATION_{}_{}_ARGS",
+        source_language.to_ascii_uppercase(),
+        target_language.to_ascii_uppercase()
+    ))
+    .ok()
+    .map(|args| split_command_args(&args))
+    .unwrap_or_default();
+    Some((command, args))
 }
 
 fn parse_translation_output(output: &str) -> Result<String, String> {
