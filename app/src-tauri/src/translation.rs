@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranslationOutcome {
@@ -7,6 +9,13 @@ pub struct TranslationOutcome {
     pub target_language: Option<String>,
     pub engine: &'static str,
     pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct TranslationCommandRequest<'a> {
+    text: &'a str,
+    source_language: Option<&'a str>,
+    target_language: &'a str,
 }
 
 pub fn translate_optional(
@@ -41,16 +50,131 @@ pub fn translate_optional(
     let normalized =
         normalize_text_for_translation(&transcript_text, source.as_deref(), target.as_deref());
 
-    // Real translation engines are intentionally behind this boundary. The
-    // current Rust app preserves the Python response contract without pretending
-    // that normalized source text is a completed translation.
-    TranslationOutcome {
-        transcript_text: normalized,
-        translated_text: None,
-        target_language: target,
-        engine: "unavailable",
-        note: Some("translation engine is not configured in the Rust backend".to_string()),
+    match translate_with_command(&normalized, source.as_deref(), target.as_deref()) {
+        Ok(Some(translated_text)) => TranslationOutcome {
+            transcript_text: normalized,
+            translated_text: Some(translated_text),
+            target_language: target,
+            engine: "command",
+            note: None,
+        },
+        Ok(None) => TranslationOutcome {
+            transcript_text: normalized,
+            translated_text: None,
+            target_language: target,
+            engine: "unavailable",
+            note: Some("translation engine is not configured in the Rust backend".to_string()),
+        },
+        Err(error) => TranslationOutcome {
+            transcript_text: normalized,
+            translated_text: None,
+            target_language: target,
+            engine: "error",
+            note: Some(error),
+        },
     }
+}
+
+fn translate_with_command(
+    text: &str,
+    source_language: Option<&str>,
+    target_language: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some(target_language) = target_language else {
+        return Ok(None);
+    };
+    let source_language = source_language.unwrap_or("auto");
+    let command_key = format!(
+        "AMCP_TRANSLATION_{}_{}_COMMAND",
+        source_language.to_ascii_uppercase(),
+        target_language.to_ascii_uppercase()
+    );
+    let command = std::env::var(&command_key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| std::env::var("AMCP_TRANSLATION_COMMAND").ok())
+        .filter(|value| !value.trim().is_empty());
+    let Some(command) = command else {
+        return Ok(None);
+    };
+    let args = std::env::var(format!(
+        "AMCP_TRANSLATION_{}_{}_ARGS",
+        source_language.to_ascii_uppercase(),
+        target_language.to_ascii_uppercase()
+    ))
+    .ok()
+    .or_else(|| std::env::var("AMCP_TRANSLATION_ARGS").ok())
+    .map(|args| split_command_args(&args))
+    .unwrap_or_default();
+
+    let normalized_source = normalize_language_code(Some(source_language));
+    let request = TranslationCommandRequest {
+        text,
+        source_language: normalized_source.as_deref(),
+        target_language,
+    };
+    let request_json = serde_json::to_vec(&request)
+        .map_err(|error| format!("failed to serialize translation request: {error}"))?;
+    let mut child = Command::new(&command)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to start translation command `{command}`: {error}"))?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(&request_json)
+            .map_err(|error| format!("failed to write translation request: {error}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("failed to wait for translation command: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("translation command exited with {}", output.status)
+        } else {
+            format!(
+                "translation command exited with {}: {stderr}",
+                output.status
+            )
+        });
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| format!("translation command output is not UTF-8: {error}"))?;
+    parse_translation_output(&stdout)
+        .map(Some)
+        .map_err(|error| format!("invalid translation command output: {error}"))
+}
+
+fn parse_translation_output(output: &str) -> Result<String, String> {
+    let output = output.trim();
+    if output.is_empty() {
+        return Ok(String::new());
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(output) {
+        if let Some(text) = value
+            .get("translated_text")
+            .or_else(|| value.get("translation"))
+            .or_else(|| value.get("text"))
+            .and_then(|value| value.as_str())
+        {
+            return Ok(text.trim().to_string());
+        }
+        return Err("JSON output must contain translated_text, translation, or text".to_string());
+    }
+    Ok(output.to_string())
+}
+
+fn split_command_args(args: &str) -> Vec<String> {
+    args.split_whitespace()
+        .filter(|arg| !arg.trim().is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 pub fn normalize_language_code(language: Option<&str>) -> Option<String> {
@@ -181,6 +305,22 @@ mod tests {
         assert_eq!(outcome.translated_text, None);
         assert_eq!(outcome.target_language.as_deref(), Some("en"));
         assert_eq!(outcome.engine, "unavailable");
+    }
+
+    #[test]
+    fn parses_json_translation_command_output() {
+        assert_eq!(
+            parse_translation_output(r#"{"translated_text":"It is sunny."}"#).unwrap(),
+            "It is sunny."
+        );
+    }
+
+    #[test]
+    fn parses_plain_translation_command_output() {
+        assert_eq!(
+            parse_translation_output("It is sunny.\n").unwrap(),
+            "It is sunny."
+        );
     }
 
     #[test]

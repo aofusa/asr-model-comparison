@@ -14,7 +14,7 @@
   - `GET /api/ws/transcribe`
 - `auto` / `gpu` / `cpu` のアクセラレータ設定に対応しています。
 - Tauriデスクトップ/モバイル環境では、UIから同一アプリ内のRust APIサーバー (`http://127.0.0.1:8765`) へ接続します。
-- Whisper、Qwen3-ASR、Voxtral ONNXはfeature有効時に実推論へ接続します。実翻訳はまだ軽量プレースホルダーへフォールバックします。
+- Whisper、Qwen3-ASR、Voxtral ONNXはfeature有効時に実推論へ接続します。翻訳は設定済みコマンドランナーがある場合に実推論へ接続し、未設定時は軽量プレースホルダーへフォールバックします。
 
 ## Python版との機能網羅状況
 
@@ -34,6 +34,7 @@
 - Whisperモデルのローカルキャッシュ確認と自動ダウンロード
 - 翻訳レスポンス契約 (`transcript_text` / `translated_text` / `target_language`) の維持
 - 日本語 -> 英語翻訳前の小さい日本語数字正規化
+- 翻訳コマンドランナー境界 (`AMCP_TRANSLATION_COMMAND` / `AMCP_TRANSLATION_JA_EN_COMMAND`) と、Python版と同じ `Helsinki-NLP/opus-mt-ja-en` を使う `scripts/translate_hf.py`
 - 単一モデルロード制約の管理
 - モデル準備進捗イベント
 - `auto` / `gpu` / `cpu` の選択と安全なCPUフォールバック
@@ -48,7 +49,6 @@
 
 未完了:
 
-- Python版と同等の実翻訳モデル推論
 - 実モデルの詳細なダウンロード/ロード進捗
 - Voxtral ONNX実モデルファイルを配置したWindows実機での出力品質・速度検証
 - Android/iOS実機でのマイク・画面音声取得制約の検証
@@ -157,6 +157,35 @@ npm run server:qwen
 `AMCP_QWEN_ASR_DIR` を指定した場合は、Windowsでは `qwen_asr.dll`、macOSでは `libqwen_asr.dylib`、Linuxでは `libqwen_asr.so` を配下から解決します。
 
 Qwen C APIの返却文字列はC側の `free(text)` 前提です。WindowsではDLLとRustプロセスが互換CRTを使っているビルドを利用してください。言語指定が `auto` 以外の場合は、対応するQwen言語名へ変換して `qwen_set_force_language` が存在する場合だけ設定します。前回認識文は `qwen_set_prompt` が存在する場合だけ文脈プロンプトとして渡します。
+
+### 翻訳実推論
+
+翻訳はRustから外部ランナーを起動する境界を用意しています。ランナーはstdinでJSONを受け取り、stdoutに `{"translated_text":"..."}` またはプレーンテキストを返します。
+
+Python版と同じ `Helsinki-NLP/opus-mt-ja-en` を使う場合:
+
+```powershell
+cd app
+python -m pip install torch transformers sentencepiece
+$env:AMCP_TRANSLATION_JA_EN_COMMAND="python"
+$env:AMCP_TRANSLATION_JA_EN_ARGS="scripts/translate_hf.py"
+npm run server:qwen
+```
+
+全言語ペア共通のランナーを指定する場合:
+
+```powershell
+$env:AMCP_TRANSLATION_COMMAND="python"
+$env:AMCP_TRANSLATION_ARGS="scripts/translate_hf.py"
+```
+
+ランナーへ渡されるJSON:
+
+```json
+{"text":"今日は23人です","source_language":"ja","target_language":"en"}
+```
+
+翻訳モデルを差し替えたい場合は、ランナー側で `AMCP_TRANSLATION_MODEL` を参照できます。未設定時や同一言語指定時は `translated_text` は `null` のまま、`transcript_text` に原文を保持します。
 
 ### Voxtral ONNX実推論
 
