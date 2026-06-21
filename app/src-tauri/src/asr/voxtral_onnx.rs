@@ -7,6 +7,20 @@ use std::path::{Path, PathBuf};
 use ort::value::Tensor;
 
 const VOXTRAL_ONNX_REPO_ID: &str = "onnx-community/Voxtral-Mini-3B-2507-ONNX";
+#[cfg(feature = "voxtral")]
+const VOXTRAL_BOS_TOKEN_ID: i64 = 1;
+#[cfg(feature = "voxtral")]
+const VOXTRAL_EOS_TOKEN_ID: i64 = 2;
+#[cfg(feature = "voxtral")]
+const VOXTRAL_INST_START_TOKEN_ID: i64 = 3;
+#[cfg(feature = "voxtral")]
+const VOXTRAL_INST_END_TOKEN_ID: i64 = 4;
+#[cfg(feature = "voxtral")]
+const VOXTRAL_AUDIO_TOKEN_ID: i64 = 24;
+#[cfg(feature = "voxtral")]
+const VOXTRAL_BEGIN_AUDIO_TOKEN_ID: i64 = 25;
+#[cfg(feature = "voxtral")]
+const VOXTRAL_TRANSCRIBE_TOKEN_ID: i64 = 34;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VoxtralOnnxConfig {
@@ -364,6 +378,8 @@ pub fn transcribe_voxtral_audio(
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(256)
         .clamp(1, 1024);
+    let transcription_prompt =
+        build_voxtral_transcription_prompt_tokens(&tokenizer, audio_frames, language)?;
     let (transcript_text, transcript_tokens) = run_voxtral_generation(
         &tokenizer,
         &mut embed_tokens,
@@ -371,13 +387,16 @@ pub fn transcribe_voxtral_audio(
         &audio_embeds,
         audio_frames,
         embed_dim,
-        "Transcribe the audio. Return only the transcription.",
+        transcription_prompt,
         max_tokens,
     )?;
     let target_language = normalize_target_language(target_language);
     let mut translation_tokens = 0usize;
     let translated_text = if let Some(target_language) = target_language.as_deref() {
-        let instruction = translation_instruction(language, target_language, previous_text);
+        let instruction =
+            translation_instruction(language, target_language, &transcript_text, previous_text);
+        let translation_prompt =
+            build_voxtral_chat_prompt_tokens(&tokenizer, audio_frames, &instruction)?;
         let (translated, tokens) = run_voxtral_generation(
             &tokenizer,
             &mut embed_tokens,
@@ -385,7 +404,7 @@ pub fn transcribe_voxtral_audio(
             &audio_embeds,
             audio_frames,
             embed_dim,
-            &instruction,
+            translation_prompt,
             max_tokens,
         )?;
         translation_tokens = tokens;
@@ -420,18 +439,9 @@ fn run_voxtral_generation(
     audio_embeds: &[f32],
     audio_frames: usize,
     embed_dim: usize,
-    instruction: &str,
+    prompt_tokens: Vec<i64>,
     max_tokens: usize,
 ) -> Result<(String, usize), String> {
-    let instruction = tokenizer
-        .encode(instruction, false)
-        .map_err(|error| format!("failed to encode Voxtral prompt: {error}"))?;
-    let instruction_ids = instruction.get_ids().iter().map(|id| *id as i64);
-    let mut prompt_tokens = vec![1_i64, 3, 25];
-    prompt_tokens.extend(std::iter::repeat(24_i64).take(audio_frames));
-    prompt_tokens.extend(instruction_ids);
-    prompt_tokens.push(4);
-
     let mut inputs_embeds = embed_input_ids(embed_tokens, &prompt_tokens)?;
     splice_audio_embeddings(&mut inputs_embeds, audio_embeds, audio_frames, embed_dim)?;
 
@@ -455,6 +465,77 @@ fn run_voxtral_generation(
 }
 
 #[cfg(feature = "voxtral")]
+fn build_voxtral_transcription_prompt_tokens(
+    tokenizer: &tokenizers::Tokenizer,
+    audio_frames: usize,
+    language: Option<&str>,
+) -> Result<Vec<i64>, String> {
+    let language_tokens = normalize_transcription_language(language)
+        .map(|language| encode_prompt_text(tokenizer, &format!("lang:{language}")))
+        .transpose()?
+        .unwrap_or_default();
+    Ok(build_voxtral_transcription_prompt_from_language_tokens(
+        audio_frames,
+        &language_tokens,
+    ))
+}
+
+#[cfg(feature = "voxtral")]
+fn build_voxtral_transcription_prompt_from_language_tokens(
+    audio_frames: usize,
+    language_tokens: &[i64],
+) -> Vec<i64> {
+    let mut prompt_tokens = build_voxtral_audio_inst_prefix(audio_frames);
+    prompt_tokens.push(VOXTRAL_INST_END_TOKEN_ID);
+    prompt_tokens.extend_from_slice(language_tokens);
+    prompt_tokens.push(VOXTRAL_TRANSCRIBE_TOKEN_ID);
+    prompt_tokens
+}
+
+#[cfg(feature = "voxtral")]
+fn build_voxtral_chat_prompt_tokens(
+    tokenizer: &tokenizers::Tokenizer,
+    audio_frames: usize,
+    instruction: &str,
+) -> Result<Vec<i64>, String> {
+    let instruction_ids = encode_prompt_text(tokenizer, instruction)?;
+    let mut prompt_tokens = build_voxtral_audio_inst_prefix(audio_frames);
+    prompt_tokens.extend(instruction_ids);
+    prompt_tokens.push(VOXTRAL_INST_END_TOKEN_ID);
+    Ok(prompt_tokens)
+}
+
+#[cfg(feature = "voxtral")]
+fn build_voxtral_audio_inst_prefix(audio_frames: usize) -> Vec<i64> {
+    let mut prompt_tokens = vec![
+        VOXTRAL_BOS_TOKEN_ID,
+        VOXTRAL_INST_START_TOKEN_ID,
+        VOXTRAL_BEGIN_AUDIO_TOKEN_ID,
+    ];
+    prompt_tokens.extend(std::iter::repeat(VOXTRAL_AUDIO_TOKEN_ID).take(audio_frames));
+    prompt_tokens
+}
+
+#[cfg(feature = "voxtral")]
+fn encode_prompt_text(tokenizer: &tokenizers::Tokenizer, text: &str) -> Result<Vec<i64>, String> {
+    tokenizer
+        .encode(text, false)
+        .map_err(|error| format!("failed to encode Voxtral prompt: {error}"))
+        .map(|encoding| encoding.get_ids().iter().map(|id| *id as i64).collect())
+}
+
+#[cfg(feature = "voxtral")]
+fn normalize_transcription_language(language: Option<&str>) -> Option<String> {
+    let language = normalize_target_language(language)?;
+    Some(match language.as_str() {
+        "japanese" => "ja".to_string(),
+        "english" => "en".to_string(),
+        "chinese" => "zh".to_string(),
+        other => other.to_string(),
+    })
+}
+
+#[cfg(feature = "voxtral")]
 fn normalize_target_language(language: Option<&str>) -> Option<String> {
     let language = language?.trim().to_ascii_lowercase();
     match language.as_str() {
@@ -470,6 +551,7 @@ fn normalize_target_language(language: Option<&str>) -> Option<String> {
 fn translation_instruction(
     source_language: Option<&str>,
     target_language: &str,
+    transcript_text: &str,
     previous_text: Option<&str>,
 ) -> String {
     let source_hint = language_name(source_language)
@@ -481,7 +563,7 @@ fn translation_instruction(
         .map(|text| format!("Previous transcript context: {text}\n"))
         .unwrap_or_default();
     format!(
-        "{source_hint}{context_hint}Translate the audio into {target}. Return only the translated text.",
+        "{source_hint}{context_hint}Original transcript: {transcript_text}\nTranslate the original transcript into {target}. Return only the translated text.",
         target = language_name(Some(target_language)).unwrap_or_else(|| target_language.to_string())
     )
 }
@@ -742,14 +824,16 @@ fn generate_tokens(
         .ok_or_else(|| "invalid Voxtral prompt embedding length".to_string())?;
     let mut generated = Vec::new();
     let mut past_cache: Option<Vec<(Vec<usize>, Vec<f32>)>> = None;
-    // ONNX Runtime requires all tensor dimensions to be >= 1, so the initial
-    // cache uses a single zero token instead of the logical zero-length cache.
-    let mut current_past_len = 1usize;
+    // ONNX Runtime requires all tensor dimensions to be >= 1, so the physical
+    // cache starts with a masked dummy token while logical positions still
+    // begin at zero.
+    let mut physical_past_len = 1usize;
+    let mut logical_past_len = 0usize;
 
     for step in 0..max_tokens {
         let is_prefill = step == 0;
         let current_step_len = if is_prefill { initial_sequence_len } else { 1 };
-        let current_total_len = current_past_len + current_step_len;
+        let current_total_len = physical_past_len + current_step_len;
         let inputs_embeds = if is_prefill {
             initial_inputs_embeds.clone()
         } else {
@@ -767,17 +851,17 @@ fn generate_tokens(
             .map_err(|error| format!("failed to create Voxtral decoder embeddings tensor: {error}"))?,
             "attention_mask" => Tensor::from_array((
                 [1usize, current_total_len],
-                vec![1_i64; current_total_len].into_boxed_slice()
+                build_voxtral_attention_mask(current_total_len, true).into_boxed_slice()
             ))
             .map_err(|error| format!("failed to create Voxtral attention mask tensor: {error}"))?,
             "position_ids" => Tensor::from_array((
                 [1usize, current_step_len],
                 if is_prefill {
-                    (current_past_len as i64..(current_past_len + current_step_len) as i64)
+                    (logical_past_len as i64..(logical_past_len + current_step_len) as i64)
                         .collect::<Vec<_>>()
                         .into_boxed_slice()
                 } else {
-                    vec![current_past_len as i64].into_boxed_slice()
+                    vec![logical_past_len as i64].into_boxed_slice()
                 }
             ))
             .map_err(|error| format!("failed to create Voxtral position ids tensor: {error}"))?,
@@ -826,7 +910,7 @@ fn generate_tokens(
             .map(|dim| *dim as usize)
             .collect::<Vec<_>>();
         let next_token = argmax_last_token(&dims, logits)?;
-        if next_token == 2 {
+        if next_token == VOXTRAL_EOS_TOKEN_ID {
             break;
         }
         generated.push(next_token);
@@ -844,10 +928,20 @@ fn generate_tokens(
             ));
         }
         past_cache = Some(new_cache);
-        current_past_len = current_total_len;
+        physical_past_len = current_total_len;
+        logical_past_len += current_step_len;
     }
 
     Ok(generated)
+}
+
+#[cfg(feature = "voxtral")]
+fn build_voxtral_attention_mask(total_len: usize, has_dummy_past: bool) -> Vec<i64> {
+    let mut mask = vec![1_i64; total_len];
+    if has_dummy_past && !mask.is_empty() {
+        mask[0] = 0;
+    }
+    mask
 }
 
 #[cfg(feature = "voxtral")]
@@ -1012,5 +1106,69 @@ mod tests {
 
         assert_eq!(features.len(), 128 * 3000);
         assert!(features.iter().all(|value| value.is_finite()));
+    }
+
+    #[cfg(feature = "voxtral")]
+    #[test]
+    fn transcription_prompt_uses_voxtral_transcribe_mode() {
+        let prompt = build_voxtral_transcription_prompt_from_language_tokens(3, &[9909, 1058, 123]);
+
+        assert_eq!(
+            prompt,
+            vec![
+                VOXTRAL_BOS_TOKEN_ID,
+                VOXTRAL_INST_START_TOKEN_ID,
+                VOXTRAL_BEGIN_AUDIO_TOKEN_ID,
+                VOXTRAL_AUDIO_TOKEN_ID,
+                VOXTRAL_AUDIO_TOKEN_ID,
+                VOXTRAL_AUDIO_TOKEN_ID,
+                VOXTRAL_INST_END_TOKEN_ID,
+                9909,
+                1058,
+                123,
+                VOXTRAL_TRANSCRIBE_TOKEN_ID,
+            ]
+        );
+    }
+
+    #[cfg(feature = "voxtral")]
+    #[test]
+    fn transcription_prompt_allows_language_auto_detect() {
+        let prompt = build_voxtral_transcription_prompt_from_language_tokens(1, &[]);
+
+        assert_eq!(
+            prompt,
+            vec![
+                VOXTRAL_BOS_TOKEN_ID,
+                VOXTRAL_INST_START_TOKEN_ID,
+                VOXTRAL_BEGIN_AUDIO_TOKEN_ID,
+                VOXTRAL_AUDIO_TOKEN_ID,
+                VOXTRAL_INST_END_TOKEN_ID,
+                VOXTRAL_TRANSCRIBE_TOKEN_ID,
+            ]
+        );
+    }
+
+    #[cfg(feature = "voxtral")]
+    #[test]
+    fn dummy_cache_attention_mask_hides_seed_token() {
+        assert_eq!(build_voxtral_attention_mask(4, true), vec![0, 1, 1, 1]);
+        assert_eq!(build_voxtral_attention_mask(4, false), vec![1, 1, 1, 1]);
+    }
+
+    #[cfg(feature = "voxtral")]
+    #[test]
+    fn translation_instruction_keeps_original_transcript_context() {
+        let instruction = translation_instruction(
+            Some("en"),
+            "ja",
+            "Original transcript",
+            Some("Previous context"),
+        );
+
+        assert!(instruction.contains("The source speech language is English."));
+        assert!(instruction.contains("Previous transcript context: Previous context"));
+        assert!(instruction.contains("Original transcript: Original transcript"));
+        assert!(instruction.contains("Translate the original transcript into Japanese"));
     }
 }
