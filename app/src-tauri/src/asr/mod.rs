@@ -88,6 +88,7 @@ pub struct ModelProgress {
 pub struct ManagerStatus {
     pub loaded_model_id: Option<String>,
     pub loaded_backend: Option<HardwareBackend>,
+    pub available_backends: Vec<HardwareBackend>,
     pub service: &'static str,
 }
 
@@ -118,6 +119,7 @@ impl HybridModelManager {
         ManagerStatus {
             loaded_model_id: inner.loaded_model_id.clone(),
             loaded_backend: inner.loaded_backend,
+            available_backends: self.available_backends.clone(),
             service: "amcp-rust-backend",
         }
     }

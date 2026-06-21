@@ -5,5 +5,8 @@ pub mod models;
 pub mod server;
 pub mod translation;
 
-pub use accelerator::{select_accelerator, AcceleratorPreference, HardwareBackend, ModelFamily};
+pub use accelerator::{
+    detect_available_backends, select_accelerator, AcceleratorPreference, HardwareBackend,
+    ModelFamily,
+};
 pub use config::{AppConfig, RunMode};

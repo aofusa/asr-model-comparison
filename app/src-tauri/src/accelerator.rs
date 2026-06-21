@@ -28,6 +28,26 @@ impl std::str::FromStr for AcceleratorPreference {
     }
 }
 
+impl std::str::FromStr for HardwareBackend {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "cuda" => Ok(Self::Cuda),
+            "directml" | "direct_ml" | "dml" => Ok(Self::DirectMl),
+            "metal" => Ok(Self::Metal),
+            "coreml" | "core_ml" => Ok(Self::CoreMl),
+            "vulkan" => Ok(Self::Vulkan),
+            "wgpu" => Ok(Self::Wgpu),
+            "openvino" | "open_vino" => Ok(Self::OpenVino),
+            "nnapi" | "nn_api" => Ok(Self::NnApi),
+            "blas" => Ok(Self::Blas),
+            "cpu" => Ok(Self::Cpu),
+            other => Err(format!("unknown hardware backend: {other}")),
+        }
+    }
+}
+
 impl fmt::Display for AcceleratorPreference {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
@@ -150,6 +170,135 @@ pub fn select_accelerator(
         fallback_used,
         reason,
     }
+}
+
+pub fn detect_available_backends() -> Vec<HardwareBackend> {
+    detect_available_backends_with(
+        std::env::consts::OS,
+        |key| std::env::var(key).ok(),
+        command_exists,
+        |path| std::path::Path::new(path).is_file(),
+    )
+}
+
+fn detect_available_backends_with(
+    os: &str,
+    env_get: impl Fn(&str) -> Option<String>,
+    command_exists: impl Fn(&str) -> bool,
+    path_exists: impl Fn(&str) -> bool,
+) -> Vec<HardwareBackend> {
+    if let Some(configured) = env_get("AMCP_AVAILABLE_BACKENDS") {
+        let mut parsed: Vec<_> = configured
+            .split(',')
+            .filter_map(|value| value.parse::<HardwareBackend>().ok())
+            .collect();
+        push_unique(&mut parsed, HardwareBackend::Cpu);
+        return parsed;
+    }
+
+    let mut available = Vec::new();
+    match os {
+        "windows" => {
+            if env_get("CUDA_PATH").is_some()
+                || env_get("CUDA_HOME").is_some()
+                || command_exists("nvidia-smi")
+                || command_exists("nvcc")
+            {
+                push_unique(&mut available, HardwareBackend::Cuda);
+            }
+            if env_get("VK_SDK").is_some() || command_exists("vulkaninfo") {
+                push_unique(&mut available, HardwareBackend::Vulkan);
+            }
+            if env_get("AMCP_ENABLE_DIRECTML").as_deref() == Some("1")
+                || env_get("DIRECTML_PATH").is_some()
+                || env_get("WINDIR")
+                    .map(|windir| format!("{windir}\\System32\\DirectML.dll"))
+                    .map(|path| path_exists(&path))
+                    .unwrap_or(false)
+            {
+                push_unique(&mut available, HardwareBackend::DirectMl);
+            }
+            push_unique(&mut available, HardwareBackend::Wgpu);
+            if env_get("OPENVINO_DIR").is_some()
+                || env_get("INTEL_OPENVINO_DIR").is_some()
+                || command_exists("benchmark_app")
+            {
+                push_unique(&mut available, HardwareBackend::OpenVino);
+            }
+            if env_get("OPENBLAS_DIR").is_some()
+                || env_get("MKLROOT").is_some()
+                || env_get("AMCP_ENABLE_BLAS").as_deref() == Some("1")
+            {
+                push_unique(&mut available, HardwareBackend::Blas);
+            }
+        }
+        "linux" => {
+            if env_get("CUDA_PATH").is_some()
+                || env_get("CUDA_HOME").is_some()
+                || command_exists("nvidia-smi")
+                || command_exists("nvcc")
+            {
+                push_unique(&mut available, HardwareBackend::Cuda);
+            }
+            if env_get("VK_SDK").is_some() || command_exists("vulkaninfo") {
+                push_unique(&mut available, HardwareBackend::Vulkan);
+            }
+            push_unique(&mut available, HardwareBackend::Wgpu);
+            if env_get("OPENVINO_DIR").is_some()
+                || env_get("INTEL_OPENVINO_DIR").is_some()
+                || command_exists("benchmark_app")
+            {
+                push_unique(&mut available, HardwareBackend::OpenVino);
+            }
+            if env_get("OPENBLAS_DIR").is_some()
+                || env_get("MKLROOT").is_some()
+                || env_get("AMCP_ENABLE_BLAS").as_deref() == Some("1")
+            {
+                push_unique(&mut available, HardwareBackend::Blas);
+            }
+        }
+        "macos" => {
+            push_unique(&mut available, HardwareBackend::Metal);
+            push_unique(&mut available, HardwareBackend::CoreMl);
+            push_unique(&mut available, HardwareBackend::Wgpu);
+            push_unique(&mut available, HardwareBackend::Blas);
+        }
+        "ios" => {
+            push_unique(&mut available, HardwareBackend::Metal);
+            push_unique(&mut available, HardwareBackend::CoreMl);
+            push_unique(&mut available, HardwareBackend::Blas);
+        }
+        "android" => {
+            push_unique(&mut available, HardwareBackend::NnApi);
+            push_unique(&mut available, HardwareBackend::Vulkan);
+            push_unique(&mut available, HardwareBackend::Wgpu);
+        }
+        _ => {}
+    }
+
+    push_unique(&mut available, HardwareBackend::Cpu);
+    available
+}
+
+fn push_unique(backends: &mut Vec<HardwareBackend>, backend: HardwareBackend) {
+    if !backends.contains(&backend) {
+        backends.push(backend);
+    }
+}
+
+fn command_exists(command: &str) -> bool {
+    let checker = if cfg!(windows) { "where" } else { "sh" };
+    let mut cmd = std::process::Command::new(checker);
+    if cfg!(windows) {
+        cmd.arg(command);
+    } else {
+        cmd.arg("-c").arg(format!("command -v {command}"));
+    }
+    cmd.stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 fn prioritized_plan(
@@ -329,5 +478,41 @@ mod tests {
                 HardwareBackend::Cpu,
             ]
         );
+    }
+
+    #[test]
+    fn parses_configured_backend_override() {
+        let detected = detect_available_backends_with(
+            "windows",
+            |key| (key == "AMCP_AVAILABLE_BACKENDS").then(|| "vulkan,cpu".to_string()),
+            |_| false,
+            |_| false,
+        );
+
+        assert_eq!(
+            detected,
+            vec![HardwareBackend::Vulkan, HardwareBackend::Cpu]
+        );
+    }
+
+    #[test]
+    fn windows_detection_finds_cuda_vulkan_directml_and_cpu() {
+        let detected = detect_available_backends_with(
+            "windows",
+            |key| match key {
+                "CUDA_PATH" => Some("C:\\CUDA".to_string()),
+                "VK_SDK" => Some("C:\\VulkanSDK".to_string()),
+                "WINDIR" => Some("C:\\Windows".to_string()),
+                _ => None,
+            },
+            |_| false,
+            |path| path.ends_with("DirectML.dll"),
+        );
+
+        assert!(detected.contains(&HardwareBackend::Cuda));
+        assert!(detected.contains(&HardwareBackend::Vulkan));
+        assert!(detected.contains(&HardwareBackend::DirectMl));
+        assert!(detected.contains(&HardwareBackend::Wgpu));
+        assert!(detected.contains(&HardwareBackend::Cpu));
     }
 }

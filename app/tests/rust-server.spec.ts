@@ -45,6 +45,12 @@ test('rust server exposes health and compatible model metadata', async ({ page }
   expect(models.some((model: { id: string }) => model.id === 'whisper-tiny')).toBe(true);
   expect(models.some((model: { id: string }) => model.id === 'qwen3-asr-0.6b')).toBe(true);
   expect(models.some((model: { id: string }) => model.id === 'voxtral-mini-4b')).toBe(true);
+
+  const status = await page.evaluate(async () => {
+    const response = await fetch('/api/status');
+    return response.json();
+  });
+  expect(status.available_backends).toContain('cpu');
 });
 
 test('rust websocket accepts accelerator config and streams transcription result', async ({ page }) => {

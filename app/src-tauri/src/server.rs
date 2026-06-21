@@ -1,4 +1,4 @@
-use crate::accelerator::{AcceleratorPreference, HardwareBackend};
+use crate::accelerator::{detect_available_backends, AcceleratorPreference, HardwareBackend};
 use crate::asr::{HybridModelManager, SharedModelManager, TranscriptionOptions};
 use crate::config::AppConfig;
 use crate::models::available_models;
@@ -27,46 +27,7 @@ pub struct AppState {
 }
 
 pub fn default_available_backends() -> Vec<HardwareBackend> {
-    match std::env::consts::OS {
-        "macos" => vec![
-            HardwareBackend::Metal,
-            HardwareBackend::CoreMl,
-            HardwareBackend::Wgpu,
-            HardwareBackend::Blas,
-            HardwareBackend::Cpu,
-        ],
-        "windows" => vec![
-            HardwareBackend::Cuda,
-            HardwareBackend::DirectMl,
-            HardwareBackend::Vulkan,
-            HardwareBackend::Wgpu,
-            HardwareBackend::OpenVino,
-            HardwareBackend::Blas,
-            HardwareBackend::Cpu,
-        ],
-        "linux" => vec![
-            HardwareBackend::Cuda,
-            HardwareBackend::Vulkan,
-            HardwareBackend::Wgpu,
-            HardwareBackend::OpenVino,
-            HardwareBackend::Blas,
-            HardwareBackend::Cpu,
-        ],
-        "ios" => vec![
-            HardwareBackend::Metal,
-            HardwareBackend::CoreMl,
-            HardwareBackend::Blas,
-            HardwareBackend::Cpu,
-        ],
-        "android" => vec![
-            HardwareBackend::Vulkan,
-            HardwareBackend::NnApi,
-            HardwareBackend::Wgpu,
-            HardwareBackend::Blas,
-            HardwareBackend::Cpu,
-        ],
-        _ => vec![HardwareBackend::Cpu],
-    }
+    detect_available_backends()
 }
 
 pub fn router(config: AppConfig) -> Router {

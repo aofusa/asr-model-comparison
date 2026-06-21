@@ -27,6 +27,8 @@
 - ステータスAPI
 - HTTP/WS文字起こしAPIのレスポンス形状
 - PCM WAVデコード、16kHzモノラル化、RMS/peak計算
+- `symphonia`によるWAV/MP3/OGG/Vorbis/MP4/AAC/FLAC等の多形式デコード
+- WebM/Opus等の未対応形式に対する`ffmpeg`フォールバック
 - 無音判定と`had_speech=false`応答
 - `whisper-rs` feature有効時のWhisper実推論
 - Whisperモデルのローカルキャッシュ確認と自動ダウンロード
@@ -35,6 +37,7 @@
 - 単一モデルロード制約の管理
 - モデル準備進捗イベント
 - `auto` / `gpu` / `cpu` の選択と安全なCPUフォールバック
+- Windows優先の実機アクセラレータ検出 (`CUDA_PATH`/`nvidia-smi`、`VK_SDK`/`vulkaninfo`、DirectML、OpenVINO、WGPU等)
 - Qwen3-ASR向けのCUDA/DirectML/Metal/CoreML/Vulkan/WGPU/OpenVINO/NNAPI/BLAS優先戦略
 - Tauriデスクトップ/モバイルWebViewからRust APIへ接続するための埋め込みサーバー
 - Android/iOS向けTauriビルドスクリプト
@@ -42,9 +45,9 @@
 未完了:
 
 - Qwen3-ASR / Voxtral の実モデル推論
-- Python版と同等の多形式音声デコードと実翻訳モデル推論
-- 実モデルのダウンロード/ロード進捗
-- 実機GPU/Metal/CoreML/NNAPI/CUDA/Vulkanの可用性検出
+- Python版と同等の実翻訳モデル推論
+- 実モデルの詳細なダウンロード/ロード進捗
+- 実バックエンドごとのアクセラレータ初期化検証
 - Android/iOS実機でのマイク・画面音声取得制約の検証
 - Android/iOS向けの実モデルバイナリ、モデル配置、アプリサイズ最適化
 
@@ -54,6 +57,7 @@
 - Node.js 24+ / npm
 - Playwrightで利用するブラウザ
 - Tauriデスクトップビルドを行う場合は、各OS向けのTauri前提環境
+- WebM/Opusなど`symphonia`未対応形式をリアルタイム入力する場合は`ffmpeg`をPATHに追加
 
 初回は `app/` と `frontend/` の依存関係をインストールしてください。
 

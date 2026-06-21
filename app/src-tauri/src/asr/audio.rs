@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::io::Cursor;
+use std::process::Command;
 use thiserror::Error;
 
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
@@ -13,6 +15,8 @@ pub enum AudioError {
     Unsupported(String),
     #[error("invalid wav data: {0}")]
     InvalidWav(String),
+    #[error("decode failed: {0}")]
+    Decode(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,7 +36,7 @@ pub fn load_and_preprocess_wav(audio: &[u8]) -> Result<PreprocessedAudio, AudioE
         return Err(AudioError::Empty);
     }
 
-    let decoded = decode_wav(audio)?;
+    let decoded = decode_audio(audio)?;
     let mono = downmix_to_mono(&decoded.samples, decoded.channels);
     let samples = if decoded.sample_rate == TARGET_SAMPLE_RATE {
         mono
@@ -59,13 +63,27 @@ pub fn load_and_preprocess_wav(audio: &[u8]) -> Result<PreprocessedAudio, AudioE
 }
 
 #[derive(Debug)]
-struct DecodedWav {
+struct DecodedAudio {
     samples: Vec<f32>,
     sample_rate: u32,
     channels: u16,
 }
 
-fn decode_wav(audio: &[u8]) -> Result<DecodedWav, AudioError> {
+fn decode_audio(audio: &[u8]) -> Result<DecodedAudio, AudioError> {
+    if audio.len() >= 12 && &audio[0..4] == b"RIFF" && &audio[8..12] == b"WAVE" {
+        return decode_wav(audio);
+    }
+
+    decode_with_symphonia(audio).or_else(|symphonia_error| {
+        decode_with_ffmpeg(audio).map_err(|ffmpeg_error| {
+            AudioError::Unsupported(format!(
+                "symphonia failed ({symphonia_error}); ffmpeg fallback failed ({ffmpeg_error})"
+            ))
+        })
+    })
+}
+
+fn decode_wav(audio: &[u8]) -> Result<DecodedAudio, AudioError> {
     if audio.len() < 44 {
         return Err(AudioError::InvalidWav("file is too short".to_string()));
     }
@@ -155,11 +173,160 @@ fn decode_wav(audio: &[u8]) -> Result<DecodedWav, AudioError> {
         }
     };
 
-    Ok(DecodedWav {
+    Ok(DecodedAudio {
         samples,
         sample_rate,
         channels,
     })
+}
+
+fn decode_with_symphonia(audio: &[u8]) -> Result<DecodedAudio, AudioError> {
+    use symphonia::core::codecs::audio::{AudioDecoderOptions, CODEC_ID_NULL_AUDIO};
+    use symphonia::core::errors::Error as SymphoniaError;
+    use symphonia::core::formats::probe::Hint;
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+
+    let cursor = Cursor::new(audio.to_vec());
+    let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+    let mut format = symphonia::default::get_probe()
+        .probe(
+            &Hint::new(),
+            mss,
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )
+        .map_err(|error| AudioError::Decode(error.to_string()))?;
+    let track = format
+        .tracks()
+        .iter()
+        .find(|track| {
+            track
+                .codec_params
+                .as_ref()
+                .and_then(|params| params.audio())
+                .map(|params| params.codec != CODEC_ID_NULL_AUDIO)
+                .unwrap_or(false)
+        })
+        .ok_or_else(|| AudioError::Decode("no supported audio track found".to_string()))?;
+    let track_id = track.id;
+    let codec_params = track
+        .codec_params
+        .as_ref()
+        .and_then(|params| params.audio())
+        .ok_or_else(|| AudioError::Decode("audio track has no codec params".to_string()))?
+        .clone();
+    let sample_rate = codec_params
+        .sample_rate
+        .ok_or_else(|| AudioError::Decode("audio track has no sample rate".to_string()))?;
+    let channels = codec_params
+        .channels
+        .as_ref()
+        .ok_or_else(|| AudioError::Decode("audio track has no channel layout".to_string()))?
+        .count() as u16;
+    let decoder_info = symphonia::default::get_codecs()
+        .get_audio_decoder(codec_params.codec)
+        .ok_or_else(|| {
+            AudioError::Decode(format!("unsupported audio codec {:?}", codec_params.codec))
+        })?;
+    let mut decoder = (decoder_info.factory)(&codec_params, &AudioDecoderOptions::default())
+        .map_err(|error| AudioError::Decode(error.to_string()))?;
+
+    let mut samples = Vec::new();
+
+    loop {
+        let packet = match format.next_packet() {
+            Ok(Some(packet)) => packet,
+            Ok(None) => break,
+            Err(SymphoniaError::IoError(_)) => break,
+            Err(error) => return Err(AudioError::Decode(error.to_string())),
+        };
+        if packet.track_id != track_id {
+            continue;
+        }
+
+        match decoder.decode(&packet) {
+            Ok(decoded) => {
+                decoded.copy_to_vec_interleaved::<f32>(&mut samples);
+            }
+            Err(SymphoniaError::DecodeError(_)) => continue,
+            Err(SymphoniaError::ResetRequired) => {
+                return Err(AudioError::Decode("decoder reset is required".to_string()));
+            }
+            Err(error) => return Err(AudioError::Decode(error.to_string())),
+        }
+    }
+
+    if samples.is_empty() {
+        return Err(AudioError::Decode(
+            "decoded audio contains no samples".to_string(),
+        ));
+    }
+
+    Ok(DecodedAudio {
+        samples,
+        sample_rate,
+        channels,
+    })
+}
+
+fn decode_with_ffmpeg(audio: &[u8]) -> Result<DecodedAudio, AudioError> {
+    let stem = format!(
+        "amcp-audio-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
+    );
+    let input_path = std::env::temp_dir().join(format!("{stem}.input"));
+    let output_path = std::env::temp_dir().join(format!("{stem}.f32le"));
+
+    std::fs::write(&input_path, audio)
+        .map_err(|error| AudioError::Decode(format!("failed to write temp input: {error}")))?;
+
+    let status = Command::new("ffmpeg")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(&input_path)
+        .arg("-f")
+        .arg("f32le")
+        .arg("-acodec")
+        .arg("pcm_f32le")
+        .arg("-ac")
+        .arg("1")
+        .arg("-ar")
+        .arg(TARGET_SAMPLE_RATE.to_string())
+        .arg(&output_path)
+        .status()
+        .map_err(|error| AudioError::Decode(format!("failed to run ffmpeg: {error}")))?;
+
+    let result = if status.success() {
+        let bytes = std::fs::read(&output_path).map_err(|error| {
+            AudioError::Decode(format!("failed to read ffmpeg output: {error}"))
+        })?;
+        let samples = decode_float32(&bytes);
+        if samples.is_empty() {
+            Err(AudioError::Decode("ffmpeg produced no samples".to_string()))
+        } else {
+            Ok(DecodedAudio {
+                samples,
+                sample_rate: TARGET_SAMPLE_RATE,
+                channels: 1,
+            })
+        }
+    } else {
+        Err(AudioError::Decode(format!("ffmpeg exited with {status}")))
+    };
+
+    let _ = std::fs::remove_file(&input_path);
+    let _ = std::fs::remove_file(&output_path);
+
+    result
 }
 
 fn decode_pcm16(data: &[u8]) -> Vec<f32> {
