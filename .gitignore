@@ -56,6 +56,12 @@ faster-whisper/
 __pycache__/
 *.pt
 *.pth
+
+# Rust/Tauri runtime model cache (keep directory only)
+app/models/**
+!app/models/
+!app/models/.gitkeep
+
 # Explicitly allow our Pydantic models directory
 !backend/app/models/
 !backend/app/models/*.py

@@ -78,8 +78,9 @@ Tauriデスクトップ/モバイルでは、WebViewから同一アプリ内Rust
 - `/api/status`とWS応答でランタイムバックエンド状態を返し、Qwen3-ASR Candle / Voxtral ORT のfeature境界、artifact診断、model-native翻訳診断、モデル準備時の`validating`進捗を追加済み。
 - Qwen Candleモデルディレクトリ、Qwen config/tokenizer/weight検証、Voxtral split ONNX/tokenizer、Voxtral ORTセッションメタデータ、model-native翻訳の事前ロード進捗を追加済み。
 - Qwen3-ASRは外部C DLL依存を廃止し、`qwen3-asr`/Candleでモデルロード、自動キャッシュ、実音声サンプル推論呼び出しを行う経路へ移行済み。
+- Qwen3-ASR Candleで原文ASRと翻訳先言語指定の2回生成を行うmodel-native翻訳を追加済み。
 - Voxtral ORTセッション初期化、分割ONNX構成 (`audio_encoder.onnx`、`embed_tokens.onnx`、`decoder_model_merged.onnx`、`tokenizer.json`) の設定解決、log-mel入力生成、KV cache付き自己回帰デコード、音声+翻訳指示によるmodel-native翻訳、DirectML/CUDA featureコンパイルを追加済み。
-- 翻訳レスポンス契約、日本語->英語翻訳前の小さい日本語数字正規化、外部Python/コマンドランナー非依存の翻訳境界を追加済み。Qwen3-ASR Candle経路は上流crateの公開APIがASR専用のため、現時点では翻訳有効時も原文を保持する。
+- 翻訳レスポンス契約、日本語->英語翻訳前の小さい日本語数字正規化、外部Python/コマンドランナー非依存の翻訳境界を追加済み。
 - Windows実機で実モデルの速度/品質を測る `validate` CLI と、モデル配置を確認する `--diagnostics-only` を追加済み。
 - 実モデル統合はfeature境界を定義済み。各ネイティブ依存のCI整備後に有効化する。
 

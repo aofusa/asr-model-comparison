@@ -14,7 +14,7 @@
   - `GET /api/ws/transcribe`
 - `auto` / `gpu` / `cpu` のアクセラレータ設定に対応しています。
 - Tauriデスクトップ/モバイル環境では、UIから同一アプリ内のRust APIサーバー (`http://127.0.0.1:8765`) へ接続します。
-- Whisper、Qwen3-ASR Candle、Voxtral ORTはfeature有効時に実推論へ接続します。翻訳は外部Python/コマンドランナーを使わず、Voxtral ORTの音声+指示プロンプトによるmodel-native翻訳を優先します。
+- Whisper、Qwen3-ASR Candle、Voxtral ORTはfeature有効時に実推論へ接続します。翻訳は外部Python/コマンドランナーを使わず、Qwen3-ASR Candleの出力言語プロンプト、またはVoxtral ORTの音声+指示プロンプトによるmodel-native翻訳を優先します。
 
 ## Python版との機能網羅状況
 
@@ -34,7 +34,7 @@
 - Whisperモデルのローカルキャッシュ確認と自動ダウンロード
 - 翻訳レスポンス契約 (`transcript_text` / `translated_text` / `target_language`) の維持
 - 日本語 -> 英語翻訳前の小さい日本語数字正規化
-- Voxtral ORTでの音声+翻訳指示プロンプトによるmodel-native翻訳
+- Qwen3-ASR Candleの出力言語プロンプト、およびVoxtral ORTの音声+翻訳指示プロンプトによるmodel-native翻訳
 - 単一モデルロード制約の管理
 - モデル準備進捗イベント (`loading` / `validating` / `downloading` / `downloaded` / `ready`)
 - Whisper自動ダウンロード時の `bytes_downloaded` / `total_bytes` 付きバイト単位進捗
@@ -165,9 +165,7 @@ npm run server:qwen:cuda
 
 ### 翻訳実推論
 
-翻訳は外部Python/コマンドランナーを使いません。VoxtralはLLM型の音声+テキストモデルとして扱い、まず原文ASRを生成し、`target_language` が指定された場合は同じRust/ORT経路で「音声を指定言語へ翻訳し、翻訳文のみ返す」プロンプトを追加実行します。レスポンスは `transcript_text` に原文、`translated_text` に翻訳結果、`text` に表示用テキストを保持します。
-
-Qwen3-ASRの現在のRust/Candle経路は `qwen3-asr` crate の公開APIがASR専用で、テキスト生成/翻訳APIを公開していないため、翻訳有効時も `translated_text` は `null` のまま原文ASRを返します。Qwenで翻訳まで行うには、上流crateがテキスト生成APIを公開するか、Candle上でQwen decoderの生成経路を別途実装する必要があります。
+翻訳は外部Python/コマンドランナーを使いません。Qwen3-ASRは `target_language` 指定時にRust/Candle経路で2回生成し、1回目で原文ASR、2回目で翻訳先言語を `language` プロンプトへ指定した翻訳文を生成します。ja/en翻訳では既定で `voiceping-ai/qwen3-asr-ja-en-speech-translation` を翻訳用checkpointとして使い、`AMCP_QWEN_TRANSLATION_MODEL_ID` で別checkpointへ差し替えできます。VoxtralはLLM型の音声+テキストモデルとして扱い、まず原文ASRを生成し、`target_language` が指定された場合は同じRust/ORT経路で「音声を指定言語へ翻訳し、翻訳文のみ返す」プロンプトを追加実行します。レスポンスは `transcript_text` に原文、`translated_text` に翻訳結果、`text` に表示用テキストを保持します。
 
 ### Voxtral ORT実推論
 
@@ -179,7 +177,7 @@ cd app
 npm run server:voxtral
 ```
 
-`AMCP_VOXTRAL_MODEL_DIR` を指定する場合は、以下のどちらかの配置を使えます。
+`AMCP_VOXTRAL_MODEL_DIR` を指定しない場合は、`AMCP_MODEL_DIR\voxtral`、`AMCP_MODEL_DIR` も未設定の場合は `app\models\voxtral` を既定のモデル配置先として使います。配置は以下のどちらかを使えます。
 
 ```text
 C:\models\voxtral\tokenizer.json
@@ -196,6 +194,8 @@ C:\models\voxtral\audio_encoder.onnx
 C:\models\voxtral\embed_tokens.onnx
 C:\models\voxtral\decoder_model_merged.onnx
 ```
+
+`onnx-community/Voxtral-Mini-3B-2507-ONNX` のように `audio_encoder_q4.onnx`、`embed_tokens_q4.onnx`、`decoder_model_merged_q4.onnx` などのvariant名で配置されている場合も、`AMCP_VOXTRAL_MODEL_DIR` 配下から自動検出します。variantを明示したい場合は `AMCP_VOXTRAL_ONNX_VARIANT=q4`、`q4f16`、`fp16` などを指定してください。ONNX外部データ (`*.onnx_data`) は同じディレクトリに置く必要があります。
 
 個別に指定する場合:
 

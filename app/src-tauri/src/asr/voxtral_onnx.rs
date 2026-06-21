@@ -1,13 +1,10 @@
 use super::audio::PreprocessedAudio;
 use crate::accelerator::HardwareBackend;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(feature = "voxtral")]
 use ort::value::Tensor;
-#[cfg(feature = "voxtral")]
-use std::path::Path;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VoxtralOnnxConfig {
     pub model_path: PathBuf,
@@ -43,12 +40,7 @@ pub fn resolve_voxtral_model_path() -> Option<PathBuf> {
         .ok()
         .filter(|path| !path.trim().is_empty())
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("AMCP_VOXTRAL_MODEL_DIR")
-                .ok()
-                .filter(|path| !path.trim().is_empty())
-                .map(|dir| PathBuf::from(dir).join("model.onnx"))
-        })
+        .or_else(|| Some(default_voxtral_model_dir().join("model.onnx")))
 }
 
 pub fn configure_voxtral_onnx(available_backends: &[HardwareBackend]) -> Option<VoxtralOnnxConfig> {
@@ -93,7 +85,7 @@ fn resolve_voxtral_split_paths() -> Option<VoxtralSplitPaths> {
         });
     }
 
-    let model_dir = env_path("AMCP_VOXTRAL_MODEL_DIR")?;
+    let model_dir = default_voxtral_model_dir();
     let onnx_dir = model_dir.join("onnx");
     let base_dir = if onnx_dir.is_dir() {
         onnx_dir
@@ -101,9 +93,21 @@ fn resolve_voxtral_split_paths() -> Option<VoxtralSplitPaths> {
         model_dir
     };
     Some(VoxtralSplitPaths {
-        audio_encoder_path: base_dir.join("audio_encoder.onnx"),
-        embed_tokens_path: base_dir.join("embed_tokens.onnx"),
-        decoder_path: base_dir.join("decoder_model_merged.onnx"),
+        audio_encoder_path: resolve_voxtral_onnx_path(
+            &base_dir,
+            "audio_encoder",
+            &["q4", "q4f16", "fp16", "int8", "quantized", "uint8", "bnb4"],
+        ),
+        embed_tokens_path: resolve_voxtral_onnx_path(
+            &base_dir,
+            "embed_tokens",
+            &["q4", "fp16", "quantized"],
+        ),
+        decoder_path: resolve_voxtral_onnx_path(
+            &base_dir,
+            "decoder_model_merged",
+            &["q4", "q4f16", "fp16"],
+        ),
         tokenizer_path: base_dir
             .parent()
             .map(|parent| parent.join("tokenizer.json"))
@@ -117,6 +121,43 @@ fn env_path(key: &str) -> Option<PathBuf> {
         .ok()
         .filter(|path| !path.trim().is_empty())
         .map(PathBuf::from)
+}
+
+pub fn default_voxtral_model_dir() -> PathBuf {
+    env_path("AMCP_VOXTRAL_MODEL_DIR").unwrap_or_else(|| {
+        std::env::var("AMCP_MODEL_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join("models")
+            })
+            .join("voxtral")
+    })
+}
+
+fn resolve_voxtral_onnx_path(base_dir: &Path, stem: &str, fallback_variants: &[&str]) -> PathBuf {
+    if let Ok(variant) = std::env::var("AMCP_VOXTRAL_ONNX_VARIANT") {
+        let variant = variant.trim();
+        if !variant.is_empty() {
+            return variant_path(base_dir, stem, variant);
+        }
+    }
+
+    let canonical = base_dir.join(format!("{stem}.onnx"));
+    if canonical.is_file() {
+        return canonical;
+    }
+
+    fallback_variants
+        .iter()
+        .map(|variant| variant_path(base_dir, stem, variant))
+        .find(|path| path.is_file())
+        .unwrap_or(canonical)
+}
+
+fn variant_path(base_dir: &Path, stem: &str, variant: &str) -> PathBuf {
+    base_dir.join(format!("{stem}_{variant}.onnx"))
 }
 
 pub fn voxtral_provider_plan(available_backends: &[HardwareBackend]) -> Vec<HardwareBackend> {

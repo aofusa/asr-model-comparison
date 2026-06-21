@@ -266,7 +266,10 @@ impl HybridModelManager {
                         transcript_text.clone(),
                         translated_text.clone(),
                         result.target_language.clone(),
-                        "voxtral-onnx",
+                        result
+                            .translation_engine
+                            .as_deref()
+                            .unwrap_or("model-native"),
                     )
                 })
             })
@@ -432,7 +435,10 @@ mod tests {
 
         assert_eq!(result.translated_text, None);
         assert_eq!(result.target_language.as_deref(), Some("en"));
-        assert_eq!(result.translation_engine.as_deref(), Some("unavailable"));
+        assert_eq!(
+            result.translation_engine.as_deref(),
+            Some("rust-native-unavailable")
+        );
         assert!(!result.transcript_text.is_empty());
     }
 

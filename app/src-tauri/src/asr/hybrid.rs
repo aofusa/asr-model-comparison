@@ -11,6 +11,7 @@ pub struct BackendTranscription {
     pub transcript_text: Option<String>,
     pub translated_text: Option<String>,
     pub target_language: Option<String>,
+    pub translation_engine: Option<String>,
     pub language: Option<String>,
     pub chunks: Vec<serde_json::Value>,
 }
@@ -264,10 +265,11 @@ fn try_transcribe_qwen(
     options: &TranscriptionOptions,
     available_backends: &[HardwareBackend],
 ) -> Result<Option<BackendTranscription>, String> {
-    let Some(result) = qwen_candle::transcribe_qwen_audio(
+    let Some(result) = qwen_candle::transcribe_qwen_audio_with_translation(
         &audio.samples,
         &options.model_id,
         options.language.as_deref(),
+        options.target_language.as_deref(),
         options.previous_text.as_deref(),
         available_backends,
     )?
@@ -276,11 +278,15 @@ fn try_transcribe_qwen(
     };
 
     Ok(Some(BackendTranscription {
-        text: result.text,
-        transcript_text: None,
-        translated_text: None,
-        target_language: None,
-        language: options.language.clone(),
+        text: result
+            .translated_text
+            .clone()
+            .unwrap_or_else(|| result.transcript_text.clone()),
+        transcript_text: Some(result.transcript_text),
+        translated_text: result.translated_text,
+        target_language: result.target_language,
+        translation_engine: Some("qwen-candle".to_string()),
+        language: result.language,
         chunks: vec![serde_json::json!({
             "backend": "qwen-candle",
             "model_dir": result.model_dir,
@@ -315,6 +321,7 @@ fn try_transcribe_voxtral(
         transcript_text: Some(result.transcript_text),
         translated_text: result.translated_text,
         target_language: result.target_language,
+        translation_engine: Some("voxtral-onnx".to_string()),
         language: options.language.clone(),
         chunks: vec![serde_json::json!({
             "backend": "voxtral-onnx",
@@ -399,6 +406,7 @@ fn try_transcribe_whisper(
         transcript_text: None,
         translated_text: None,
         target_language: None,
+        translation_engine: None,
         language: options.language.clone(),
         chunks,
     }))

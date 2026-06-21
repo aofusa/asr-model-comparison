@@ -5,7 +5,7 @@ pub struct TranslationOutcome {
     pub transcript_text: String,
     pub translated_text: Option<String>,
     pub target_language: Option<String>,
-    pub engine: &'static str,
+    pub engine: String,
     pub note: Option<String>,
 }
 
@@ -31,7 +31,7 @@ pub fn translate_optional(
             transcript_text,
             translated_text: None,
             target_language: target,
-            engine: "none",
+            engine: "none".to_string(),
             note: None,
         };
     }
@@ -41,7 +41,7 @@ pub fn translate_optional(
             transcript_text,
             translated_text: None,
             target_language: target,
-            engine: "none",
+            engine: "none".to_string(),
             note: None,
         };
     }
@@ -53,9 +53,9 @@ pub fn translate_optional(
         transcript_text: normalized,
         translated_text: None,
         target_language: target,
-        engine: "rust-native-unavailable",
+        engine: "rust-native-unavailable".to_string(),
         note: Some(
-            "Rust-native text translation is unavailable; use Voxtral for model-native speech translation."
+            "Rust-native text translation is unavailable; use Qwen3-ASR or Voxtral for model-native speech translation."
                 .to_string(),
         ),
     }
@@ -66,13 +66,13 @@ impl TranslationOutcome {
         transcript_text: String,
         translated_text: String,
         target_language: Option<String>,
-        engine: &'static str,
+        engine: impl Into<String>,
     ) -> Self {
         TranslationOutcome {
             transcript_text,
             translated_text: Some(translated_text),
             target_language,
-            engine,
+            engine: engine.into(),
             note: None,
         }
     }
@@ -82,8 +82,11 @@ pub fn runtime_status() -> TranslationRuntimeStatus {
     TranslationRuntimeStatus {
         configured: true,
         engine: "model-native",
-        supported_pairs: vec!["voxtral:speech->target-language".to_string()],
-        reason: "external translation commands are disabled; Voxtral uses Rust/ORT model-native speech translation when target_language is set".to_string(),
+        supported_pairs: vec![
+            "qwen3-asr:speech->target-language".to_string(),
+            "voxtral:speech->target-language".to_string(),
+        ],
+        reason: "external translation commands are disabled; Qwen3-ASR uses Rust/Candle language-prompt translation and Voxtral uses Rust/ORT model-native speech translation when target_language is set".to_string(),
     }
 }
 

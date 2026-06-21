@@ -27,11 +27,21 @@ pub struct QwenCandleTranscription {
     pub device: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QwenCandleSpeechTranslation {
+    pub transcript_text: String,
+    pub translated_text: Option<String>,
+    pub language: Option<String>,
+    pub target_language: Option<String>,
+    pub model_dir: PathBuf,
+    pub device: String,
+}
+
 pub fn configure_qwen_candle(
     model_id: &str,
     available_backends: &[HardwareBackend],
 ) -> QwenCandleConfig {
-    let hf_model_id = qwen_hf_model_id(model_id).to_string();
+    let hf_model_id = qwen_hf_model_id(model_id);
     let explicit_dir = std::env::var("AMCP_QWEN_MODEL_DIR")
         .ok()
         .filter(|path| !path.trim().is_empty())
@@ -118,6 +128,44 @@ pub fn transcribe_qwen_audio(
 }
 
 #[cfg(feature = "qwen")]
+pub fn transcribe_qwen_audio_with_translation(
+    samples: &[f32],
+    model_id: &str,
+    language: Option<&str>,
+    target_language: Option<&str>,
+    _previous_text: Option<&str>,
+    available_backends: &[HardwareBackend],
+) -> Result<Option<QwenCandleSpeechTranslation>, String> {
+    if samples.is_empty() {
+        return Ok(Some(QwenCandleSpeechTranslation {
+            transcript_text: String::new(),
+            translated_text: None,
+            language: language.map(str::to_string),
+            target_language: normalize_target_language(target_language),
+            model_dir: PathBuf::new(),
+            device: "none".to_string(),
+        }));
+    }
+
+    let samples = samples.to_vec();
+    let model_id = model_id.to_string();
+    let language = language.map(str::to_string);
+    let target_language = target_language.map(str::to_string);
+    let available_backends = available_backends.to_vec();
+    std::thread::spawn(move || {
+        transcribe_qwen_audio_with_translation_blocking(
+            &samples,
+            &model_id,
+            language.as_deref(),
+            target_language.as_deref(),
+            &available_backends,
+        )
+    })
+    .join()
+    .map_err(|_| "Qwen Candle translation inference thread panicked".to_string())?
+}
+
+#[cfg(feature = "qwen")]
 fn transcribe_qwen_audio_blocking(
     samples: &[f32],
     model_id: &str,
@@ -146,6 +194,81 @@ fn transcribe_qwen_audio_blocking(
     }))
 }
 
+#[cfg(feature = "qwen")]
+fn transcribe_qwen_audio_with_translation_blocking(
+    samples: &[f32],
+    model_id: &str,
+    language: Option<&str>,
+    target_language: Option<&str>,
+    available_backends: &[HardwareBackend],
+) -> Result<Option<QwenCandleSpeechTranslation>, String> {
+    let config = configure_qwen_candle(model_id, available_backends);
+    let model_dir = ensure_qwen_model_dir(&config)?;
+    let device = qwen_device(&config.backends);
+    let device_label = qwen_device_label(&device);
+    let engine = load_qwen_engine(&model_dir, device.clone())?;
+
+    let transcript = run_qwen_inference(&engine, samples, language)?;
+    let target_language = normalize_target_language(target_language);
+    let source_language = normalize_target_language(language);
+    let translated_text = if target_language.is_some() && target_language != source_language {
+        let translation_model_id =
+            qwen_translation_model_id(source_language.as_deref(), target_language.as_deref())
+                .unwrap_or_else(|| config.model_id.clone());
+        let translated = if translation_model_id == config.model_id {
+            run_qwen_inference(&engine, samples, target_language.as_deref())?
+        } else {
+            let translation_config =
+                configure_qwen_candle(&translation_model_id, available_backends);
+            let translation_model_dir = ensure_qwen_model_dir(&translation_config)?;
+            let translation_engine = load_qwen_engine(&translation_model_dir, device)?;
+            run_qwen_inference(&translation_engine, samples, target_language.as_deref())?
+        };
+        if translated.text.trim().is_empty() {
+            None
+        } else {
+            Some(translated.text)
+        }
+    } else {
+        None
+    };
+
+    Ok(Some(QwenCandleSpeechTranslation {
+        transcript_text: transcript.text,
+        translated_text,
+        language: Some(transcript.language),
+        target_language,
+        model_dir,
+        device: device_label,
+    }))
+}
+
+#[cfg(feature = "qwen")]
+fn load_qwen_engine(
+    model_dir: &std::path::Path,
+    device: candle_core::Device,
+) -> Result<qwen3_asr::AsrInference, String> {
+    qwen3_asr::AsrInference::load(model_dir, device)
+        .map_err(|error| format!("failed to load Qwen Candle model: {error}"))
+}
+
+#[cfg(feature = "qwen")]
+fn run_qwen_inference(
+    engine: &qwen3_asr::AsrInference,
+    samples: &[f32],
+    language: Option<&str>,
+) -> Result<qwen3_asr::TranscribeResult, String> {
+    let mut options = qwen3_asr::TranscribeOptions::default().with_max_new_tokens(512);
+    if let Some(language) = qwen_language_name(language) {
+        options = options.with_language(language);
+    }
+    let mut result = engine
+        .transcribe_samples(samples, options)
+        .map_err(|error| format!("Qwen Candle transcription failed: {error}"))?;
+    result.text = clean_qwen_text(&result.text);
+    Ok(result)
+}
+
 #[cfg(not(feature = "qwen"))]
 pub fn transcribe_qwen_audio(
     _samples: &[f32],
@@ -154,6 +277,18 @@ pub fn transcribe_qwen_audio(
     _previous_text: Option<&str>,
     _available_backends: &[HardwareBackend],
 ) -> Result<Option<QwenCandleTranscription>, String> {
+    Ok(None)
+}
+
+#[cfg(not(feature = "qwen"))]
+pub fn transcribe_qwen_audio_with_translation(
+    _samples: &[f32],
+    _model_id: &str,
+    _language: Option<&str>,
+    _target_language: Option<&str>,
+    _previous_text: Option<&str>,
+    _available_backends: &[HardwareBackend],
+) -> Result<Option<QwenCandleSpeechTranslation>, String> {
     Ok(None)
 }
 
@@ -229,10 +364,36 @@ fn qwen_device_label(device: &candle_core::Device) -> String {
     }
 }
 
-fn qwen_hf_model_id(model_id: &str) -> &'static str {
+fn qwen_hf_model_id(model_id: &str) -> String {
+    if model_id.contains('/') {
+        return model_id.to_string();
+    }
     match model_id {
-        "qwen3-asr-1.7b" => "Qwen/Qwen3-ASR-1.7B",
-        _ => "Qwen/Qwen3-ASR-0.6B",
+        "qwen3-asr-1.7b" => "Qwen/Qwen3-ASR-1.7B".to_string(),
+        "qwen3-asr-ja-en-translation" => {
+            "voiceping-ai/qwen3-asr-ja-en-speech-translation".to_string()
+        }
+        _ => "Qwen/Qwen3-ASR-0.6B".to_string(),
+    }
+}
+
+#[cfg(feature = "qwen")]
+fn qwen_translation_model_id(
+    source_language: Option<&str>,
+    target_language: Option<&str>,
+) -> Option<String> {
+    if let Ok(model_id) = std::env::var("AMCP_QWEN_TRANSLATION_MODEL_ID") {
+        let model_id = model_id.trim();
+        if !model_id.is_empty() {
+            return Some(model_id.to_string());
+        }
+    }
+
+    match (source_language, target_language) {
+        (Some("ja"), Some("en")) | (Some("en"), Some("ja")) => {
+            Some("voiceping-ai/qwen3-asr-ja-en-speech-translation".to_string())
+        }
+        _ => None,
     }
 }
 
@@ -259,6 +420,25 @@ fn qwen_language_name(language: Option<&str>) -> Option<String> {
         "nl" | "dutch" => Some("dutch".to_string()),
         "pl" | "polish" => Some("polish".to_string()),
         "sv" | "swedish" => Some("swedish".to_string()),
+        _ => None,
+    }
+}
+
+#[cfg(any(test, feature = "qwen"))]
+fn normalize_target_language(language: Option<&str>) -> Option<String> {
+    match language?.trim().to_ascii_lowercase().as_str() {
+        "" | "auto" | "none" => None,
+        "ja" | "japanese" => Some("ja".to_string()),
+        "en" | "english" => Some("en".to_string()),
+        "zh" | "chinese" => Some("zh".to_string()),
+        "ko" | "korean" => Some("ko".to_string()),
+        "fr" | "french" => Some("fr".to_string()),
+        "de" | "german" => Some("de".to_string()),
+        "es" | "spanish" => Some("es".to_string()),
+        "it" | "italian" => Some("it".to_string()),
+        "pt" | "portuguese" => Some("pt".to_string()),
+        "ru" | "russian" => Some("ru".to_string()),
+        other if qwen_language_name(Some(other)).is_some() => Some(other.to_string()),
         _ => None,
     }
 }
@@ -291,5 +471,14 @@ mod tests {
     #[test]
     fn cleans_qwen_asr_markers() {
         assert_eq!(clean_qwen_text("<asr_text>hello<|im_end|>"), "hello");
+    }
+
+    #[test]
+    fn normalizes_translation_targets() {
+        assert_eq!(
+            normalize_target_language(Some("English")).as_deref(),
+            Some("en")
+        );
+        assert_eq!(normalize_target_language(Some("none")), None);
     }
 }
