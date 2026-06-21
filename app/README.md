@@ -14,7 +14,7 @@
   - `GET /api/ws/transcribe`
 - `auto` / `gpu` / `cpu` のアクセラレータ設定に対応しています。
 - Tauriデスクトップ/モバイル環境では、UIから同一アプリ内のRust APIサーバー (`http://127.0.0.1:8765`) へ接続します。
-- WhisperとQwen3-ASRはfeature有効時に実推論へ接続します。Voxtral ONNXと実翻訳はまだ軽量プレースホルダーへフォールバックします。
+- Whisper、Qwen3-ASR、Voxtral ONNXはfeature有効時に実推論へ接続します。実翻訳はまだ軽量プレースホルダーへフォールバックします。
 
 ## Python版との機能網羅状況
 
@@ -42,16 +42,15 @@
 - `/api/status`とWS応答でのランタイムバックエンド状態 (`whisper-rs` / `qwen-c` / `voxtral-onnx` / `placeholder`) の可視化
 - Qwen3-ASR C FFI / Voxtral ONNX のfeature境界と設定検証 (`AMCP_QWEN_*`、`AMCP_VOXTRAL_*`、`ORT_DYLIB_PATH`)
 - Qwen3-ASR C FFIの動的ライブラリロード、`qwen_load`/`qwen_transcribe_audio`/`qwen_free`シンボル検証、モデルディレクトリ検証、実音声サンプル推論呼び出し
-- Voxtral ONNX Runtimeセッション初期化、入出力メタデータ取得、DirectML/CUDA featureコンパイル
+- Voxtral ONNX Runtimeセッション初期化、分割ONNX構成 (`audio_encoder.onnx`、`embed_tokens.onnx`、`decoder_model_merged.onnx`、`tokenizer.json`) の設定解決、log-mel入力生成、KV cache付き自己回帰デコード、DirectML/CUDA featureコンパイル
 - Tauriデスクトップ/モバイルWebViewからRust APIへ接続するための埋め込みサーバー
 - Android/iOS向けTauriビルドスクリプト
 
 未完了:
 
-- Voxtral の実モデル推論
 - Python版と同等の実翻訳モデル推論
 - 実モデルの詳細なダウンロード/ロード進捗
-- Voxtral ONNXの分割モデル構成 (`audio_encoder.onnx`、`embed_tokens.onnx`、`decoder_model_merged.onnx`、`tokenizer.json`) に対する入力テンソル生成/自己回帰デコード処理
+- Voxtral ONNX実モデルファイルを配置したWindows実機での出力品質・速度検証
 - Android/iOS実機でのマイク・画面音声取得制約の検証
 - Android/iOS向けの実モデルバイナリ、モデル配置、アプリサイズ最適化
 
@@ -159,15 +158,45 @@ npm run server:qwen
 
 Qwen C APIの返却文字列はC側の `free(text)` 前提です。WindowsではDLLとRustプロセスが互換CRTを使っているビルドを利用してください。言語指定が `auto` 以外の場合は、対応するQwen言語名へ変換して `qwen_set_force_language` が存在する場合だけ設定します。前回認識文は `qwen_set_prompt` が存在する場合だけ文脈プロンプトとして渡します。
 
-### Voxtral ONNX初期化
+### Voxtral ONNX実推論
 
-Voxtralは `ort` / ONNX Runtime のfeature付きでセッション初期化に対応しています。現段階ではONNXモデルのロード、Execution Provider登録、入出力メタデータ取得までを実装しています。実推論には分割ONNXモデル (`audio_encoder.onnx`、`embed_tokens.onnx`、`decoder_model_merged.onnx`) と `tokenizer.json` を組み合わせた自己回帰生成ループが必要で、次の実装対象です。
+Voxtralは `ort` / ONNX Runtime のfeature付きで、分割ONNXモデル (`audio_encoder.onnx`、`embed_tokens.onnx`、`decoder_model_merged.onnx`) と `tokenizer.json` を組み合わせた実推論に対応しています。Rust側で30秒チャンクのlog-mel特徴量を生成し、音声埋め込みをプロンプトへ差し込んで、KV cache付き自己回帰デコードを実行します。
 
 ```powershell
-$env:AMCP_VOXTRAL_ONNX_MODEL_PATH="C:\models\voxtral\model.onnx"
+$env:AMCP_VOXTRAL_MODEL_DIR="C:\models\voxtral"
 cd app
 npm run server:voxtral
 ```
+
+`AMCP_VOXTRAL_MODEL_DIR` を指定する場合は、以下のどちらかの配置を使えます。
+
+```text
+C:\models\voxtral\tokenizer.json
+C:\models\voxtral\onnx\audio_encoder.onnx
+C:\models\voxtral\onnx\embed_tokens.onnx
+C:\models\voxtral\onnx\decoder_model_merged.onnx
+```
+
+または:
+
+```text
+C:\models\voxtral\tokenizer.json
+C:\models\voxtral\audio_encoder.onnx
+C:\models\voxtral\embed_tokens.onnx
+C:\models\voxtral\decoder_model_merged.onnx
+```
+
+個別に指定する場合:
+
+```powershell
+$env:AMCP_VOXTRAL_AUDIO_ENCODER_PATH="C:\models\voxtral\onnx\audio_encoder.onnx"
+$env:AMCP_VOXTRAL_EMBED_TOKENS_PATH="C:\models\voxtral\onnx\embed_tokens.onnx"
+$env:AMCP_VOXTRAL_DECODER_PATH="C:\models\voxtral\onnx\decoder_model_merged.onnx"
+$env:AMCP_VOXTRAL_TOKENIZER_PATH="C:\models\voxtral\tokenizer.json"
+npm run server:voxtral
+```
+
+生成トークン数は既定256です。必要に応じて `AMCP_VOXTRAL_MAX_TOKENS` で調整できます。
 
 WindowsでDirectMLまたはCUDAを優先する場合:
 
@@ -179,7 +208,7 @@ npm run server:voxtral:directml
 npm run server:voxtral:cuda
 ```
 
-`AMCP_VOXTRAL_MODEL_DIR` を指定した場合は、その配下の `model.onnx` を参照します。ONNX Runtimeの動的ライブラリを手動指定する場合は `ORT_DYLIB_PATH` を設定してください。
+ONNX Runtimeの動的ライブラリを手動指定する場合は `ORT_DYLIB_PATH` を設定してください。旧式の `AMCP_VOXTRAL_ONNX_MODEL_PATH` は単一ONNXのセッション初期化確認用として残していますが、実推論には上記の分割モデル一式が必要です。
 
 ## ビルド方法
 

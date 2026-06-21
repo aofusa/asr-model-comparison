@@ -144,11 +144,20 @@ fn voxtral_status(
 ) -> RuntimeBackendStatus {
     let configured = cfg!(feature = "voxtral");
     let onnx_config = voxtral_onnx::configure_voxtral_onnx(available_backends);
-    let model_file_available = onnx_config
+    let split_files_available = onnx_config
         .as_ref()
-        .map(|config| config.model_path.is_file())
+        .map(|config| {
+            [
+                config.audio_encoder_path.as_ref(),
+                config.embed_tokens_path.as_ref(),
+                config.decoder_path.as_ref(),
+                config.tokenizer_path.as_ref(),
+            ]
+            .into_iter()
+            .all(|path| path.map(|path| path.is_file()).unwrap_or(false))
+        })
         .unwrap_or(false);
-    let real_inference_available = configured && model_file_available;
+    let real_inference_available = configured && split_files_available;
     RuntimeBackendStatus {
         model_id: model_id.to_string(),
         family,
@@ -176,9 +185,10 @@ fn voxtral_status(
                 )
             }),
         reason: if real_inference_available {
-            "voxtral feature is enabled and a Voxtral ONNX model file is configured.".to_string()
+            "voxtral feature is enabled and Voxtral split ONNX/tokenizer files are configured."
+                .to_string()
         } else if configured {
-            "voxtral feature is enabled, but AMCP_VOXTRAL_ONNX_MODEL_PATH or AMCP_VOXTRAL_MODEL_DIR/model.onnx does not point to an existing model file."
+            "voxtral feature is enabled, but audio_encoder.onnx, embed_tokens.onnx, decoder_model_merged.onnx, and tokenizer.json are not fully configured."
                 .to_string()
         } else {
             "voxtral feature is not enabled; using placeholder inference.".to_string()

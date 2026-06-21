@@ -2,6 +2,7 @@ use super::audio::PreprocessedAudio;
 use super::TranscriptionOptions;
 use crate::accelerator::HardwareBackend;
 use crate::asr::qwen_ffi;
+use crate::asr::voxtral_onnx;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +22,9 @@ pub fn try_transcribe_real(
     }
     if options.model_id.starts_with("qwen3-asr") {
         return try_transcribe_qwen(audio, options, available_backends);
+    }
+    if options.model_id.starts_with("voxtral") {
+        return try_transcribe_voxtral(audio, available_backends);
     }
 
     Ok(None)
@@ -65,6 +69,29 @@ fn try_transcribe_qwen(
             "backend": "qwen-c",
             "model_dir": result.model_dir,
             "library_path": result.library_path,
+            "sample_rate": audio.sample_rate,
+            "duration_seconds": audio.duration_seconds,
+        })],
+    }))
+}
+
+fn try_transcribe_voxtral(
+    audio: &PreprocessedAudio,
+    available_backends: &[HardwareBackend],
+) -> Result<Option<BackendTranscription>, String> {
+    let Some(result) = voxtral_onnx::transcribe_voxtral_audio(audio, available_backends)? else {
+        return Ok(None);
+    };
+
+    Ok(Some(BackendTranscription {
+        text: result.text,
+        language: None,
+        chunks: vec![serde_json::json!({
+            "backend": "voxtral-onnx",
+            "audio_encoder_path": result.audio_encoder_path,
+            "decoder_path": result.decoder_path,
+            "audio_frames": result.audio_frames,
+            "generated_tokens": result.generated_tokens,
             "sample_rate": audio.sample_rate,
             "duration_seconds": audio.duration_seconds,
         })],
