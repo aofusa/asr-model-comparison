@@ -29,6 +29,9 @@ pub struct VoxtralOnnxSessionInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VoxtralOnnxTranscription {
     pub text: String,
+    pub transcript_text: String,
+    pub translated_text: Option<String>,
+    pub target_language: Option<String>,
     pub generated_tokens: usize,
     pub audio_frames: usize,
     pub audio_encoder_path: PathBuf,
@@ -162,6 +165,9 @@ pub fn validate_voxtral_session(
 #[cfg(feature = "voxtral")]
 pub fn transcribe_voxtral_audio(
     audio: &PreprocessedAudio,
+    language: Option<&str>,
+    target_language: Option<&str>,
+    previous_text: Option<&str>,
     available_backends: &[HardwareBackend],
 ) -> Result<Option<VoxtralOnnxTranscription>, String> {
     let Some(config) = configure_voxtral_onnx(available_backends) else {
@@ -183,6 +189,9 @@ pub fn transcribe_voxtral_audio(
     if audio_frames == 0 || embed_dim == 0 {
         return Ok(Some(VoxtralOnnxTranscription {
             text: String::new(),
+            transcript_text: String::new(),
+            translated_text: None,
+            target_language: normalize_target_language(target_language),
             generated_tokens: 0,
             audio_frames,
             audio_encoder_path: paths.audio_encoder_path,
@@ -190,8 +199,72 @@ pub fn transcribe_voxtral_audio(
         }));
     }
 
+    let max_tokens = std::env::var("AMCP_VOXTRAL_MAX_TOKENS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(256)
+        .clamp(1, 1024);
+    let (transcript_text, transcript_tokens) = run_voxtral_generation(
+        &tokenizer,
+        &mut embed_tokens,
+        &mut decoder,
+        &audio_embeds,
+        audio_frames,
+        embed_dim,
+        "Transcribe the audio. Return only the transcription.",
+        max_tokens,
+    )?;
+    let target_language = normalize_target_language(target_language);
+    let mut translation_tokens = 0usize;
+    let translated_text = if let Some(target_language) = target_language.as_deref() {
+        let instruction = translation_instruction(language, target_language, previous_text);
+        let (translated, tokens) = run_voxtral_generation(
+            &tokenizer,
+            &mut embed_tokens,
+            &mut decoder,
+            &audio_embeds,
+            audio_frames,
+            embed_dim,
+            &instruction,
+            max_tokens,
+        )?;
+        translation_tokens = tokens;
+        if translated.is_empty() {
+            None
+        } else {
+            Some(translated)
+        }
+    } else {
+        None
+    };
+
+    Ok(Some(VoxtralOnnxTranscription {
+        text: translated_text
+            .clone()
+            .unwrap_or_else(|| transcript_text.clone()),
+        transcript_text,
+        translated_text,
+        target_language,
+        generated_tokens: transcript_tokens + translation_tokens,
+        audio_frames,
+        audio_encoder_path: paths.audio_encoder_path,
+        decoder_path: paths.decoder_path,
+    }))
+}
+
+#[cfg(feature = "voxtral")]
+fn run_voxtral_generation(
+    tokenizer: &tokenizers::Tokenizer,
+    embed_tokens: &mut ort::session::Session,
+    decoder: &mut ort::session::Session,
+    audio_embeds: &[f32],
+    audio_frames: usize,
+    embed_dim: usize,
+    instruction: &str,
+    max_tokens: usize,
+) -> Result<(String, usize), String> {
     let instruction = tokenizer
-        .encode("Transcribe the audio.", false)
+        .encode(instruction, false)
         .map_err(|error| format!("failed to encode Voxtral prompt: {error}"))?;
     let instruction_ids = instruction.get_ids().iter().map(|id| *id as i64);
     let mut prompt_tokens = vec![1_i64, 3, 25];
@@ -199,17 +272,12 @@ pub fn transcribe_voxtral_audio(
     prompt_tokens.extend(instruction_ids);
     prompt_tokens.push(4);
 
-    let mut inputs_embeds = embed_input_ids(&mut embed_tokens, &prompt_tokens)?;
-    splice_audio_embeddings(&mut inputs_embeds, &audio_embeds, audio_frames, embed_dim)?;
+    let mut inputs_embeds = embed_input_ids(embed_tokens, &prompt_tokens)?;
+    splice_audio_embeddings(&mut inputs_embeds, audio_embeds, audio_frames, embed_dim)?;
 
-    let max_tokens = std::env::var("AMCP_VOXTRAL_MAX_TOKENS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(256)
-        .clamp(1, 1024);
     let generated_ids = generate_tokens(
-        &mut decoder,
-        &mut embed_tokens,
+        decoder,
+        embed_tokens,
         inputs_embeds,
         prompt_tokens.len(),
         max_tokens,
@@ -223,19 +291,64 @@ pub fn transcribe_voxtral_audio(
         .map_err(|error| format!("failed to decode Voxtral tokens: {error}"))?
         .trim()
         .to_string();
+    Ok((text, generated_ids.len()))
+}
 
-    Ok(Some(VoxtralOnnxTranscription {
-        text,
-        generated_tokens: generated_ids.len(),
-        audio_frames,
-        audio_encoder_path: paths.audio_encoder_path,
-        decoder_path: paths.decoder_path,
-    }))
+#[cfg(feature = "voxtral")]
+fn normalize_target_language(language: Option<&str>) -> Option<String> {
+    let language = language?.trim().to_ascii_lowercase();
+    match language.as_str() {
+        "" | "auto" | "none" => None,
+        "ja" | "japanese" => Some("ja".to_string()),
+        "en" | "english" => Some("en".to_string()),
+        "zh" | "chinese" => Some("zh".to_string()),
+        other => Some(other.to_string()),
+    }
+}
+
+#[cfg(feature = "voxtral")]
+fn translation_instruction(
+    source_language: Option<&str>,
+    target_language: &str,
+    previous_text: Option<&str>,
+) -> String {
+    let source_hint = language_name(source_language)
+        .map(|name| format!("The source speech language is {name}. "))
+        .unwrap_or_default();
+    let context_hint = previous_text
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(|text| format!("Previous transcript context: {text}\n"))
+        .unwrap_or_default();
+    format!(
+        "{source_hint}{context_hint}Translate the audio into {target}. Return only the translated text.",
+        target = language_name(Some(target_language)).unwrap_or_else(|| target_language.to_string())
+    )
+}
+
+#[cfg(feature = "voxtral")]
+fn language_name(language: Option<&str>) -> Option<String> {
+    match language?.trim().to_ascii_lowercase().as_str() {
+        "" | "auto" | "none" => None,
+        "ja" | "japanese" => Some("Japanese".to_string()),
+        "en" | "english" => Some("English".to_string()),
+        "zh" | "chinese" => Some("Chinese".to_string()),
+        "ko" | "korean" => Some("Korean".to_string()),
+        "fr" | "french" => Some("French".to_string()),
+        "de" | "german" => Some("German".to_string()),
+        "es" | "spanish" => Some("Spanish".to_string()),
+        "it" | "italian" => Some("Italian".to_string()),
+        "pt" | "portuguese" => Some("Portuguese".to_string()),
+        other => Some(other.to_string()),
+    }
 }
 
 #[cfg(not(feature = "voxtral"))]
 pub fn transcribe_voxtral_audio(
     _audio: &PreprocessedAudio,
+    _language: Option<&str>,
+    _target_language: Option<&str>,
+    _previous_text: Option<&str>,
     _available_backends: &[HardwareBackend],
 ) -> Result<Option<VoxtralOnnxTranscription>, String> {
     Ok(None)

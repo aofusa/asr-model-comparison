@@ -1,13 +1,16 @@
 use super::audio::PreprocessedAudio;
 use super::TranscriptionOptions;
 use crate::accelerator::HardwareBackend;
-use crate::asr::qwen_ffi;
+use crate::asr::qwen_candle;
 use crate::asr::voxtral_onnx;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendTranscription {
     pub text: String,
+    pub transcript_text: Option<String>,
+    pub translated_text: Option<String>,
+    pub target_language: Option<String>,
     pub language: Option<String>,
     pub chunks: Vec<serde_json::Value>,
 }
@@ -28,7 +31,7 @@ pub fn prepare_real_model_assets(
     let mut events = if options.model_id.starts_with("whisper") {
         prepare_whisper_assets(&options.model_id)?
     } else if options.model_id.starts_with("qwen3-asr") {
-        prepare_qwen_assets(available_backends)?
+        prepare_qwen_assets(&options.model_id, available_backends)?
     } else if options.model_id.starts_with("voxtral") {
         prepare_voxtral_assets(available_backends)?
     } else {
@@ -58,7 +61,7 @@ pub fn try_transcribe_real(
         return try_transcribe_qwen(audio, options, available_backends);
     }
     if options.model_id.starts_with("voxtral") {
-        return try_transcribe_voxtral(audio, available_backends);
+        return try_transcribe_voxtral(audio, options, available_backends);
     }
 
     Ok(None)
@@ -79,13 +82,9 @@ fn prepare_whisper_assets(_model_id: &str) -> Result<Vec<BackendAssetProgress>, 
 fn prepare_translation_assets() -> Vec<BackendAssetProgress> {
     let status = crate::translation::runtime_status();
     vec![BackendAssetProgress {
-        phase: "translation_runner".to_string(),
+        phase: "translation_backend".to_string(),
         message: if status.configured {
-            format!(
-                "Translation runner configured: {} {}.",
-                status.command.unwrap_or_default(),
-                status.args.join(" ")
-            )
+            status.reason
         } else {
             status.reason
         },
@@ -97,32 +96,24 @@ fn prepare_translation_assets() -> Vec<BackendAssetProgress> {
 
 #[cfg(feature = "qwen")]
 fn prepare_qwen_assets(
+    model_id: &str,
     available_backends: &[HardwareBackend],
 ) -> Result<Vec<BackendAssetProgress>, String> {
     let mut events = vec![BackendAssetProgress {
         phase: "qwen_paths".to_string(),
-        message: "Resolving Qwen ASR library and model directory.".to_string(),
+        message: "Resolving Qwen Candle model directory.".to_string(),
         progress: Some(48),
         bytes_downloaded: None,
         total_bytes: None,
     }];
 
-    let Some(config) = qwen_ffi::configure_qwen_ffi(available_backends) else {
-        events.push(BackendAssetProgress {
-            phase: "qwen_missing".to_string(),
-            message: "Qwen is not fully configured; set AMCP_QWEN_ASR_LIB or AMCP_QWEN_ASR_DIR plus AMCP_QWEN_MODEL_DIR.".to_string(),
-            progress: Some(50),
-            bytes_downloaded: None,
-            total_bytes: None,
-        });
-        return Ok(events);
-    };
+    let config = qwen_candle::configure_qwen_candle(model_id, available_backends);
 
     events.push(BackendAssetProgress {
-        phase: "qwen_library".to_string(),
+        phase: "qwen_backend".to_string(),
         message: format!(
-            "Checking Qwen ASR library: {}.",
-            config.library_path.display()
+            "Using Qwen Candle backend with accelerator plan {:?}.",
+            config.backends
         ),
         progress: Some(52),
         bytes_downloaded: None,
@@ -139,10 +130,16 @@ fn prepare_qwen_assets(
         total_bytes: None,
     });
 
-    match qwen_ffi::validate_qwen_ffi(&config, false) {
-        Ok(_) => events.push(BackendAssetProgress {
-            phase: "qwen_symbols".to_string(),
-            message: "Qwen DLL loaded and required symbols were found.".to_string(),
+    match qwen_candle::validate_qwen_candle(&config) {
+        Ok(validation) => events.push(BackendAssetProgress {
+            phase: "qwen_model_files".to_string(),
+            message: format!(
+                "Qwen model files: config={} tokenizer={} weights={} auto_download={}.",
+                validation.config_exists,
+                validation.tokenizer_exists,
+                validation.weights_exist,
+                validation.auto_download
+            ),
             progress: Some(56),
             bytes_downloaded: None,
             total_bytes: None,
@@ -161,6 +158,7 @@ fn prepare_qwen_assets(
 
 #[cfg(not(feature = "qwen"))]
 fn prepare_qwen_assets(
+    _model_id: &str,
     _available_backends: &[HardwareBackend],
 ) -> Result<Vec<BackendAssetProgress>, String> {
     Ok(Vec::new())
@@ -266,8 +264,9 @@ fn try_transcribe_qwen(
     options: &TranscriptionOptions,
     available_backends: &[HardwareBackend],
 ) -> Result<Option<BackendTranscription>, String> {
-    let Some(result) = qwen_ffi::transcribe_qwen_audio(
+    let Some(result) = qwen_candle::transcribe_qwen_audio(
         &audio.samples,
+        &options.model_id,
         options.language.as_deref(),
         options.previous_text.as_deref(),
         available_backends,
@@ -278,11 +277,14 @@ fn try_transcribe_qwen(
 
     Ok(Some(BackendTranscription {
         text: result.text,
+        transcript_text: None,
+        translated_text: None,
+        target_language: None,
         language: options.language.clone(),
         chunks: vec![serde_json::json!({
-            "backend": "qwen-c",
+            "backend": "qwen-candle",
             "model_dir": result.model_dir,
-            "library_path": result.library_path,
+            "device": result.device,
             "sample_rate": audio.sample_rate,
             "duration_seconds": audio.duration_seconds,
         })],
@@ -291,15 +293,29 @@ fn try_transcribe_qwen(
 
 fn try_transcribe_voxtral(
     audio: &PreprocessedAudio,
+    options: &TranscriptionOptions,
     available_backends: &[HardwareBackend],
 ) -> Result<Option<BackendTranscription>, String> {
-    let Some(result) = voxtral_onnx::transcribe_voxtral_audio(audio, available_backends)? else {
+    let Some(result) = voxtral_onnx::transcribe_voxtral_audio(
+        audio,
+        options.language.as_deref(),
+        options.target_language.as_deref(),
+        options.previous_text.as_deref(),
+        available_backends,
+    )?
+    else {
         return Ok(None);
     };
 
     Ok(Some(BackendTranscription {
-        text: result.text,
-        language: None,
+        text: result
+            .translated_text
+            .clone()
+            .unwrap_or_else(|| result.transcript_text.clone()),
+        transcript_text: Some(result.transcript_text),
+        translated_text: result.translated_text,
+        target_language: result.target_language,
+        language: options.language.clone(),
         chunks: vec![serde_json::json!({
             "backend": "voxtral-onnx",
             "audio_encoder_path": result.audio_encoder_path,
@@ -380,6 +396,9 @@ fn try_transcribe_whisper(
 
     Ok(Some(BackendTranscription {
         text: parts.join(" ").trim().to_string(),
+        transcript_text: None,
+        translated_text: None,
+        target_language: None,
         language: options.language.clone(),
         chunks,
     }))
@@ -582,12 +601,12 @@ pub mod whisper_rs_backend {
 }
 
 #[cfg(feature = "qwen")]
-pub mod qwen_c_backend {
-    //! Integration point for antirez/qwen-asr through C FFI.
+pub mod qwen_candle_backend {
+    //! Integration point for Qwen3-ASR through Candle.
     //!
-    //! The build script should link Accelerate on macOS, OpenBLAS on Linux, and
-    //! a bundled or user-provided BLAS on Windows, then expose a safe Rust
-    //! context that honors the single-loaded-model invariant.
+    //! CUDA is used when the `qwen-cuda` feature is enabled and a CUDA device is
+    //! available. Other Windows accelerators currently fall back to CPU because
+    //! upstream Candle does not expose DirectML or WGPU for this model yet.
 }
 
 #[cfg(feature = "voxtral")]

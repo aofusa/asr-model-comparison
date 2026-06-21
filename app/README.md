@@ -14,7 +14,7 @@
   - `GET /api/ws/transcribe`
 - `auto` / `gpu` / `cpu` のアクセラレータ設定に対応しています。
 - Tauriデスクトップ/モバイル環境では、UIから同一アプリ内のRust APIサーバー (`http://127.0.0.1:8765`) へ接続します。
-- Whisper、Qwen3-ASR、Voxtral ONNXはfeature有効時に実推論へ接続します。翻訳は設定済みコマンドランナーがある場合に実推論へ接続し、未設定時は軽量プレースホルダーへフォールバックします。
+- Whisper、Qwen3-ASR Candle、Voxtral ORTはfeature有効時に実推論へ接続します。翻訳は外部Python/コマンドランナーを使わず、Voxtral ORTの音声+指示プロンプトによるmodel-native翻訳を優先します。
 
 ## Python版との機能網羅状況
 
@@ -34,7 +34,7 @@
 - Whisperモデルのローカルキャッシュ確認と自動ダウンロード
 - 翻訳レスポンス契約 (`transcript_text` / `translated_text` / `target_language`) の維持
 - 日本語 -> 英語翻訳前の小さい日本語数字正規化
-- 翻訳コマンドランナー境界 (`AMCP_TRANSLATION_COMMAND` / `AMCP_TRANSLATION_JA_EN_COMMAND`) と、Python版と同じ `Helsinki-NLP/opus-mt-ja-en` を使う `scripts/translate_hf.py`
+- Voxtral ORTでの音声+翻訳指示プロンプトによるmodel-native翻訳
 - 単一モデルロード制約の管理
 - モデル準備進捗イベント (`loading` / `validating` / `downloading` / `downloaded` / `ready`)
 - Whisper自動ダウンロード時の `bytes_downloaded` / `total_bytes` 付きバイト単位進捗
@@ -42,17 +42,17 @@
 - `auto` / `gpu` / `cpu` の選択と安全なCPUフォールバック
 - Windows優先の実機アクセラレータ検出 (`CUDA_PATH`/`nvidia-smi`、`VK_SDK`/`vulkaninfo`、DirectML、OpenVINO、WGPU等)
 - Qwen3-ASR向けのCUDA/DirectML/Metal/CoreML/Vulkan/WGPU/OpenVINO/NNAPI/BLAS優先戦略
-- `/api/status`とWS応答でのランタイムバックエンド状態 (`whisper-rs` / `qwen-c` / `voxtral-onnx` / `placeholder`) と、モデルファイル/ディレクトリ/翻訳ランナー設定のartifact診断
-- Qwen3-ASR C FFI / Voxtral ONNX のfeature境界と設定検証 (`AMCP_QWEN_*`、`AMCP_VOXTRAL_*`、`ORT_DYLIB_PATH`)
-- Qwen3-ASR C FFIの動的ライブラリロード、`qwen_load`/`qwen_transcribe_audio`/`qwen_free`シンボル検証、モデルディレクトリ検証、実音声サンプル推論呼び出し
-- Voxtral ONNX Runtimeセッション初期化、分割ONNX構成 (`audio_encoder.onnx`、`embed_tokens.onnx`、`decoder_model_merged.onnx`、`tokenizer.json`) の設定解決、log-mel入力生成、KV cache付き自己回帰デコード、DirectML/CUDA featureコンパイル
+- `/api/status`とWS応答でのランタイムバックエンド状態 (`whisper-rs` / `qwen-native` / `voxtral-onnx` / `placeholder`) と、モデルファイル/ディレクトリ/model-native翻訳のartifact診断
+- Qwen3-ASR Candle / Voxtral ORT のfeature境界と設定検証 (`AMCP_QWEN_*`、`AMCP_VOXTRAL_*`、`ORT_DYLIB_PATH`)
+- Qwen3-ASR Candleのモデルロード、自動キャッシュ、モデルディレクトリ検証、実音声サンプル推論呼び出し
+- Voxtral ORTセッション初期化、分割ONNX構成 (`audio_encoder.onnx`、`embed_tokens.onnx`、`decoder_model_merged.onnx`、`tokenizer.json`) の設定解決、log-mel入力生成、KV cache付き自己回帰デコード、DirectML/CUDA featureコンパイル
 - Tauriデスクトップ/モバイルWebViewからRust APIへ接続するための埋め込みサーバー
 - Android/iOS向けTauriビルドスクリプト
 
 未完了:
 
-- Qwen/Voxtral/翻訳モデルのネイティブランナー内部ロードに対する詳細進捗
-- Voxtral ONNX実モデルファイルを配置したWindows実機での出力品質・速度検証
+- Qwen/Voxtralのネイティブランナー内部ロードに対する詳細進捗
+- Qwen/Voxtral実モデルファイルを配置したWindows実機での出力品質・速度検証
 - Android/iOS実機でのマイク・画面音声取得制約の検証
 - Android/iOS向けの実モデルバイナリ、モデル配置、アプリサイズ最適化
 
@@ -145,53 +145,33 @@ npm run server:whisper:cuda
 
 対象モデルのダウンロードURLを解決できない場合、アプリは開発用プレースホルダー推論へ安全にフォールバックします。
 
-### Qwen3-ASR C FFI実推論
+### Qwen3-ASR Candle実推論
 
-Qwen3-ASRは `qwen` feature付きでC実装の動的ライブラリをロードし、`qwen_transcribe_audio` へ16kHz mono f32サンプルを渡して実推論します。Windowsではビルド済みDLLとモデルディレクトリを指定します。
+Qwen3-ASRは `qwen` feature付きでCandleベースのRust実装へ接続し、外部C DLLなしで16kHz mono f32サンプルを実推論します。`AMCP_QWEN_MODEL_DIR` を指定した場合はそのディレクトリを使い、未指定時は `AMCP_MODEL_DIR\qwen\Qwen--Qwen3-ASR-0.6B` などへHugging Faceモデルを自動キャッシュします。
 
 ```powershell
-$env:AMCP_QWEN_ASR_LIB="C:\models\qwen-asr\qwen_asr.dll"
-$env:AMCP_QWEN_MODEL_DIR="C:\models\qwen3-asr-0.6b"
+$env:AMCP_QWEN_MODEL_DIR="C:\models\qwen\Qwen--Qwen3-ASR-0.6B"
 cd app
 npm run server:qwen
 ```
 
-`AMCP_QWEN_ASR_DIR` を指定した場合は、Windowsでは `qwen_asr.dll`、macOSでは `libqwen_asr.dylib`、Linuxでは `libqwen_asr.so` を配下から解決します。
+CUDA環境では `qwen-cuda` featureを使えます。CUDA以外のWindows GPU/DirectML/WGPUはCandle上流のQwen3-ASR backendが未対応のため、現時点ではCPUへフォールバックします。
 
-Qwen C APIの返却文字列はC側の `free(text)` 前提です。WindowsではDLLとRustプロセスが互換CRTを使っているビルドを利用してください。言語指定が `auto` 以外の場合は、対応するQwen言語名へ変換して `qwen_set_force_language` が存在する場合だけ設定します。前回認識文は `qwen_set_prompt` が存在する場合だけ文脈プロンプトとして渡します。
+```powershell
+npm run server:qwen:cuda
+```
+
+自動ダウンロードを禁止したい場合は `AMCP_QWEN_DISABLE_DOWNLOAD=1` を設定してください。言語指定が `auto` 以外の場合は、Qwen3-ASRの言語プロンプトへ変換します。
 
 ### 翻訳実推論
 
-翻訳はRustから外部ランナーを起動する境界を用意しています。ランナーはstdinでJSONを受け取り、stdoutに `{"translated_text":"..."}` またはプレーンテキストを返します。
+翻訳は外部Python/コマンドランナーを使いません。VoxtralはLLM型の音声+テキストモデルとして扱い、まず原文ASRを生成し、`target_language` が指定された場合は同じRust/ORT経路で「音声を指定言語へ翻訳し、翻訳文のみ返す」プロンプトを追加実行します。レスポンスは `transcript_text` に原文、`translated_text` に翻訳結果、`text` に表示用テキストを保持します。
 
-Python版と同じ `Helsinki-NLP/opus-mt-ja-en` を使う場合:
+Qwen3-ASRの現在のRust/Candle経路は `qwen3-asr` crate の公開APIがASR専用で、テキスト生成/翻訳APIを公開していないため、翻訳有効時も `translated_text` は `null` のまま原文ASRを返します。Qwenで翻訳まで行うには、上流crateがテキスト生成APIを公開するか、Candle上でQwen decoderの生成経路を別途実装する必要があります。
 
-```powershell
-cd app
-python -m pip install torch transformers sentencepiece
-$env:AMCP_TRANSLATION_JA_EN_COMMAND="python"
-$env:AMCP_TRANSLATION_JA_EN_ARGS="scripts/translate_hf.py"
-npm run server:qwen
-```
+### Voxtral ORT実推論
 
-全言語ペア共通のランナーを指定する場合:
-
-```powershell
-$env:AMCP_TRANSLATION_COMMAND="python"
-$env:AMCP_TRANSLATION_ARGS="scripts/translate_hf.py"
-```
-
-ランナーへ渡されるJSON:
-
-```json
-{"text":"今日は23人です","source_language":"ja","target_language":"en"}
-```
-
-翻訳モデルを差し替えたい場合は、ランナー側で `AMCP_TRANSLATION_MODEL` を参照できます。未設定時や同一言語指定時は `translated_text` は `null` のまま、`transcript_text` に原文を保持します。
-
-### Voxtral ONNX実推論
-
-Voxtralは `ort` / ONNX Runtime のfeature付きで、分割ONNXモデル (`audio_encoder.onnx`、`embed_tokens.onnx`、`decoder_model_merged.onnx`) と `tokenizer.json` を組み合わせた実推論に対応しています。Rust側で30秒チャンクのlog-mel特徴量を生成し、音声埋め込みをプロンプトへ差し込んで、KV cache付き自己回帰デコードを実行します。
+Voxtralは `ort` feature付きで、分割ONNXモデル (`audio_encoder.onnx`、`embed_tokens.onnx`、`decoder_model_merged.onnx`) と `tokenizer.json` を組み合わせた実推論に対応しています。Rust側で30秒チャンクのlog-mel特徴量を生成し、音声埋め込みをプロンプトへ差し込んで、KV cache付き自己回帰デコードを実行します。`target_language` 指定時は同じONNXセッションで翻訳指示プロンプトを追加実行します。WindowsではDirectMLを優先し、CUDA環境ではCUDA featureも利用できます。
 
 ```powershell
 $env:AMCP_VOXTRAL_MODEL_DIR="C:\models\voxtral"
@@ -332,10 +312,11 @@ Whisper featureのコンパイル確認:
 npm run test:whisper:compile
 ```
 
-Qwen C FFI featureのコンパイル確認:
+Qwen Candle featureのコンパイル確認:
 
 ```powershell
 npm run test:qwen:compile
+npm run test:qwen:cuda:compile
 ```
 
 Voxtral ONNX featureのコンパイル確認:
@@ -353,13 +334,13 @@ npm run test:voxtral:cuda:compile
 - CPU/GPUアクセラレータ選択とフォールバック
 - `/api/models`、`/api/status` のAPI形状
 - `/api/status.runtime_backends[].artifacts` による不足モデルファイル診断
-- `/api/status.translation` による翻訳ランナー設定診断
+- `/api/status.translation` によるmodel-native翻訳設定診断
 
 ### Windows実機モデル検証
 
-実モデルファイルとランナーを配置したWindows環境では、`validate` CLIで音声ファイル単位の速度と品質を確認できます。
+実モデルファイルを配置したWindows環境では、`validate` CLIで音声ファイル単位の速度と品質を確認できます。
 
-実測前に現在のモデル配置と翻訳ランナー設定を確認する場合:
+実測前に現在のモデル配置と翻訳設定を確認する場合:
 
 ```powershell
 cd app
@@ -373,11 +354,10 @@ cd app
 npm run validate:windows:whisper -- --audio "C:\audio\sample.wav" --model-id whisper-tiny --language ja --expected-text "期待する文字起こし" --json
 ```
 
-Qwen:
+Qwen Candle:
 
 ```powershell
-$env:AMCP_QWEN_ASR_LIB="C:\models\qwen-asr\qwen_asr.dll"
-$env:AMCP_QWEN_MODEL_DIR="C:\models\qwen3-asr-0.6b"
+$env:AMCP_QWEN_MODEL_DIR="C:\models\qwen\Qwen--Qwen3-ASR-0.6B"
 npm run validate:windows:qwen -- --audio "C:\audio\sample.wav" --model-id qwen3-asr-0.6b --language ja --expected-text "期待する文字起こし" --json
 ```
 
@@ -385,7 +365,7 @@ Voxtral:
 
 ```powershell
 $env:AMCP_VOXTRAL_MODEL_DIR="C:\models\voxtral"
-npm run validate:windows:voxtral -- --audio "C:\audio\sample.wav" --model-id voxtral-mini-4b --language ja --expected-text "期待する文字起こし" --json
+npm run validate:windows:voxtral:directml -- --audio "C:\audio\sample.wav" --model-id voxtral-mini-4b --language ja --expected-text "期待する文字起こし" --json
 ```
 
 出力には `audio_duration_seconds`、`wall_time_seconds`、`realtime_factor`、`runtime_backend`、`accelerator`、`character_error_rate` が含まれます。`realtime_factor` は 1.0 未満なら実時間より高速です。
@@ -426,11 +406,11 @@ npm run test:e2e:headed
 
 ## 実モデル統合方針
 
-現時点のRust実装はAPI/WS契約、アクセラレータ選択、フォールバック、テストを先に固めるための軽量プレースホルダーです。実ASRは以下のfeature境界で段階的に実装します。
+Rust実装はAPI/WS契約、アクセラレータ選択、フォールバック、実モデル検証CLIを維持しつつ、以下のfeature境界で実ASRへ接続します。
 
 - `whisper`: `whisper-rs` / whisper.cpp
-- `qwen`: antirez/qwen-asr C実装のFFI
-- `voxtral`: `ort` + ONNX Runtime
+- `qwen`: `qwen3-asr` / Candle
+- `voxtral`: `ort` + ONNX Runtime (DirectML/CUDA feature)
 
 想定する優先アクセラレータ:
 
@@ -440,13 +420,12 @@ npm run test:e2e:headed
   - iOS: Metal -> CPU
   - Android: Vulkan -> CPU
 - Qwen3-ASR
-  - Windows: CUDA -> DirectML -> Vulkan -> WGPU -> OpenVINO -> BLAS -> CPU
-  - Linux: CUDA -> Vulkan -> WGPU -> OpenVINO -> BLAS -> CPU
-  - macOS: Metal -> CoreML -> WGPU -> Accelerate/BLAS -> CPU
-  - iOS: Metal -> CoreML -> Accelerate/BLAS -> CPU
-  - Android: NNAPI -> Vulkan -> WGPU -> BLAS -> CPU
+  - Windows/Linux: CUDA -> CPU (`qwen-cuda` feature時)
+  - macOS: Metal -> CPU (Candle upstream対応時)
+  - iOS/Android: CPU fallback
 - Voxtral
-  - Windows/Linux: CUDA -> CPU
+  - Windows: DirectML -> CUDA -> CPU
+  - Linux: CUDA -> CPU
   - macOS: CoreML -> CPU
   - iOS: CoreML -> CPU
   - Android: NNAPI -> Vulkan -> CPU

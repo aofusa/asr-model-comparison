@@ -1,5 +1,5 @@
 use crate::accelerator::{HardwareBackend, ModelFamily};
-use crate::asr::qwen_ffi;
+use crate::asr::qwen_candle;
 use crate::asr::voxtral_onnx;
 use crate::models::{available_models, family_for_model};
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeBackendKind {
     WhisperRs,
-    QwenC,
+    QwenNative,
     VoxtralOnnx,
     Placeholder,
 }
@@ -116,45 +116,28 @@ fn qwen_status(
     available_backends: &[HardwareBackend],
 ) -> RuntimeBackendStatus {
     let configured = cfg!(feature = "qwen");
-    let ffi_config = qwen_ffi::configure_qwen_ffi(available_backends);
-    let artifacts = qwen_artifacts(ffi_config.as_ref());
-    let ffi_paths_available = ffi_config
-        .as_ref()
-        .map(|config| config.library_path.is_file() && config.model_dir.is_dir())
-        .unwrap_or(false);
-    let real_inference_available = configured && ffi_paths_available;
+    let candle_config = qwen_candle::configure_qwen_candle(model_id, available_backends);
+    let artifacts = qwen_artifacts(&candle_config);
+    let model_files_available = qwen_model_files_available(&candle_config.model_dir);
+    let real_inference_available =
+        configured && (model_files_available || candle_config.auto_download);
     RuntimeBackendStatus {
         model_id: model_id.to_string(),
         family,
         backend: if real_inference_available {
-            RuntimeBackendKind::QwenC
+            RuntimeBackendKind::QwenNative
         } else {
             RuntimeBackendKind::Placeholder
         },
         real_inference_available,
         configured,
-        selected_accelerators: ffi_config
-            .as_ref()
-            .map(|config| config.backends.clone())
-            .unwrap_or_else(|| {
-                filter_backends(
-                    available_backends,
-                    &[
-                        HardwareBackend::Cuda,
-                        HardwareBackend::DirectMl,
-                        HardwareBackend::Vulkan,
-                        HardwareBackend::Wgpu,
-                        HardwareBackend::OpenVino,
-                        HardwareBackend::Blas,
-                        HardwareBackend::Cpu,
-                    ],
-                )
-            }),
+        selected_accelerators: candle_config.backends,
         artifacts,
         reason: if real_inference_available {
-            "qwen feature is enabled and Qwen ASR library/model paths exist.".to_string()
+            "qwen feature is enabled and Qwen Candle model files are present or can be downloaded."
+                .to_string()
         } else if configured {
-            "qwen feature is enabled, but AMCP_QWEN_ASR_LIB or AMCP_QWEN_ASR_DIR plus AMCP_QWEN_MODEL_DIR does not point to existing paths."
+            "qwen feature is enabled, but Qwen Candle model files are missing and auto-download is disabled."
                 .to_string()
         } else {
             "qwen feature is not enabled; using placeholder inference.".to_string()
@@ -300,35 +283,45 @@ fn whisper_model_download(model_id: &str) -> Option<(&'static str, &'static str)
     }
 }
 
-fn qwen_artifacts(config: Option<&qwen_ffi::QwenFfiConfig>) -> Vec<RuntimeArtifactStatus> {
-    let Some(config) = config else {
-        return vec![
-            missing_env(
-                "qwen_library",
-                RuntimeArtifactKind::File,
-                "AMCP_QWEN_ASR_LIB",
-            ),
-            missing_env(
-                "qwen_model_dir",
-                RuntimeArtifactKind::Directory,
-                "AMCP_QWEN_MODEL_DIR",
-            ),
-        ];
-    };
+fn qwen_artifacts(config: &qwen_candle::QwenCandleConfig) -> Vec<RuntimeArtifactStatus> {
     vec![
-        file_artifact(
-            "qwen_library",
-            &config.library_path,
-            Some("AMCP_QWEN_ASR_LIB"),
-            true,
-        ),
         dir_artifact(
             "qwen_model_dir",
             &config.model_dir,
             Some("AMCP_QWEN_MODEL_DIR"),
-            true,
+            false,
+        ),
+        file_artifact(
+            "qwen_config",
+            &config.model_dir.join("config.json"),
+            Some("AMCP_QWEN_MODEL_DIR"),
+            false,
+        ),
+        file_artifact(
+            "qwen_tokenizer",
+            &config.model_dir.join("tokenizer.json"),
+            Some("AMCP_QWEN_MODEL_DIR"),
+            false,
         ),
     ]
+}
+
+fn qwen_model_files_available(model_dir: &std::path::Path) -> bool {
+    model_dir.join("config.json").is_file()
+        && model_dir.join("tokenizer.json").is_file()
+        && (model_dir.join("model.safetensors").is_file()
+            || model_dir.join("model.safetensors.index.json").is_file()
+            || std::fs::read_dir(model_dir)
+                .ok()
+                .into_iter()
+                .flat_map(|entries| entries.filter_map(Result::ok))
+                .any(|entry| {
+                    entry
+                        .path()
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.ends_with(".safetensors"))
+                }))
 }
 
 fn voxtral_artifacts(

@@ -323,70 +323,38 @@ fn prioritized_plan_for_os(
             HardwareBackend::Vulkan,
             HardwareBackend::Cpu,
         ],
-        ("macos", ModelFamily::Qwen3) => vec![
-            HardwareBackend::Metal,
-            HardwareBackend::CoreMl,
-            HardwareBackend::Wgpu,
-            HardwareBackend::Blas,
-            HardwareBackend::Cpu,
-        ],
+        ("macos", ModelFamily::Qwen3) => vec![HardwareBackend::Metal, HardwareBackend::Cpu],
         ("macos", ModelFamily::Voxtral) => vec![HardwareBackend::CoreMl, HardwareBackend::Cpu],
         ("windows", ModelFamily::Whisper) => vec![
             HardwareBackend::Cuda,
             HardwareBackend::Vulkan,
             HardwareBackend::Cpu,
         ],
-        ("windows", ModelFamily::Qwen3) => vec![
-            HardwareBackend::Cuda,
+        ("windows", ModelFamily::Qwen3) => vec![HardwareBackend::Cuda, HardwareBackend::Cpu],
+        ("windows", ModelFamily::Voxtral) => vec![
             HardwareBackend::DirectMl,
-            HardwareBackend::Vulkan,
-            HardwareBackend::Wgpu,
-            HardwareBackend::OpenVino,
-            HardwareBackend::Blas,
+            HardwareBackend::Cuda,
             HardwareBackend::Cpu,
         ],
-        ("windows", ModelFamily::Voxtral) => vec![HardwareBackend::Cuda, HardwareBackend::Cpu],
         ("linux", ModelFamily::Whisper) => vec![
             HardwareBackend::Cuda,
             HardwareBackend::Vulkan,
             HardwareBackend::Cpu,
         ],
-        ("linux", ModelFamily::Qwen3) => vec![
-            HardwareBackend::Cuda,
-            HardwareBackend::Vulkan,
-            HardwareBackend::Wgpu,
-            HardwareBackend::OpenVino,
-            HardwareBackend::Blas,
-            HardwareBackend::Cpu,
-        ],
+        ("linux", ModelFamily::Qwen3) => vec![HardwareBackend::Cuda, HardwareBackend::Cpu],
         ("linux", ModelFamily::Voxtral) => vec![HardwareBackend::Cuda, HardwareBackend::Cpu],
         ("ios", ModelFamily::Whisper) => vec![HardwareBackend::Metal, HardwareBackend::Cpu],
-        ("ios", ModelFamily::Qwen3) => vec![
-            HardwareBackend::Metal,
-            HardwareBackend::CoreMl,
-            HardwareBackend::Blas,
-            HardwareBackend::Cpu,
-        ],
+        ("ios", ModelFamily::Qwen3) => vec![HardwareBackend::Cpu],
         ("ios", ModelFamily::Voxtral) => vec![HardwareBackend::CoreMl, HardwareBackend::Cpu],
         ("android", ModelFamily::Whisper) => vec![HardwareBackend::Vulkan, HardwareBackend::Cpu],
-        ("android", ModelFamily::Qwen3) => vec![
-            HardwareBackend::NnApi,
-            HardwareBackend::Vulkan,
-            HardwareBackend::Wgpu,
-            HardwareBackend::Blas,
-            HardwareBackend::Cpu,
-        ],
+        ("android", ModelFamily::Qwen3) => vec![HardwareBackend::Cpu],
         ("android", ModelFamily::Voxtral) => vec![
             HardwareBackend::NnApi,
             HardwareBackend::Vulkan,
             HardwareBackend::Cpu,
         ],
         (_, ModelFamily::Whisper) => vec![HardwareBackend::Vulkan, HardwareBackend::Cpu],
-        (_, ModelFamily::Qwen3) => vec![
-            HardwareBackend::Wgpu,
-            HardwareBackend::Blas,
-            HardwareBackend::Cpu,
-        ],
+        (_, ModelFamily::Qwen3) => vec![HardwareBackend::Cpu],
         (_, ModelFamily::Voxtral) => vec![HardwareBackend::Cpu],
     };
 
@@ -455,28 +423,14 @@ mod tests {
     }
 
     #[test]
-    fn qwen_prefers_hardware_acceleration_before_blas() {
+    fn qwen_uses_candle_supported_accelerators() {
         assert_eq!(
             prioritized_plan_for_os("windows", ModelFamily::Qwen3, AcceleratorPreference::Auto),
-            vec![
-                HardwareBackend::Cuda,
-                HardwareBackend::DirectMl,
-                HardwareBackend::Vulkan,
-                HardwareBackend::Wgpu,
-                HardwareBackend::OpenVino,
-                HardwareBackend::Blas,
-                HardwareBackend::Cpu,
-            ]
+            vec![HardwareBackend::Cuda, HardwareBackend::Cpu]
         );
         assert_eq!(
             prioritized_plan_for_os("android", ModelFamily::Qwen3, AcceleratorPreference::Auto),
-            vec![
-                HardwareBackend::NnApi,
-                HardwareBackend::Vulkan,
-                HardwareBackend::Wgpu,
-                HardwareBackend::Blas,
-                HardwareBackend::Cpu,
-            ]
+            vec![HardwareBackend::Cpu]
         );
     }
 

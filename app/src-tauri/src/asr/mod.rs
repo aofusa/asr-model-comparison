@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 pub mod audio;
 pub mod backend;
 pub mod hybrid;
-pub mod qwen_ffi;
+pub mod qwen_candle;
 pub mod voxtral_onnx;
 
 #[derive(Debug, Error)]
@@ -243,7 +243,7 @@ impl HybridModelManager {
         } else {
             None
         };
-        let text = backend_result
+        let backend_text = backend_result
             .as_ref()
             .map(|result| result.text.clone())
             .unwrap_or_else(|| {
@@ -253,12 +253,30 @@ impl HybridModelManager {
                     String::new()
                 }
             });
-        let transcript_text = merge_context(previous, &text);
-        let translation = translation::translate_optional(
-            &transcript_text,
-            options.language.as_deref(),
-            options.target_language.as_deref(),
-        );
+        let transcript_seed = backend_result
+            .as_ref()
+            .and_then(|result| result.transcript_text.as_deref())
+            .unwrap_or(&backend_text);
+        let transcript_text = merge_context(previous, transcript_seed);
+        let translation = backend_result
+            .as_ref()
+            .and_then(|result| {
+                result.translated_text.as_ref().map(|translated_text| {
+                    translation::TranslationOutcome::from_backend_translation(
+                        transcript_text.clone(),
+                        translated_text.clone(),
+                        result.target_language.clone(),
+                        "voxtral-onnx",
+                    )
+                })
+            })
+            .unwrap_or_else(|| {
+                translation::translate_optional(
+                    &transcript_text,
+                    options.language.as_deref(),
+                    options.target_language.as_deref(),
+                )
+            });
         let display_text = translation
             .translated_text
             .clone()

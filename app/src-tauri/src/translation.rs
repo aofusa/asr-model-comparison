@@ -1,6 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::io::Write;
-use std::process::{Command, Stdio};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranslationOutcome {
@@ -15,17 +13,8 @@ pub struct TranslationOutcome {
 pub struct TranslationRuntimeStatus {
     pub configured: bool,
     pub engine: &'static str,
-    pub command: Option<String>,
-    pub args: Vec<String>,
     pub supported_pairs: Vec<String>,
     pub reason: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct TranslationCommandRequest<'a> {
-    text: &'a str,
-    source_language: Option<&'a str>,
-    target_language: &'a str,
 }
 
 pub fn translate_optional(
@@ -60,183 +49,42 @@ pub fn translate_optional(
     let normalized =
         normalize_text_for_translation(&transcript_text, source.as_deref(), target.as_deref());
 
-    match translate_with_command(&normalized, source.as_deref(), target.as_deref()) {
-        Ok(Some(translated_text)) => TranslationOutcome {
-            transcript_text: normalized,
+    TranslationOutcome {
+        transcript_text: normalized,
+        translated_text: None,
+        target_language: target,
+        engine: "rust-native-unavailable",
+        note: Some(
+            "Rust-native text translation is unavailable; use Voxtral for model-native speech translation."
+                .to_string(),
+        ),
+    }
+}
+
+impl TranslationOutcome {
+    pub fn from_backend_translation(
+        transcript_text: String,
+        translated_text: String,
+        target_language: Option<String>,
+        engine: &'static str,
+    ) -> Self {
+        TranslationOutcome {
+            transcript_text,
             translated_text: Some(translated_text),
-            target_language: target,
-            engine: "command",
+            target_language,
+            engine,
             note: None,
-        },
-        Ok(None) => TranslationOutcome {
-            transcript_text: normalized,
-            translated_text: None,
-            target_language: target,
-            engine: "unavailable",
-            note: Some("translation engine is not configured in the Rust backend".to_string()),
-        },
-        Err(error) => TranslationOutcome {
-            transcript_text: normalized,
-            translated_text: None,
-            target_language: target,
-            engine: "error",
-            note: Some(error),
-        },
+        }
     }
 }
 
 pub fn runtime_status() -> TranslationRuntimeStatus {
-    let configured_pair = translation_command_for("ja", "en");
-    let configured_generic = std::env::var("AMCP_TRANSLATION_COMMAND")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(|command| {
-            let args = std::env::var("AMCP_TRANSLATION_ARGS")
-                .ok()
-                .map(|args| split_command_args(&args))
-                .unwrap_or_default();
-            (command, args)
-        });
-    let command = configured_pair.or(configured_generic);
-
-    if let Some((command, args)) = command {
-        TranslationRuntimeStatus {
-            configured: true,
-            engine: "command",
-            command: Some(command),
-            args,
-            supported_pairs: vec!["ja->en".to_string()],
-            reason: "translation command runner is configured".to_string(),
-        }
-    } else {
-        TranslationRuntimeStatus {
-            configured: false,
-            engine: "unavailable",
-            command: None,
-            args: Vec::new(),
-            supported_pairs: vec!["ja->en".to_string()],
-            reason: "AMCP_TRANSLATION_JA_EN_COMMAND or AMCP_TRANSLATION_COMMAND is not configured"
-                .to_string(),
-        }
+    TranslationRuntimeStatus {
+        configured: true,
+        engine: "model-native",
+        supported_pairs: vec!["voxtral:speech->target-language".to_string()],
+        reason: "external translation commands are disabled; Voxtral uses Rust/ORT model-native speech translation when target_language is set".to_string(),
     }
-}
-
-fn translate_with_command(
-    text: &str,
-    source_language: Option<&str>,
-    target_language: Option<&str>,
-) -> Result<Option<String>, String> {
-    let Some(target_language) = target_language else {
-        return Ok(None);
-    };
-    let source_language = source_language.unwrap_or("auto");
-    let command = translation_command_for(source_language, target_language).or_else(|| {
-        std::env::var("AMCP_TRANSLATION_COMMAND")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .map(|command| {
-                let args = std::env::var("AMCP_TRANSLATION_ARGS")
-                    .ok()
-                    .map(|args| split_command_args(&args))
-                    .unwrap_or_default();
-                (command, args)
-            })
-    });
-    let Some((command, args)) = command else {
-        return Ok(None);
-    };
-
-    let normalized_source = normalize_language_code(Some(source_language));
-    let request = TranslationCommandRequest {
-        text,
-        source_language: normalized_source.as_deref(),
-        target_language,
-    };
-    let request_json = serde_json::to_vec(&request)
-        .map_err(|error| format!("failed to serialize translation request: {error}"))?;
-    let mut child = Command::new(&command)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("failed to start translation command `{command}`: {error}"))?;
-
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin
-            .write_all(&request_json)
-            .map_err(|error| format!("failed to write translation request: {error}"))?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("failed to wait for translation command: {error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            format!("translation command exited with {}", output.status)
-        } else {
-            format!(
-                "translation command exited with {}: {stderr}",
-                output.status
-            )
-        });
-    }
-
-    let stdout = String::from_utf8(output.stdout)
-        .map_err(|error| format!("translation command output is not UTF-8: {error}"))?;
-    parse_translation_output(&stdout)
-        .map(Some)
-        .map_err(|error| format!("invalid translation command output: {error}"))
-}
-
-fn translation_command_for(
-    source_language: &str,
-    target_language: &str,
-) -> Option<(String, Vec<String>)> {
-    let command_key = format!(
-        "AMCP_TRANSLATION_{}_{}_COMMAND",
-        source_language.to_ascii_uppercase(),
-        target_language.to_ascii_uppercase()
-    );
-    let command = std::env::var(command_key)
-        .ok()
-        .filter(|value| !value.trim().is_empty())?;
-    let args = std::env::var(format!(
-        "AMCP_TRANSLATION_{}_{}_ARGS",
-        source_language.to_ascii_uppercase(),
-        target_language.to_ascii_uppercase()
-    ))
-    .ok()
-    .map(|args| split_command_args(&args))
-    .unwrap_or_default();
-    Some((command, args))
-}
-
-fn parse_translation_output(output: &str) -> Result<String, String> {
-    let output = output.trim();
-    if output.is_empty() {
-        return Ok(String::new());
-    }
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(output) {
-        if let Some(text) = value
-            .get("translated_text")
-            .or_else(|| value.get("translation"))
-            .or_else(|| value.get("text"))
-            .and_then(|value| value.as_str())
-        {
-            return Ok(text.trim().to_string());
-        }
-        return Err("JSON output must contain translated_text, translation, or text".to_string());
-    }
-    Ok(output.to_string())
-}
-
-fn split_command_args(args: &str) -> Vec<String> {
-    args.split_whitespace()
-        .filter(|arg| !arg.trim().is_empty())
-        .map(ToString::to_string)
-        .collect()
 }
 
 pub fn normalize_language_code(language: Option<&str>) -> Option<String> {
@@ -366,23 +214,7 @@ mod tests {
         assert_eq!(outcome.transcript_text, "今日は2人です");
         assert_eq!(outcome.translated_text, None);
         assert_eq!(outcome.target_language.as_deref(), Some("en"));
-        assert_eq!(outcome.engine, "unavailable");
-    }
-
-    #[test]
-    fn parses_json_translation_command_output() {
-        assert_eq!(
-            parse_translation_output(r#"{"translated_text":"It is sunny."}"#).unwrap(),
-            "It is sunny."
-        );
-    }
-
-    #[test]
-    fn parses_plain_translation_command_output() {
-        assert_eq!(
-            parse_translation_output("It is sunny.\n").unwrap(),
-            "It is sunny."
-        );
+        assert_eq!(outcome.engine, "rust-native-unavailable");
     }
 
     #[test]
