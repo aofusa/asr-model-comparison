@@ -241,6 +241,15 @@ app\dist\AMCP.exe
 ```
 
 この `AMCP.exe` はフロントエンド資産とRust APIサーバーを同梱した単一の実行ファイルです。実行時はアプリ内でRust APIサーバーを `127.0.0.1:8765` に起動し、Tauri WebViewから接続します。
+必ず `npm run build:windows:exe` または `npm run build` のようにTauri CLI経由でビルドしてください。`cargo build --bin amcp-desktop` で直接作ったexeは、Tauriの本番Webアセット埋め込みが行われず、開発用の `localhost:5173` に接続しようとします。
+
+同じ `AMCP.exe` は、明示的に `--server` を付けた場合だけHTTP serverモードで起動します。
+
+```powershell
+.\dist\AMCP.exe --server --host 127.0.0.1 --port 8000
+```
+
+引数なしでダブルクリックした場合は、通常のTauriデスクトップアプリとして起動します。
 
 配布時の注意:
 

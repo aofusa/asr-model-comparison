@@ -1,6 +1,7 @@
 use crate::accelerator::AcceleratorPreference;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 
@@ -44,6 +45,21 @@ pub struct Cli {
 pub enum Command {
     Server(ServerArgs),
     Validate(ValidateArgs),
+}
+
+pub fn normalize_cli_args<I>(args: I) -> Vec<OsString>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    args.into_iter()
+        .map(|arg| {
+            if arg == "--server" {
+                OsString::from("server")
+            } else {
+                arg
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -104,5 +120,34 @@ impl From<ServerArgs> for AppConfig {
             accelerator: args.accelerator.into(),
             static_dir: args.static_dir,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn normalizes_server_flag_to_server_subcommand() {
+        let args = normalize_cli_args([
+            OsString::from("AMCP.exe"),
+            OsString::from("--server"),
+            OsString::from("--port"),
+            OsString::from("8787"),
+        ]);
+        let cli = Cli::parse_from(args);
+
+        match cli.command {
+            Some(Command::Server(server_args)) => assert_eq!(server_args.port, 8787),
+            _ => panic!("expected server command"),
+        }
+    }
+
+    #[test]
+    fn keeps_default_desktop_mode_when_no_command_is_passed() {
+        let cli = Cli::parse_from(normalize_cli_args([OsString::from("AMCP.exe")]));
+
+        assert!(cli.command.is_none());
     }
 }

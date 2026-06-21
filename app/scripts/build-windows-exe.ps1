@@ -8,14 +8,14 @@ $distExe = Join-Path $distDir "AMCP.exe"
 
 Push-Location $appRoot
 try {
-    npm --prefix ../frontend run build
+    npm run build
     if ($LASTEXITCODE -ne 0) {
-        throw "Frontend build failed with exit code $LASTEXITCODE"
+        throw "Tauri build failed with exit code $LASTEXITCODE"
     }
 
     cargo build --manifest-path src-tauri/Cargo.toml --release --features desktop --bin amcp-desktop
     if ($LASTEXITCODE -ne 0) {
-        throw "Rust desktop release build failed with exit code $LASTEXITCODE"
+        throw "Rust desktop release rebuild failed with exit code $LASTEXITCODE"
     }
 
     if (-not (Test-Path $sourceExe)) {
