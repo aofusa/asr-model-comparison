@@ -1670,7 +1670,7 @@ test.describe('Backlog 1-4 - silence, history, and model progress', () => {
     await expect(page.getByTestId('status')).toContainText(/silent|Recording|Ready/i);
   });
 
-  test('final transcription results are appended to a scrollable history', async ({ page }) => {
+  test('older finalized transcription segments move to history while latest stays in live view', async ({ page }) => {
     await page.addInitScript(() => {
       (window as any).__binarySends = 0;
 
@@ -1766,8 +1766,12 @@ test.describe('Backlog 1-4 - silence, history, and model progress', () => {
     await page.getByTestId('start-recording').click();
 
     const history = page.getByTestId('transcript-history');
+    const sourceTranscript = page.getByTestId('source-transcript');
+
+    await expect(sourceTranscript).toContainText('二回目の結果', { timeout: 10000 });
+    await expect(sourceTranscript).not.toContainText('最初の結果');
     await expect(history).toContainText('最初の結果', { timeout: 10000 });
-    await expect(history).toContainText('二回目の結果', { timeout: 10000 });
+    await expect(history).not.toContainText('二回目の結果');
     await expect(history).toHaveCSS('overflow-y', /auto|scroll/);
   });
 });

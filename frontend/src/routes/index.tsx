@@ -193,6 +193,42 @@ function splitAccumulatedForPartial(accumulatedText: string, latestText: string)
   return { finalText: accumulated, partialText: latest };
 }
 
+function isLiveTextRefinement(previous: string, next: string): boolean {
+  const previousText = previous.trim();
+  const nextText = next.trim();
+
+  if (!previousText || !nextText) {
+    return false;
+  }
+
+  return previousText === nextText || previousText.includes(nextText) || nextText.includes(previousText);
+}
+
+function shouldMoveLiveSegmentToHistory(
+  currentSourceText: string,
+  currentTranslatedText: string,
+  nextSourceText: string,
+  nextTranslatedText: string,
+): boolean {
+  const currentSource = currentSourceText.trim();
+  const currentTranslation = currentTranslatedText.trim();
+  const nextSource = nextSourceText.trim();
+  const nextTranslation = nextTranslatedText.trim();
+
+  if (!currentSource || currentSource.startsWith('(') || !nextSource) {
+    return false;
+  }
+
+  if (currentSource === nextSource && currentTranslation === nextTranslation) {
+    return false;
+  }
+
+  const sourceLooksRefined = isLiveTextRefinement(currentSource, nextSource);
+  const translationLooksRefined = !currentTranslation || !nextTranslation || isLiveTextRefinement(currentTranslation, nextTranslation);
+
+  return !(sourceLooksRefined && translationLooksRefined);
+}
+
 const languageOptions = [
   { value: 'auto', label: 'Auto Detect' },
   { value: 'ja', label: 'Japanese' },
@@ -283,6 +319,7 @@ export default component$(() => {
   const finalTranscript = useSignal('');
   const partialTranscript = useSignal('');
   const translatedTranscript = useSignal('');
+  const accumulatedTranslatedTranscript = useSignal('');
   const transcriptHistory = useSignal<TranscriptHistoryEntry[]>([]);
 
   // Phase 2 extension (TDD per 修正指示書): per-chunk processing feedback
@@ -518,8 +555,8 @@ export default component$(() => {
       if (isReconnect && previousText.value) {
         config.previous_text = previousText.value;
       }
-      if (isReconnect && translatedTranscript.value) {
-        config.previous_translated_text = translatedTranscript.value;
+      if (isReconnect && accumulatedTranslatedTranscript.value) {
+        config.previous_translated_text = accumulatedTranslatedTranscript.value;
       }
 
       ws.send(JSON.stringify(config));
@@ -594,40 +631,68 @@ export default component$(() => {
           const nextContext = accumulatedText || `${previousText.value} ${latestTranscriptText || latestText}`.trim();
           previousText.value = nextContext;
           if (accumulatedTranslatedText || latestTranslatedText) {
-            translatedTranscript.value = accumulatedTranslatedText || `${translatedTranscript.value} ${latestTranslatedText}`.trim();
+            accumulatedTranslatedTranscript.value = accumulatedTranslatedText || `${accumulatedTranslatedTranscript.value} ${latestTranslatedText}`.trim();
           }
 
           if (isFinal) {
-            // 確定した結果 → finalTranscript に蓄積
-            finalTranscript.value = nextContext;
-            partialTranscript.value = ''; // partial をクリア
-            previousText.value = finalTranscript.value;
-            transcript.value = finalTranscript.value; // 後方互換
-            transcriptHistory.value = appendTranscriptHistoryValue(
-              transcriptHistory.value,
-              translatedTranscript.value || finalTranscript.value,
-              String(data.model_id || selectedModel.value),
-              proc,
-              {
-                transcriptText: finalTranscript.value,
-                translatedText: translatedTranscript.value || null,
-                targetLanguage: data.target_language || null,
-              },
-            );
+            const nextLiveSource = latestTranscriptText || latestText || nextContext;
+            const nextLiveTranslation = latestTranslatedText;
+            const currentLiveSource = finalTranscript.value || partialTranscript.value;
+            const currentLiveTranslation = translatedTranscript.value;
+            if (shouldMoveLiveSegmentToHistory(currentLiveSource, currentLiveTranslation, nextLiveSource, nextLiveTranslation)) {
+              transcriptHistory.value = appendTranscriptHistoryValue(
+                transcriptHistory.value,
+                currentLiveTranslation || currentLiveSource,
+                String(data.model_id || selectedModel.value),
+                proc,
+                {
+                  transcriptText: currentLiveSource,
+                  translatedText: currentLiveTranslation || null,
+                  targetLanguage: data.target_language || null,
+                },
+              );
+            }
+            finalTranscript.value = nextLiveSource;
+            partialTranscript.value = '';
+            translatedTranscript.value = nextLiveTranslation;
+            previousText.value = nextContext;
+            transcript.value = nextLiveTranslation || nextLiveSource; // 後方互換
           } else {
-            // 部分結果 → partialTranscript で一時表示
             const split = splitAccumulatedForPartial(nextContext, latestTranscriptText || latestText);
-            finalTranscript.value = split.finalText;
-            partialTranscript.value = split.partialText;
-            transcript.value = translatedTranscript.value || nextContext;
+            const nextLiveSource = split.partialText || latestTranscriptText || latestText || nextContext;
+            const nextLiveTranslation = latestTranslatedText;
+            const currentLiveSource = finalTranscript.value || partialTranscript.value;
+            const currentLiveTranslation = translatedTranscript.value;
+            if (shouldMoveLiveSegmentToHistory(currentLiveSource, currentLiveTranslation, nextLiveSource, nextLiveTranslation)) {
+              transcriptHistory.value = appendTranscriptHistoryValue(
+                transcriptHistory.value,
+                currentLiveTranslation || currentLiveSource,
+                String(data.model_id || selectedModel.value),
+                proc,
+                {
+                  transcriptText: currentLiveSource,
+                  translatedText: currentLiveTranslation || null,
+                  targetLanguage: data.target_language || null,
+                },
+              );
+            }
+            finalTranscript.value = '';
+            partialTranscript.value = nextLiveSource;
+            translatedTranscript.value = nextLiveTranslation;
+            transcript.value = nextLiveTranslation || nextLiveSource;
           }
         } else if (accumulatedText) {
           previousText.value = accumulatedText;
-          finalTranscript.value = accumulatedText;
-          if (accumulatedTranslatedText) {
-            translatedTranscript.value = accumulatedTranslatedText;
+          if (!finalTranscript.value && !partialTranscript.value) {
+            finalTranscript.value = accumulatedText;
           }
-          transcript.value = translatedTranscript.value || accumulatedText;
+          if (accumulatedTranslatedText) {
+            accumulatedTranslatedTranscript.value = accumulatedTranslatedText;
+            if (!translatedTranscript.value) {
+              translatedTranscript.value = accumulatedTranslatedText;
+            }
+          }
+          transcript.value = translatedTranscript.value || finalTranscript.value || partialTranscript.value || accumulatedText;
         } else {
           // Empty text but chunk was processed: give subtle feedback in partial area
           // (keeps the transcript container "alive" for the user).
@@ -656,22 +721,16 @@ export default component$(() => {
         const finalText = String(data.transcript_text || previousText.value || data.text || '').trim();
         const finalTranslatedText = String(data.translated_text || translatedTranscript.value || '').trim();
         if (finalText) {
+          const currentLiveSource = finalTranscript.value || partialTranscript.value;
+          const currentLiveTranslation = translatedTranscript.value;
+          const nextLiveSource = currentLiveSource || finalText;
+          const nextLiveTranslation = currentLiveTranslation || finalTranslatedText;
           previousText.value = finalText;
-          finalTranscript.value = finalText;
-          translatedTranscript.value = finalTranslatedText;
+          accumulatedTranslatedTranscript.value = finalTranslatedText;
+          finalTranscript.value = nextLiveSource;
+          translatedTranscript.value = nextLiveTranslation;
           partialTranscript.value = '';
-          transcript.value = finalTranslatedText || finalText;
-          transcriptHistory.value = appendTranscriptHistoryValue(
-            transcriptHistory.value,
-            finalTranslatedText || finalText,
-            String(data.model_id || selectedModel.value),
-            0,
-            {
-              transcriptText: finalText,
-              translatedText: finalTranslatedText || null,
-              targetLanguage: data.target_language || null,
-            },
-          );
+          transcript.value = nextLiveTranslation || nextLiveSource;
         }
         status.value = 'Stream ended';
       }
@@ -922,6 +981,7 @@ export default component$(() => {
     finalTranscript.value = '';
     partialTranscript.value = '';
     translatedTranscript.value = '';
+    accumulatedTranslatedTranscript.value = '';
     transcript.value = '';
     previousText.value = '';
 
@@ -1094,6 +1154,7 @@ export default component$(() => {
         finalTranscript.value = '';
         partialTranscript.value = '';
         translatedTranscript.value = '';
+        accumulatedTranslatedTranscript.value = '';
         transcript.value = '';
         previousText.value = '';
         currentChunkStatus.value = 'idle';
@@ -1574,12 +1635,20 @@ export default component$(() => {
 
       {/* Phase 2: Transcript with is_final visual distinction + copy (C) */}
       <div class="transcript-container">
+        <div class="live-result-heading">
+          <div>
+            <span>Current result</span>
+            <strong>Latest speech segment only</strong>
+          </div>
+          <p>Earlier completed segments move into Transcript History so the live area stays readable.</p>
+        </div>
         <div class="transcript" data-testid="transcript-output">
           <div class="result-card source-transcript" data-testid="source-transcript">
             <div class="result-card-header">
               <strong>Heard Text</strong>
+              <span>{finalTranscript.value ? 'Finalized segment' : 'Listening'}</span>
             </div>
-            <div>
+            <div class="result-card-body">
               {finalTranscript.value && (
                 <span class="final-text" onClick$={copyFinalTranscript} title="Click to copy finalized text">
                   {finalTranscript.value}
@@ -1590,7 +1659,7 @@ export default component$(() => {
                   {finalTranscript.value ? ' ' : ''}{partialTranscript.value}
                 </span>
               )}
-              {!finalTranscript.value && !partialTranscript.value && 'Transcription will appear here in real-time...'}
+              {!finalTranscript.value && !partialTranscript.value && 'The latest recognized phrase will appear here.'}
             </div>
           </div>
 
@@ -1598,10 +1667,10 @@ export default component$(() => {
             <div class="result-card translated-transcript" data-testid="translated-transcript">
               <div class="result-card-header">
                 <strong>Translation</strong>
-              <span>{translationTarget.value === 'none' ? 'Off' : translationTarget.value}</span>
+                <span>{translationTarget.value === 'none' ? 'Off' : translationTarget.value}</span>
               </div>
-              <div>
-                {translatedTranscript.value || 'Translation will appear here when enabled and speech is detected.'}
+              <div class="result-card-body">
+                {translatedTranscript.value || 'The latest translation will appear here when enabled.'}
               </div>
             </div>
           )}
@@ -1620,7 +1689,7 @@ export default component$(() => {
           <span>{transcriptHistory.value.length} item(s)</span>
         </div>
         {transcriptHistory.value.length === 0 ? (
-          <div class="history-empty">Finalized transcription results will remain here.</div>
+          <div class="history-empty">Earlier segments will move here as the conversation continues.</div>
         ) : (
           transcriptHistory.value.map((entry) => (
             <div class="history-item" key={entry.id}>
