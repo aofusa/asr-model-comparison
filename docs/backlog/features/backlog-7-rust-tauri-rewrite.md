@@ -72,10 +72,12 @@ Tauriデスクトップ/モバイルでは、WebViewから同一アプリ内Rust
 - PCM WAVデコード、16kHzモノラル化、RMS/peak計算、無音判定をRustで追加済み。
 - HTTP/WS応答に音声解析結果と`had_speech`を反映済み。
 - Qwen3-ASR向けにCUDA/DirectML/Metal/CoreML/Vulkan/WGPU/OpenVINO/NNAPI/BLASの優先戦略を追加済み。
+- `whisper-rs` feature有効時に、環境変数で指定したwhisper.cpp互換モデルを使うWhisper実推論を追加済み。
 - 実モデル統合はfeature境界を定義済み。各ネイティブ依存のCI整備後に有効化する。
 
 ## 未完了・残タスク
 
-- Python版と同等の実ASR推論、多形式音声デコード、翻訳処理は未実装。
+- Qwen3-ASR / Voxtral の実ASR推論、多形式音声デコード、翻訳処理は未実装。
+- Whisperモデルの自動ダウンロードは未実装。
 - 実モデルのダウンロード/ロード進捗、実機アクセラレータ可用性検出は未実装。
 - Android/iOS実機でのマイク/共有音声取得、モデル配置、バイナリサイズ、権限設定の検証が必要。

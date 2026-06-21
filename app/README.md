@@ -28,6 +28,7 @@
 - HTTP/WS文字起こしAPIのレスポンス形状
 - PCM WAVデコード、16kHzモノラル化、RMS/peak計算
 - 無音判定と`had_speech=false`応答
+- `whisper-rs` feature有効時のWhisper実推論
 - 単一モデルロード制約の管理
 - モデル準備進捗イベント
 - `auto` / `gpu` / `cpu` の選択と安全なCPUフォールバック
@@ -37,7 +38,8 @@
 
 未完了:
 
-- Whisper / Qwen3-ASR / Voxtral の実モデル推論
+- Qwen3-ASR / Voxtral の実モデル推論
+- Whisperモデルの自動ダウンロード
 - Python版と同等の多形式音声デコードと翻訳処理
 - 実モデルのダウンロード/ロード進捗
 - 実機GPU/Metal/CoreML/NNAPI/CUDA/Vulkanの可用性検出
@@ -92,6 +94,37 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin amcp-server -- server --hos
 - `auto`: デフォルト。GPU/専用アクセラレータを優先し、使えない場合はCPUへフォールバックします。
 - `gpu`: GPUを明示的に優先します。利用不可の場合は安全にCPUへフォールバックします。
 - `cpu`: GPUを試さずCPUのみを使います。
+
+### Whisper実推論
+
+Whisperは `whisper-rs` / whisper.cpp を使った実推論に対応しています。通常ビルドでは依存を有効化せず、`whisper` feature付きで起動した場合のみ実推論を使います。
+
+まずwhisper.cpp互換のGGML/GGUFモデルを用意し、環境変数でパスを指定します。
+
+```powershell
+$env:AMCP_WHISPER_TINY_MODEL_PATH="C:\models\ggml-tiny.bin"
+cd app
+npm run server:whisper
+```
+
+全Whisperモデル共通のパスとして指定する場合:
+
+```powershell
+$env:AMCP_WHISPER_MODEL_PATH="C:\models\ggml-tiny.bin"
+npm run server:whisper
+```
+
+WindowsでGPU優先にしたい場合:
+
+```powershell
+# Vulkan
+npm run server:whisper:vulkan
+
+# CUDA
+npm run server:whisper:cuda
+```
+
+モデルパスが未設定の場合、アプリは開発用プレースホルダー推論へ安全にフォールバックします。
 
 ## ビルド方法
 
@@ -176,6 +209,12 @@ npm test
 ```powershell
 cd app
 npm run test:rust
+```
+
+Whisper featureのコンパイル確認:
+
+```powershell
+npm run test:whisper:compile
 ```
 
 主に以下を検証します。

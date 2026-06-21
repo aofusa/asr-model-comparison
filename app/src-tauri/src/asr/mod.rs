@@ -19,6 +19,8 @@ pub enum AsrError {
     EmptyAudio,
     #[error("{0}")]
     Audio(#[from] audio::AudioError),
+    #[error("backend failed: {0}")]
+    Backend(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,11 +183,21 @@ impl HybridModelManager {
         let (accelerator, _) = self.prepare_model(&options).await?;
         let preprocessed = audio::load_and_preprocess_wav(audio)?;
         let previous = options.previous_text.as_deref().unwrap_or("").trim();
-        let text = if preprocessed.had_speech {
-            hybrid::transcribe_placeholder(&preprocessed, &options)
+        let backend_result = if preprocessed.had_speech {
+            hybrid::try_transcribe_real(&preprocessed, &options).map_err(AsrError::Backend)?
         } else {
-            String::new()
+            None
         };
+        let text = backend_result
+            .as_ref()
+            .map(|result| result.text.clone())
+            .unwrap_or_else(|| {
+                if preprocessed.had_speech {
+                    hybrid::transcribe_placeholder(&preprocessed, &options)
+                } else {
+                    String::new()
+                }
+            });
         let transcript_text = merge_context(previous, &text);
 
         Ok(TranscriptionResult {
@@ -194,19 +206,28 @@ impl HybridModelManager {
             transcript_text,
             translated_text: None,
             processing_time_seconds: started.elapsed().as_secs_f64(),
-            language: options.language,
+            language: backend_result
+                .as_ref()
+                .and_then(|result| result.language.clone())
+                .or(options.language),
             target_language: options
                 .target_language
                 .filter(|value| !matches!(value.as_str(), "" | "none" | "auto")),
-            chunks: vec![serde_json::json!({
-                "sample_rate": preprocessed.sample_rate,
-                "original_sample_rate": preprocessed.original_sample_rate,
-                "channels": preprocessed.channels,
-                "duration_seconds": preprocessed.duration_seconds,
-                "rms": preprocessed.rms,
-                "peak": preprocessed.peak,
-                "had_speech": preprocessed.had_speech,
-            })],
+            chunks: backend_result
+                .as_ref()
+                .map(|result| result.chunks.clone())
+                .filter(|chunks| !chunks.is_empty())
+                .unwrap_or_else(|| {
+                    vec![serde_json::json!({
+                        "sample_rate": preprocessed.sample_rate,
+                        "original_sample_rate": preprocessed.original_sample_rate,
+                        "channels": preprocessed.channels,
+                        "duration_seconds": preprocessed.duration_seconds,
+                        "rms": preprocessed.rms,
+                        "peak": preprocessed.peak,
+                        "had_speech": preprocessed.had_speech,
+                    })]
+                }),
             had_speech: preprocessed.had_speech,
             audio_duration_seconds: preprocessed.duration_seconds,
             input_sample_rate: preprocessed.original_sample_rate,

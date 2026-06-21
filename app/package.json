@@ -9,6 +9,9 @@
     "build": "tauri build",
     "server": "cargo run --manifest-path src-tauri/Cargo.toml --bin amcp-server -- server",
     "server:local": "cargo run --manifest-path src-tauri/Cargo.toml --bin amcp-server -- server --host 127.0.0.1 --port 8000",
+    "server:whisper": "cargo run --manifest-path src-tauri/Cargo.toml --features whisper --bin amcp-server -- server --host 127.0.0.1 --port 8000",
+    "server:whisper:vulkan": "cargo run --manifest-path src-tauri/Cargo.toml --features whisper-vulkan --bin amcp-server -- server --host 127.0.0.1 --port 8000 --accelerator gpu",
+    "server:whisper:cuda": "cargo run --manifest-path src-tauri/Cargo.toml --features whisper-cuda --bin amcp-server -- server --host 127.0.0.1 --port 8000 --accelerator gpu",
     "android:init": "tauri android init",
     "android:dev": "tauri android dev",
     "android:build": "tauri android build",
@@ -17,6 +20,7 @@
     "ios:build": "tauri ios build",
     "test": "npm run test:rust && npm run test:e2e",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:whisper:compile": "cargo check --manifest-path src-tauri/Cargo.toml --features whisper",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed"
   },

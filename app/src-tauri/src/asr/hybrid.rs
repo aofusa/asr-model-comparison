@@ -1,5 +1,24 @@
 use super::audio::PreprocessedAudio;
 use super::TranscriptionOptions;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackendTranscription {
+    pub text: String,
+    pub language: Option<String>,
+    pub chunks: Vec<serde_json::Value>,
+}
+
+pub fn try_transcribe_real(
+    audio: &PreprocessedAudio,
+    options: &TranscriptionOptions,
+) -> Result<Option<BackendTranscription>, String> {
+    if options.model_id.starts_with("whisper") {
+        return try_transcribe_whisper(audio, options);
+    }
+
+    Ok(None)
+}
 
 pub fn transcribe_placeholder(audio: &PreprocessedAudio, options: &TranscriptionOptions) -> String {
     let family_hint = if options.model_id.starts_with("qwen3-asr") {
@@ -16,6 +35,101 @@ pub fn transcribe_placeholder(audio: &PreprocessedAudio, options: &Transcription
         samples = audio.samples.len(),
         model = options.model_id
     )
+}
+
+#[cfg(feature = "whisper")]
+fn try_transcribe_whisper(
+    audio: &PreprocessedAudio,
+    options: &TranscriptionOptions,
+) -> Result<Option<BackendTranscription>, String> {
+    let Some(model_path) = whisper_model_path(&options.model_id) else {
+        return Ok(None);
+    };
+
+    let ctx = whisper_rs::WhisperContext::new_with_params(
+        &model_path,
+        whisper_rs::WhisperContextParameters::default(),
+    )
+    .map_err(|error| format!("failed to load Whisper model at {model_path}: {error}"))?;
+    let mut state = ctx
+        .create_state()
+        .map_err(|error| format!("failed to create Whisper state: {error}"))?;
+
+    let beam_size = options.beam_size.unwrap_or(1).max(1) as i32;
+    let strategy = if beam_size > 1 {
+        whisper_rs::SamplingStrategy::BeamSearch {
+            beam_size,
+            patience: -1.0,
+        }
+    } else {
+        whisper_rs::SamplingStrategy::Greedy { best_of: 1 }
+    };
+    let mut params = whisper_rs::FullParams::new(strategy);
+    params.set_print_special(false);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_timestamps(false);
+    params.set_token_timestamps(options.return_timestamps);
+    params.set_n_threads(
+        std::thread::available_parallelism()
+            .map(|threads| threads.get().min(8) as i32)
+            .unwrap_or(4),
+    );
+
+    if let Some(language) = options
+        .language
+        .as_deref()
+        .filter(|language| !matches!(*language, "" | "auto"))
+    {
+        params.set_language(Some(language));
+    }
+
+    state
+        .full(params, &audio.samples)
+        .map_err(|error| format!("Whisper transcription failed: {error}"))?;
+
+    let mut chunks = Vec::new();
+    let mut parts = Vec::new();
+    for segment in state.as_iter() {
+        let text = segment.to_string().trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+        chunks.push(serde_json::json!({
+            "start": segment.start_timestamp() as f64 / 100.0,
+            "end": segment.end_timestamp() as f64 / 100.0,
+            "text": text,
+        }));
+        parts.push(text);
+    }
+
+    Ok(Some(BackendTranscription {
+        text: parts.join(" ").trim().to_string(),
+        language: options.language.clone(),
+        chunks,
+    }))
+}
+
+#[cfg(not(feature = "whisper"))]
+fn try_transcribe_whisper(
+    _audio: &PreprocessedAudio,
+    _options: &TranscriptionOptions,
+) -> Result<Option<BackendTranscription>, String> {
+    Ok(None)
+}
+
+#[cfg(feature = "whisper")]
+fn whisper_model_path(model_id: &str) -> Option<String> {
+    let suffix = model_id
+        .trim_start_matches("whisper-")
+        .replace('-', "_")
+        .to_ascii_uppercase();
+    let specific_key = format!("AMCP_WHISPER_{suffix}_MODEL_PATH");
+
+    std::env::var(&specific_key)
+        .ok()
+        .or_else(|| std::env::var("AMCP_WHISPER_MODEL_PATH").ok())
+        .filter(|path| !path.trim().is_empty())
 }
 
 #[cfg(feature = "whisper")]
