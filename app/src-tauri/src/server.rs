@@ -289,6 +289,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             "input_channels": result.input_channels,
                             "input_rms": result.input_rms,
                             "input_peak": result.input_peak,
+                            "translation_engine": result.translation_engine,
+                            "translation_note": result.translation_note,
                             "chunk_index": chunk_index,
                             "chunk_size_bytes": audio.len(),
                             "accumulated_text": accumulated_text,

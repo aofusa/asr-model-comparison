@@ -29,6 +29,8 @@
 - PCM WAVデコード、16kHzモノラル化、RMS/peak計算
 - 無音判定と`had_speech=false`応答
 - `whisper-rs` feature有効時のWhisper実推論
+- 翻訳レスポンス契約 (`transcript_text` / `translated_text` / `target_language`) の維持
+- 日本語 -> 英語翻訳前の小さい日本語数字正規化
 - 単一モデルロード制約の管理
 - モデル準備進捗イベント
 - `auto` / `gpu` / `cpu` の選択と安全なCPUフォールバック
@@ -40,7 +42,7 @@
 
 - Qwen3-ASR / Voxtral の実モデル推論
 - Whisperモデルの自動ダウンロード
-- Python版と同等の多形式音声デコードと翻訳処理
+- Python版と同等の多形式音声デコードと実翻訳モデル推論
 - 実モデルのダウンロード/ロード進捗
 - 実機GPU/Metal/CoreML/NNAPI/CUDA/Vulkanの可用性検出
 - Android/iOS実機でのマイク・画面音声取得制約の検証

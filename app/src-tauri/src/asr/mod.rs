@@ -2,6 +2,7 @@ use crate::accelerator::{
     select_accelerator, AcceleratorPreference, AcceleratorSelection, HardwareBackend,
 };
 use crate::models::family_for_model;
+use crate::translation;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
@@ -68,6 +69,8 @@ pub struct TranscriptionResult {
     pub input_channels: u16,
     pub input_rms: f32,
     pub input_peak: f32,
+    pub translation_engine: Option<String>,
+    pub translation_note: Option<String>,
     pub accelerator: AcceleratorSelection,
 }
 
@@ -199,20 +202,27 @@ impl HybridModelManager {
                 }
             });
         let transcript_text = merge_context(previous, &text);
+        let translation = translation::translate_optional(
+            &transcript_text,
+            options.language.as_deref(),
+            options.target_language.as_deref(),
+        );
+        let display_text = translation
+            .translated_text
+            .clone()
+            .unwrap_or_else(|| translation.transcript_text.clone());
 
         Ok(TranscriptionResult {
             model_id: options.model_id,
-            text: transcript_text.clone(),
-            transcript_text,
-            translated_text: None,
+            text: display_text,
+            transcript_text: translation.transcript_text,
+            translated_text: translation.translated_text,
             processing_time_seconds: started.elapsed().as_secs_f64(),
             language: backend_result
                 .as_ref()
                 .and_then(|result| result.language.clone())
                 .or(options.language),
-            target_language: options
-                .target_language
-                .filter(|value| !matches!(value.as_str(), "" | "none" | "auto")),
+            target_language: translation.target_language,
             chunks: backend_result
                 .as_ref()
                 .map(|result| result.chunks.clone())
@@ -234,6 +244,8 @@ impl HybridModelManager {
             input_channels: preprocessed.channels,
             input_rms: preprocessed.rms,
             input_peak: preprocessed.peak,
+            translation_engine: Some(translation.engine.to_string()),
+            translation_note: translation.note,
             accelerator,
         })
     }
@@ -307,6 +319,26 @@ mod tests {
         assert!(!result.had_speech);
         assert_eq!(result.text, "");
         assert!(result.input_rms < 0.006);
+    }
+
+    #[tokio::test]
+    async fn target_language_preserves_transcript_contract_without_engine() {
+        let manager = HybridModelManager::new(vec![HardwareBackend::Cpu]);
+        let options = TranscriptionOptions {
+            language: Some("ja".to_string()),
+            target_language: Some("en".to_string()),
+            ..Default::default()
+        };
+
+        let result = manager
+            .transcribe(&test_wav(&[10_000, -10_000]), options)
+            .await
+            .unwrap();
+
+        assert_eq!(result.translated_text, None);
+        assert_eq!(result.target_language.as_deref(), Some("en"));
+        assert_eq!(result.translation_engine.as_deref(), Some("unavailable"));
+        assert!(!result.transcript_text.is_empty());
     }
 
     fn test_wav(samples: &[i16]) -> Vec<u8> {
