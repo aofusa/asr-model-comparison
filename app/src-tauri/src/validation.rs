@@ -24,8 +24,43 @@ pub struct ValidationReport {
 }
 
 pub async fn run(args: ValidateArgs) -> anyhow::Result<()> {
-    let audio = std::fs::read(&args.audio)?;
     let manager = HybridModelManager::new(default_available_backends());
+    if args.diagnostics_only {
+        let status = manager.status().await;
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&status)?);
+        } else {
+            println!("Service: {}", status.service);
+            println!("Available backends: {:?}", status.available_backends);
+            println!("Translation: {}", status.translation.reason);
+            for backend in status.runtime_backends {
+                println!(
+                    "{}: {:?} real={} ({})",
+                    backend.model_id,
+                    backend.backend,
+                    backend.real_inference_available,
+                    backend.reason
+                );
+                for artifact in backend.artifacts {
+                    println!(
+                        "  - {} {:?} exists={} path={:?} env={:?}",
+                        artifact.name,
+                        artifact.kind,
+                        artifact.exists,
+                        artifact.path,
+                        artifact.env_var
+                    );
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    let audio_path = args
+        .audio
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--audio is required unless --diagnostics-only is set"))?;
+    let audio = std::fs::read(&audio_path)?;
     let options = TranscriptionOptions {
         model_id: args.model_id.clone(),
         language: Some(args.language.clone()),
@@ -49,7 +84,7 @@ pub async fn run(args: ValidateArgs) -> anyhow::Result<()> {
 
     let report = ValidationReport {
         model_id: result.model_id,
-        audio_path: args.audio.to_string_lossy().to_string(),
+        audio_path: audio_path.to_string_lossy().to_string(),
         text: result.text,
         transcript_text: result.transcript_text,
         translated_text: result.translated_text,

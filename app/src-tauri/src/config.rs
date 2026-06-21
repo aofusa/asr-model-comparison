@@ -61,7 +61,7 @@ pub struct ServerArgs {
 #[derive(Debug, Clone, Parser)]
 pub struct ValidateArgs {
     #[arg(long)]
-    pub audio: PathBuf,
+    pub audio: Option<PathBuf>,
     #[arg(long, default_value = "whisper-tiny")]
     pub model_id: String,
     #[arg(long, default_value = "auto")]
@@ -74,6 +74,8 @@ pub struct ValidateArgs {
     pub accelerator: AcceleratorArg,
     #[arg(long)]
     pub json: bool,
+    #[arg(long)]
+    pub diagnostics_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

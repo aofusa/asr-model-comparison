@@ -359,6 +359,13 @@ npm run test:voxtral:cuda:compile
 
 実モデルファイルとランナーを配置したWindows環境では、`validate` CLIで音声ファイル単位の速度と品質を確認できます。
 
+実測前に現在のモデル配置と翻訳ランナー設定を確認する場合:
+
+```powershell
+cd app
+npm run validate:windows -- --diagnostics-only --json
+```
+
 Whisper:
 
 ```powershell

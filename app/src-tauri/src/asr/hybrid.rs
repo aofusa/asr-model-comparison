@@ -21,12 +21,29 @@ pub struct BackendAssetProgress {
     pub total_bytes: Option<u64>,
 }
 
-pub fn prepare_real_model_assets(model_id: &str) -> Result<Vec<BackendAssetProgress>, String> {
-    if model_id.starts_with("whisper") {
-        return prepare_whisper_assets(model_id);
+pub fn prepare_real_model_assets(
+    options: &TranscriptionOptions,
+    available_backends: &[HardwareBackend],
+) -> Result<Vec<BackendAssetProgress>, String> {
+    let mut events = if options.model_id.starts_with("whisper") {
+        prepare_whisper_assets(&options.model_id)?
+    } else if options.model_id.starts_with("qwen3-asr") {
+        prepare_qwen_assets(available_backends)?
+    } else if options.model_id.starts_with("voxtral") {
+        prepare_voxtral_assets(available_backends)?
+    } else {
+        Vec::new()
+    };
+
+    if options
+        .target_language
+        .as_deref()
+        .is_some_and(|language| !matches!(language, "" | "none" | "auto"))
+    {
+        events.extend(prepare_translation_assets());
     }
 
-    Ok(Vec::new())
+    Ok(events)
 }
 
 pub fn try_transcribe_real(
@@ -56,6 +73,174 @@ fn prepare_whisper_assets(model_id: &str) -> Result<Vec<BackendAssetProgress>, S
 
 #[cfg(not(feature = "whisper"))]
 fn prepare_whisper_assets(_model_id: &str) -> Result<Vec<BackendAssetProgress>, String> {
+    Ok(Vec::new())
+}
+
+fn prepare_translation_assets() -> Vec<BackendAssetProgress> {
+    let status = crate::translation::runtime_status();
+    vec![BackendAssetProgress {
+        phase: "translation_runner".to_string(),
+        message: if status.configured {
+            format!(
+                "Translation runner configured: {} {}.",
+                status.command.unwrap_or_default(),
+                status.args.join(" ")
+            )
+        } else {
+            status.reason
+        },
+        progress: Some(58),
+        bytes_downloaded: None,
+        total_bytes: None,
+    }]
+}
+
+#[cfg(feature = "qwen")]
+fn prepare_qwen_assets(
+    available_backends: &[HardwareBackend],
+) -> Result<Vec<BackendAssetProgress>, String> {
+    let mut events = vec![BackendAssetProgress {
+        phase: "qwen_paths".to_string(),
+        message: "Resolving Qwen ASR library and model directory.".to_string(),
+        progress: Some(48),
+        bytes_downloaded: None,
+        total_bytes: None,
+    }];
+
+    let Some(config) = qwen_ffi::configure_qwen_ffi(available_backends) else {
+        events.push(BackendAssetProgress {
+            phase: "qwen_missing".to_string(),
+            message: "Qwen is not fully configured; set AMCP_QWEN_ASR_LIB or AMCP_QWEN_ASR_DIR plus AMCP_QWEN_MODEL_DIR.".to_string(),
+            progress: Some(50),
+            bytes_downloaded: None,
+            total_bytes: None,
+        });
+        return Ok(events);
+    };
+
+    events.push(BackendAssetProgress {
+        phase: "qwen_library".to_string(),
+        message: format!(
+            "Checking Qwen ASR library: {}.",
+            config.library_path.display()
+        ),
+        progress: Some(52),
+        bytes_downloaded: None,
+        total_bytes: None,
+    });
+    events.push(BackendAssetProgress {
+        phase: "qwen_model_dir".to_string(),
+        message: format!(
+            "Checking Qwen model directory: {}.",
+            config.model_dir.display()
+        ),
+        progress: Some(54),
+        bytes_downloaded: None,
+        total_bytes: None,
+    });
+
+    match qwen_ffi::validate_qwen_ffi(&config, false) {
+        Ok(_) => events.push(BackendAssetProgress {
+            phase: "qwen_symbols".to_string(),
+            message: "Qwen DLL loaded and required symbols were found.".to_string(),
+            progress: Some(56),
+            bytes_downloaded: None,
+            total_bytes: None,
+        }),
+        Err(error) => events.push(BackendAssetProgress {
+            phase: "qwen_validation_error".to_string(),
+            message: error,
+            progress: Some(56),
+            bytes_downloaded: None,
+            total_bytes: None,
+        }),
+    }
+
+    Ok(events)
+}
+
+#[cfg(not(feature = "qwen"))]
+fn prepare_qwen_assets(
+    _available_backends: &[HardwareBackend],
+) -> Result<Vec<BackendAssetProgress>, String> {
+    Ok(Vec::new())
+}
+
+#[cfg(feature = "voxtral")]
+fn prepare_voxtral_assets(
+    available_backends: &[HardwareBackend],
+) -> Result<Vec<BackendAssetProgress>, String> {
+    let mut events = vec![BackendAssetProgress {
+        phase: "voxtral_paths".to_string(),
+        message: "Resolving Voxtral ONNX split model files.".to_string(),
+        progress: Some(48),
+        bytes_downloaded: None,
+        total_bytes: None,
+    }];
+
+    let Some(config) = voxtral_onnx::configure_voxtral_onnx(available_backends) else {
+        events.push(BackendAssetProgress {
+            phase: "voxtral_missing".to_string(),
+            message: "Voxtral is not configured; set AMCP_VOXTRAL_MODEL_DIR or split ONNX path variables.".to_string(),
+            progress: Some(50),
+            bytes_downloaded: None,
+            total_bytes: None,
+        });
+        return Ok(events);
+    };
+
+    for (phase, path) in [
+        ("voxtral_audio_encoder", config.audio_encoder_path.as_ref()),
+        ("voxtral_embed_tokens", config.embed_tokens_path.as_ref()),
+        ("voxtral_decoder", config.decoder_path.as_ref()),
+        ("voxtral_tokenizer", config.tokenizer_path.as_ref()),
+    ] {
+        events.push(BackendAssetProgress {
+            phase: phase.to_string(),
+            message: path
+                .map(|path| format!("Checking {phase}: {}.", path.display()))
+                .unwrap_or_else(|| format!("{phase} is not configured.")),
+            progress: Some(52),
+            bytes_downloaded: None,
+            total_bytes: None,
+        });
+    }
+
+    events.push(BackendAssetProgress {
+        phase: "voxtral_session_metadata".to_string(),
+        message: "Loading Voxtral ONNX sessions to verify input/output metadata.".to_string(),
+        progress: Some(56),
+        bytes_downloaded: None,
+        total_bytes: None,
+    });
+    match voxtral_onnx::validate_voxtral_session(&config) {
+        Ok(info) => events.push(BackendAssetProgress {
+            phase: "voxtral_session_ready".to_string(),
+            message: format!(
+                "Voxtral ONNX sessions validated: {} inputs, {} outputs.",
+                info.inputs.len(),
+                info.outputs.len()
+            ),
+            progress: Some(58),
+            bytes_downloaded: None,
+            total_bytes: None,
+        }),
+        Err(error) => events.push(BackendAssetProgress {
+            phase: "voxtral_validation_error".to_string(),
+            message: error,
+            progress: Some(58),
+            bytes_downloaded: None,
+            total_bytes: None,
+        }),
+    }
+
+    Ok(events)
+}
+
+#[cfg(not(feature = "voxtral"))]
+fn prepare_voxtral_assets(
+    _available_backends: &[HardwareBackend],
+) -> Result<Vec<BackendAssetProgress>, String> {
     Ok(Vec::new())
 }
 

@@ -175,8 +175,8 @@ impl HybridModelManager {
                 elapsed_seconds: Some(started.elapsed().as_secs_f64()),
             });
 
-            for event in
-                hybrid::prepare_real_model_assets(&options.model_id).map_err(AsrError::Backend)?
+            for event in hybrid::prepare_real_model_assets(&options, &self.available_backends)
+                .map_err(AsrError::Backend)?
             {
                 progress.push(ModelProgress {
                     r#type: "model_progress",
