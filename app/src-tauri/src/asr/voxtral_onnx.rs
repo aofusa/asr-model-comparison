@@ -623,7 +623,9 @@ fn generate_tokens(
         .ok_or_else(|| "invalid Voxtral prompt embedding length".to_string())?;
     let mut generated = Vec::new();
     let mut past_cache: Option<Vec<(Vec<usize>, Vec<f32>)>> = None;
-    let mut current_past_len = 0usize;
+    // ONNX Runtime requires all tensor dimensions to be >= 1, so the initial
+    // cache uses a single zero token instead of the logical zero-length cache.
+    let mut current_past_len = 1usize;
 
     for step in 0..max_tokens {
         let is_prefill = step == 0;
@@ -652,7 +654,9 @@ fn generate_tokens(
             "position_ids" => Tensor::from_array((
                 [1usize, current_step_len],
                 if is_prefill {
-                    (0..current_step_len as i64).collect::<Vec<_>>().into_boxed_slice()
+                    (current_past_len as i64..(current_past_len + current_step_len) as i64)
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice()
                 } else {
                     vec![current_past_len as i64].into_boxed_slice()
                 }
@@ -661,37 +665,30 @@ fn generate_tokens(
         ];
 
         for layer in 0..num_layers {
-            let (key_shape, key_data, value_shape, value_data) =
-                if let Some(cache) = past_cache.as_ref() {
-                    let key = cache
-                        .get(layer * 2)
-                        .ok_or_else(|| format!("missing Voxtral key cache for layer {layer}"))?;
-                    let value = cache
-                        .get(layer * 2 + 1)
-                        .ok_or_else(|| format!("missing Voxtral value cache for layer {layer}"))?;
-                    (
-                        key.0.clone(),
-                        key.1.clone(),
-                        value.0.clone(),
-                        value.1.clone(),
-                    )
-                } else {
-                    (
-                        vec![1usize, 8, 0, 128],
-                        Vec::new(),
-                        vec![1usize, 8, 0, 128],
-                        Vec::new(),
-                    )
-                };
+            let initial_key;
+            let initial_value;
+            let (key, value) = if let Some(cache) = past_cache.as_ref() {
+                let key = cache
+                    .get(layer * 2)
+                    .ok_or_else(|| format!("missing Voxtral key cache for layer {layer}"))?;
+                let value = cache
+                    .get(layer * 2 + 1)
+                    .ok_or_else(|| format!("missing Voxtral value cache for layer {layer}"))?;
+                (key, value)
+            } else {
+                initial_key = (vec![1usize, 8, 1, 128], vec![0.0_f32; 8 * 128]);
+                initial_value = (vec![1usize, 8, 1, 128], vec![0.0_f32; 8 * 128]);
+                (&initial_key, &initial_value)
+            };
             inputs.push((
                 format!("past_key_values.{layer}.key").into(),
-                Tensor::from_array((key_shape, key_data.into_boxed_slice()))
+                Tensor::from_array((key.0.clone(), key.1.clone().into_boxed_slice()))
                     .map_err(|error| format!("failed to create Voxtral key cache tensor: {error}"))?
                     .into(),
             ));
             inputs.push((
                 format!("past_key_values.{layer}.value").into(),
-                Tensor::from_array((value_shape, value_data.into_boxed_slice()))
+                Tensor::from_array((value.0.clone(), value.1.clone().into_boxed_slice()))
                     .map_err(|error| {
                         format!("failed to create Voxtral value cache tensor: {error}")
                     })?
