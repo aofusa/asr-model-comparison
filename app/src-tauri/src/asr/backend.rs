@@ -230,14 +230,6 @@ fn whisper_artifacts(model_id: &str) -> Vec<RuntimeArtifactStatus> {
         }];
     }
 
-    let model_dir = std::env::var("AMCP_MODEL_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                .join("models")
-                .join("whisper")
-        });
     let Some((file_name, url)) = whisper_model_download(model_id) else {
         return vec![RuntimeArtifactStatus {
             name: "whisper_model".to_string(),
@@ -249,15 +241,20 @@ fn whisper_artifacts(model_id: &str) -> Vec<RuntimeArtifactStatus> {
             note: Some("no built-in download URL is known for this Whisper model".to_string()),
         }];
     };
-    let model_path = model_dir.join(file_name);
+    let model_path = std::env::var("AMCP_MODEL_DIR")
+        .ok()
+        .filter(|path| !path.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .map(|model_dir| model_dir.join(file_name))
+        .unwrap_or_else(|| hf_cached_file_path("ggerganov/whisper.cpp", file_name));
     vec![RuntimeArtifactStatus {
         name: "whisper_model".to_string(),
         kind: RuntimeArtifactKind::Download,
         path: Some(model_path.to_string_lossy().to_string()),
-        env_var: Some("AMCP_MODEL_DIR".to_string()),
+        env_var: Some("AMCP_WHISPER_MODEL_PATH".to_string()),
         required: false,
         exists: model_path.is_file(),
-        note: Some(format!("auto-download source: {url}")),
+        note: Some(format!("Hugging Face Hub cache source: {url}")),
     }]
 }
 
@@ -350,6 +347,58 @@ fn qwen_model_weights_available(model_dir: &std::path::Path) -> bool {
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| name.ends_with(".safetensors"))
             })
+}
+
+fn hf_cached_file_path(repo_id: &str, file_name: &str) -> std::path::PathBuf {
+    if let Some(snapshot) = existing_hf_snapshot_dir(repo_id) {
+        return snapshot.join(file_name);
+    }
+    default_hf_repo_cache_dir(repo_id).join(file_name)
+}
+
+fn existing_hf_snapshot_dir(repo_id: &str) -> Option<std::path::PathBuf> {
+    let repo_dir = default_hf_repo_cache_dir(repo_id);
+    let revision = std::fs::read_to_string(repo_dir.join("refs").join("main")).ok()?;
+    let revision = revision.trim();
+    if revision.is_empty() {
+        return None;
+    }
+    let snapshot = repo_dir.join("snapshots").join(revision);
+    snapshot.is_dir().then_some(snapshot)
+}
+
+fn default_hf_repo_cache_dir(repo_id: &str) -> std::path::PathBuf {
+    default_hf_hub_cache_dir().join(format!("models--{}", repo_id.replace('/', "--")))
+}
+
+fn default_hf_hub_cache_dir() -> std::path::PathBuf {
+    if let Ok(cache) = std::env::var("HF_HUB_CACHE") {
+        let cache = cache.trim();
+        if !cache.is_empty() {
+            return std::path::PathBuf::from(cache);
+        }
+    }
+    let hf_home = std::env::var("HF_HOME")
+        .ok()
+        .filter(|path| !path.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var("XDG_CACHE_HOME")
+                .ok()
+                .filter(|path| !path.trim().is_empty())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(default_user_cache_dir)
+                .join("huggingface")
+        });
+    hf_home.join("hub")
+}
+
+fn default_user_cache_dir() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join(".cache")
 }
 
 fn voxtral_artifacts(

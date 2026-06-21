@@ -20,7 +20,7 @@ required-features = ["desktop"]
 [features]
 default = []
 desktop = ["dep:tauri"]
-whisper = ["dep:reqwest", "dep:whisper-rs"]
+whisper = ["dep:hf-hub", "dep:reqwest", "dep:whisper-rs"]
 whisper-cuda = ["whisper", "whisper-rs/cuda"]
 whisper-vulkan = ["whisper", "whisper-rs/vulkan"]
 qwen = [
@@ -36,7 +36,7 @@ qwen = [
     "dep:tokenizers",
 ]
 qwen-cuda = ["qwen", "candle-core/cuda", "candle-nn/cuda"]
-voxtral = ["dep:ndarray", "dep:ort", "dep:rustfft", "dep:tokenizers"]
+voxtral = ["dep:hf-hub", "dep:ndarray", "dep:ort", "dep:rustfft", "dep:tokenizers"]
 voxtral-directml = ["voxtral", "ort/directml"]
 voxtral-cuda = ["voxtral", "ort/cuda"]
 

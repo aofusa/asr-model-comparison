@@ -177,6 +177,19 @@ fn prepare_voxtral_assets(
         total_bytes: None,
     }];
 
+    if let Some(model_dir) = voxtral_onnx::ensure_default_voxtral_model_cached()? {
+        events.push(BackendAssetProgress {
+            phase: "voxtral_cache".to_string(),
+            message: format!(
+                "Voxtral ONNX assets are ready in Hugging Face cache: {}.",
+                model_dir.display()
+            ),
+            progress: Some(50),
+            bytes_downloaded: None,
+            total_bytes: None,
+        });
+    }
+
     let Some(config) = voxtral_onnx::configure_voxtral_onnx(available_backends) else {
         events.push(BackendAssetProgress {
             phase: "voxtral_missing".to_string(),
@@ -447,14 +460,13 @@ fn resolve_whisper_model_path_with_progress(
     let Some((file_name, url)) = whisper_model_download(model_id) else {
         return Ok(None);
     };
-    let model_dir = std::env::var("AMCP_MODEL_DIR")
+    let Some(model_dir) = std::env::var("AMCP_MODEL_DIR")
+        .ok()
+        .filter(|path| !path.trim().is_empty())
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                .join("models")
-                .join("whisper")
-        });
+    else {
+        return ensure_whisper_model_in_hf_cache(file_name, &mut progress).map(Some);
+    };
     let model_path = model_dir.join(file_name);
     if model_path.is_file() {
         return Ok(Some(model_path.to_string_lossy().to_string()));
@@ -464,6 +476,40 @@ fn resolve_whisper_model_path_with_progress(
         .map_err(|error| format!("failed to create model cache {model_dir:?}: {error}"))?;
     download_file(url, &model_path, &mut progress)?;
     Ok(Some(model_path.to_string_lossy().to_string()))
+}
+
+#[cfg(feature = "whisper")]
+fn ensure_whisper_model_in_hf_cache(
+    file_name: &str,
+    progress: &mut impl FnMut(BackendAssetProgress),
+) -> Result<String, String> {
+    progress(BackendAssetProgress {
+        phase: "checking_cache".to_string(),
+        message: format!("Resolving Whisper model {file_name} in the Hugging Face Hub cache."),
+        progress: Some(10),
+        bytes_downloaded: None,
+        total_bytes: None,
+    });
+    let api = hf_hub::api::sync::Api::new()
+        .map_err(|error| format!("failed to create Hugging Face Hub API: {error}"))?;
+    let repo = api.repo(hf_hub::Repo::new(
+        "ggerganov/whisper.cpp".to_string(),
+        hf_hub::RepoType::Model,
+    ));
+    let path = repo
+        .get(file_name)
+        .map_err(|error| format!("failed to resolve Whisper model {file_name}: {error}"))?;
+    progress(BackendAssetProgress {
+        phase: "ready".to_string(),
+        message: format!(
+            "Whisper model ready in Hugging Face cache: {}.",
+            path.display()
+        ),
+        progress: Some(100),
+        bytes_downloaded: None,
+        total_bytes: None,
+    });
+    Ok(path.to_string_lossy().to_string())
 }
 
 #[cfg(feature = "whisper")]

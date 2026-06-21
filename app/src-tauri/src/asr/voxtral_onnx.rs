@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 
 #[cfg(feature = "voxtral")]
 use ort::value::Tensor;
+
+const VOXTRAL_ONNX_REPO_ID: &str = "onnx-community/Voxtral-Mini-3B-2507-ONNX";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VoxtralOnnxConfig {
     pub model_path: PathBuf,
@@ -125,15 +128,130 @@ fn env_path(key: &str) -> Option<PathBuf> {
 
 pub fn default_voxtral_model_dir() -> PathBuf {
     env_path("AMCP_VOXTRAL_MODEL_DIR").unwrap_or_else(|| {
-        std::env::var("AMCP_MODEL_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                std::env::current_dir()
-                    .unwrap_or_else(|_| PathBuf::from("."))
-                    .join("models")
-            })
-            .join("voxtral")
+        if let Some(model_root) = env_path("AMCP_MODEL_DIR") {
+            return model_root.join("voxtral");
+        }
+        existing_hf_snapshot_dir().unwrap_or_else(default_hf_repo_cache_dir)
     })
+}
+
+#[cfg(feature = "voxtral")]
+pub fn ensure_default_voxtral_model_cached() -> Result<Option<PathBuf>, String> {
+    if has_explicit_voxtral_paths() || env_path("AMCP_VOXTRAL_MODEL_DIR").is_some() {
+        return Ok(None);
+    }
+    if env_path("AMCP_MODEL_DIR").is_some() {
+        return Ok(None);
+    }
+
+    let variant = voxtral_onnx_variant();
+    let api = hf_hub::api::sync::Api::new()
+        .map_err(|error| format!("failed to create Hugging Face Hub API: {error}"))?;
+    let repo = api.repo(hf_hub::Repo::new(
+        VOXTRAL_ONNX_REPO_ID.to_string(),
+        hf_hub::RepoType::Model,
+    ));
+    let tokenizer_path = repo
+        .get("tokenizer.json")
+        .map_err(|error| format!("failed to resolve Voxtral tokenizer: {error}"))?;
+    let model_dir = tokenizer_path
+        .parent()
+        .ok_or_else(|| "Voxtral tokenizer path has no parent directory".to_string())?
+        .to_path_buf();
+
+    for path in voxtral_hf_required_files(&variant) {
+        repo.get(&path)
+            .map_err(|error| format!("failed to resolve Voxtral asset {path}: {error}"))?;
+    }
+    for path in voxtral_hf_optional_external_data(&variant) {
+        let _ = repo.get(&path);
+    }
+
+    Ok(Some(model_dir))
+}
+
+#[cfg(feature = "voxtral")]
+fn has_explicit_voxtral_paths() -> bool {
+    [
+        "AMCP_VOXTRAL_AUDIO_ENCODER_PATH",
+        "AMCP_VOXTRAL_EMBED_TOKENS_PATH",
+        "AMCP_VOXTRAL_DECODER_PATH",
+        "AMCP_VOXTRAL_TOKENIZER_PATH",
+        "AMCP_VOXTRAL_ONNX_MODEL_PATH",
+    ]
+    .iter()
+    .any(|key| env_path(key).is_some())
+}
+
+#[cfg(feature = "voxtral")]
+fn voxtral_onnx_variant() -> String {
+    std::env::var("AMCP_VOXTRAL_ONNX_VARIANT")
+        .ok()
+        .map(|variant| variant.trim().to_string())
+        .filter(|variant| !variant.is_empty())
+        .unwrap_or_else(|| "q4".to_string())
+}
+
+#[cfg(feature = "voxtral")]
+fn voxtral_hf_required_files(variant: &str) -> Vec<String> {
+    [
+        format!("onnx/audio_encoder_{variant}.onnx"),
+        format!("onnx/embed_tokens_{variant}.onnx"),
+        format!("onnx/decoder_model_merged_{variant}.onnx"),
+    ]
+    .into_iter()
+    .collect()
+}
+
+#[cfg(feature = "voxtral")]
+fn voxtral_hf_optional_external_data(variant: &str) -> Vec<String> {
+    let mut files = vec![
+        format!("onnx/audio_encoder_{variant}.onnx_data"),
+        format!("onnx/embed_tokens_{variant}.onnx_data"),
+        format!("onnx/decoder_model_merged_{variant}.onnx_data"),
+    ];
+    if variant == "q4" {
+        files.push("onnx/decoder_model_merged_q4.onnx_data_1".to_string());
+    }
+    files
+}
+
+fn existing_hf_snapshot_dir() -> Option<PathBuf> {
+    let repo_dir = default_hf_repo_cache_dir();
+    let revision = std::fs::read_to_string(repo_dir.join("refs").join("main")).ok()?;
+    let revision = revision.trim();
+    if revision.is_empty() {
+        return None;
+    }
+    let snapshot = repo_dir.join("snapshots").join(revision);
+    snapshot.is_dir().then_some(snapshot)
+}
+
+fn default_hf_repo_cache_dir() -> PathBuf {
+    default_hf_hub_cache_dir().join(format!(
+        "models--{}",
+        VOXTRAL_ONNX_REPO_ID.replace('/', "--")
+    ))
+}
+
+fn default_hf_hub_cache_dir() -> PathBuf {
+    if let Some(cache) = env_path("HF_HUB_CACHE") {
+        return cache;
+    }
+    let hf_home = env_path("HF_HOME").unwrap_or_else(|| {
+        env_path("XDG_CACHE_HOME")
+            .unwrap_or_else(default_user_cache_dir)
+            .join("huggingface")
+    });
+    hf_home.join("hub")
+}
+
+fn default_user_cache_dir() -> PathBuf {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".cache")
 }
 
 fn resolve_voxtral_onnx_path(base_dir: &Path, stem: &str, fallback_variants: &[&str]) -> PathBuf {
@@ -211,6 +329,7 @@ pub fn transcribe_voxtral_audio(
     previous_text: Option<&str>,
     available_backends: &[HardwareBackend],
 ) -> Result<Option<VoxtralOnnxTranscription>, String> {
+    let _ = ensure_default_voxtral_model_cached()?;
     let Some(config) = configure_voxtral_onnx(available_backends) else {
         return Ok(None);
     };

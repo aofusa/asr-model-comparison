@@ -110,7 +110,7 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin amcp-server -- server --hos
 
 Whisperは `whisper-rs` / whisper.cpp を使った実推論に対応しています。通常ビルドでは依存を有効化せず、`whisper` feature付きで起動した場合のみ実推論を使います。
 
-既定ではwhisper.cpp互換のGGMLモデルを `models/whisper/` に自動ダウンロードします。Whisper Rust実装は whisper.cpp 用GGMLモデルを使うため、Python backend の Transformers/Hugging Faceモデルとは別物です。保存先を変えたい場合は `AMCP_MODEL_DIR` を指定してください。
+既定ではwhisper.cpp互換のGGMLモデルを `ggerganov/whisper.cpp` から Hugging Face Hub 標準キャッシュへ取得します。Whisper Rust実装は whisper.cpp 用GGMLモデルを使うため、Python backend の faster-whisper / CTranslate2 モデルとは別物ですが、保存先は `HF_HUB_CACHE` または `HF_HOME\hub` 配下に統一されます。保存先を明示的に変えたい場合は `AMCP_MODEL_DIR` を指定してください。
 
 ```powershell
 $env:AMCP_MODEL_DIR="C:\models\amcp"
@@ -171,7 +171,7 @@ npm run server:qwen:cuda
 
 Voxtralは `ort` feature付きで、分割ONNXモデル (`audio_encoder.onnx`、`embed_tokens.onnx`、`decoder_model_merged.onnx`) と `tokenizer.json` を組み合わせた実推論に対応しています。Rust側で30秒チャンクのlog-mel特徴量を生成し、音声埋め込みをプロンプトへ差し込んで、KV cache付き自己回帰デコードを実行します。`target_language` 指定時は同じONNXセッションで翻訳指示プロンプトを追加実行します。WindowsではDirectMLを優先し、CUDA環境ではCUDA featureも利用できます。
 
-Voxtral Rust実装は Python backend の `mistralai/Voxtral-Mini-3B-2507` Transformers checkpoint ではなく、`onnx-community` 系の分割ONNX成果物を使います。そのため Python backend の Hugging Face Hub キャッシュとは同じファイルを共有できず、`AMCP_VOXTRAL_MODEL_DIR` または `AMCP_MODEL_DIR\voxtral` 配下のONNX一式が必要です。
+Voxtral Rust実装は Python backend の `mistralai/Voxtral-Mini-3B-2507` Transformers checkpoint ではなく、`onnx-community/Voxtral-Mini-3B-2507-ONNX` の分割ONNX成果物を使います。ファイル形式はPython版と異なりますが、未指定時の保存先は Hugging Face Hub 標準キャッシュへ統一されます。明示配置したい場合は `AMCP_VOXTRAL_MODEL_DIR` または `AMCP_MODEL_DIR\voxtral` を指定してください。
 
 ```powershell
 $env:AMCP_VOXTRAL_MODEL_DIR="C:\models\voxtral"
@@ -179,7 +179,7 @@ cd app
 npm run server:voxtral
 ```
 
-`AMCP_VOXTRAL_MODEL_DIR` を指定しない場合は、`AMCP_MODEL_DIR\voxtral`、`AMCP_MODEL_DIR` も未設定の場合は `app\models\voxtral` を既定のモデル配置先として使います。配置は以下のどちらかを使えます。
+`AMCP_VOXTRAL_MODEL_DIR` を指定しない場合は、`AMCP_MODEL_DIR\voxtral`、`AMCP_MODEL_DIR` も未設定の場合は Hugging Face Hub 標準キャッシュ内の `onnx-community/Voxtral-Mini-3B-2507-ONNX` snapshot を既定のモデル配置先として使います。明示配置する場合は以下のどちらかを使えます。
 
 ```text
 C:\models\voxtral\tokenizer.json
