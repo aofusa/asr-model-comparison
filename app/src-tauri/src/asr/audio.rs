@@ -248,7 +248,9 @@ fn decode_with_symphonia(audio: &[u8]) -> Result<DecodedAudio, AudioError> {
 
         match decoder.decode(&packet) {
             Ok(decoded) => {
-                decoded.copy_to_vec_interleaved::<f32>(&mut samples);
+                let mut packet_samples = Vec::new();
+                decoded.copy_to_vec_interleaved::<f32>(&mut packet_samples);
+                samples.extend(packet_samples);
             }
             Err(SymphoniaError::DecodeError(_)) => continue,
             Err(SymphoniaError::ResetRequired) => {

@@ -468,6 +468,30 @@ fn download_file(
     path: &std::path::Path,
     progress: &mut impl FnMut(BackendAssetProgress),
 ) -> Result<(), String> {
+    let url = url.to_string();
+    let path = path.to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn({
+        let url = url.clone();
+        let path = path.clone();
+        move || download_file_blocking(&url, &path, tx)
+    });
+
+    for event in rx {
+        progress(event);
+    }
+
+    handle
+        .join()
+        .map_err(|_| format!("model download thread panicked for {url}"))?
+}
+
+#[cfg(feature = "whisper")]
+fn download_file_blocking(
+    url: &str,
+    path: &std::path::Path,
+    progress: std::sync::mpsc::Sender<BackendAssetProgress>,
+) -> Result<(), String> {
     use std::io::Read;
 
     let tmp_path = path.with_extension("download");
@@ -481,7 +505,7 @@ fn download_file(
     let mut downloaded = 0_u64;
     let mut last_reported = 0_u8;
     let mut buffer = [0_u8; 256 * 1024];
-    progress(BackendAssetProgress {
+    let _ = progress.send(BackendAssetProgress {
         phase: "downloading".to_string(),
         message: format!("Downloading model from {url}."),
         progress: Some(0),
@@ -504,7 +528,7 @@ fn download_file(
             .unwrap_or(0);
         if percent >= last_reported.saturating_add(5) || total_bytes.is_none() {
             last_reported = percent;
-            progress(BackendAssetProgress {
+            let _ = progress.send(BackendAssetProgress {
                 phase: "downloading".to_string(),
                 message: format!(
                     "Downloaded {}{}.",
@@ -521,7 +545,7 @@ fn download_file(
     }
     std::fs::rename(&tmp_path, path)
         .map_err(|error| format!("failed to move model into cache {path:?}: {error}"))?;
-    progress(BackendAssetProgress {
+    let _ = progress.send(BackendAssetProgress {
         phase: "downloaded".to_string(),
         message: format!("Model download complete: {}.", path.display()),
         progress: Some(100),
