@@ -205,7 +205,14 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             let ready = json!({
                                 "type": "ready",
                                 "model_id": options.model_id,
-                                "accelerator": options.accelerator
+                                "accelerator": options.accelerator,
+                                "runtime_backend": state
+                                    .manager
+                                    .status()
+                                    .await
+                                    .runtime_backends
+                                    .into_iter()
+                                    .find(|backend| backend.model_id == options.model_id)
                             });
                             if sender
                                 .send(Message::Text(ready.to_string().into()))
@@ -252,6 +259,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             "input_peak": result.input_peak,
                             "translation_engine": result.translation_engine,
                             "translation_note": result.translation_note,
+                            "runtime_backend": result.runtime_backend,
                             "chunk_index": chunk_index,
                             "chunk_size_bytes": audio.len(),
                             "accumulated_text": accumulated_text,

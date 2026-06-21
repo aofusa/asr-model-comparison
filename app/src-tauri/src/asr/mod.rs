@@ -10,6 +10,7 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 
 pub mod audio;
+pub mod backend;
 pub mod hybrid;
 
 #[derive(Debug, Error)]
@@ -71,6 +72,7 @@ pub struct TranscriptionResult {
     pub input_peak: f32,
     pub translation_engine: Option<String>,
     pub translation_note: Option<String>,
+    pub runtime_backend: backend::RuntimeBackendKind,
     pub accelerator: AcceleratorSelection,
 }
 
@@ -89,6 +91,7 @@ pub struct ManagerStatus {
     pub loaded_model_id: Option<String>,
     pub loaded_backend: Option<HardwareBackend>,
     pub available_backends: Vec<HardwareBackend>,
+    pub runtime_backends: Vec<backend::RuntimeBackendStatus>,
     pub service: &'static str,
 }
 
@@ -120,6 +123,7 @@ impl HybridModelManager {
             loaded_model_id: inner.loaded_model_id.clone(),
             loaded_backend: inner.loaded_backend,
             available_backends: self.available_backends.clone(),
+            runtime_backends: backend::runtime_backend_statuses(&self.available_backends),
             service: "amcp-rust-backend",
         }
     }
@@ -131,6 +135,8 @@ impl HybridModelManager {
         let family = family_for_model(&options.model_id)
             .ok_or_else(|| AsrError::UnsupportedModel(options.model_id.clone()))?;
         let accelerator = select_accelerator(family, options.accelerator, &self.available_backends);
+        let runtime_backend =
+            backend::runtime_backend_status(&options.model_id, &self.available_backends);
         let started = Instant::now();
         let mut inner = self.inner.lock().await;
         let mut progress = Vec::new();
@@ -154,7 +160,10 @@ impl HybridModelManager {
                 r#type: "model_progress",
                 model_id: options.model_id.clone(),
                 phase: "loading".to_string(),
-                message: format!("Preparing {} backend via {}.", family, accelerator.selected),
+                message: format!(
+                    "Preparing {} {:?} backend via {}.",
+                    family, runtime_backend.backend, accelerator.selected
+                ),
                 progress: Some(60),
                 elapsed_seconds: Some(started.elapsed().as_secs_f64()),
             });
@@ -167,7 +176,7 @@ impl HybridModelManager {
             r#type: "model_progress",
             model_id: options.model_id.clone(),
             phase: "ready".to_string(),
-            message: accelerator.reason.clone(),
+            message: format!("{} {}", accelerator.reason, runtime_backend.reason),
             progress: Some(100),
             elapsed_seconds: Some(started.elapsed().as_secs_f64()),
         });
@@ -186,6 +195,8 @@ impl HybridModelManager {
 
         let started = Instant::now();
         let (accelerator, _) = self.prepare_model(&options).await?;
+        let runtime_backend =
+            backend::runtime_backend_kind(&options.model_id, &self.available_backends);
         let preprocessed = audio::load_and_preprocess_wav(audio)?;
         let previous = options.previous_text.as_deref().unwrap_or("").trim();
         let backend_result = if preprocessed.had_speech {
@@ -248,6 +259,7 @@ impl HybridModelManager {
             input_peak: preprocessed.peak,
             translation_engine: Some(translation.engine.to_string()),
             translation_note: translation.note,
+            runtime_backend,
             accelerator,
         })
     }

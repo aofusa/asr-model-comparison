@@ -39,6 +39,8 @@
 - `auto` / `gpu` / `cpu` の選択と安全なCPUフォールバック
 - Windows優先の実機アクセラレータ検出 (`CUDA_PATH`/`nvidia-smi`、`VK_SDK`/`vulkaninfo`、DirectML、OpenVINO、WGPU等)
 - Qwen3-ASR向けのCUDA/DirectML/Metal/CoreML/Vulkan/WGPU/OpenVINO/NNAPI/BLAS優先戦略
+- `/api/status`とWS応答でのランタイムバックエンド状態 (`whisper-rs` / `qwen-c` / `voxtral-onnx` / `placeholder`) の可視化
+- Qwen3-ASR C FFI / Voxtral ONNX のfeature境界と設定検証 (`AMCP_QWEN_*`、`AMCP_VOXTRAL_*`、`ORT_DYLIB_PATH`)
 - Tauriデスクトップ/モバイルWebViewからRust APIへ接続するための埋め込みサーバー
 - Android/iOS向けTauriビルドスクリプト
 
@@ -47,7 +49,7 @@
 - Qwen3-ASR / Voxtral の実モデル推論
 - Python版と同等の実翻訳モデル推論
 - 実モデルの詳細なダウンロード/ロード進捗
-- 実バックエンドごとのアクセラレータ初期化検証
+- Qwen3-ASR C FFI / Voxtral ONNX の実推論本体とアクセラレータ初期化
 - Android/iOS実機でのマイク・画面音声取得制約の検証
 - Android/iOS向けの実モデルバイナリ、モデル配置、アプリサイズ最適化
 

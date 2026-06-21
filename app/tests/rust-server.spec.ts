@@ -51,6 +51,8 @@ test('rust server exposes health and compatible model metadata', async ({ page }
     return response.json();
   });
   expect(status.available_backends).toContain('cpu');
+  expect(status.runtime_backends.some((backend: { model_id: string }) => backend.model_id === 'qwen3-asr-0.6b')).toBe(true);
+  expect(status.runtime_backends.some((backend: { model_id: string }) => backend.model_id === 'voxtral-mini-4b')).toBe(true);
 });
 
 test('rust websocket accepts accelerator config and streams transcription result', async ({ page }) => {
@@ -102,5 +104,6 @@ test('rust websocket accepts accelerator config and streams transcription result
   expect(transcription?.accelerator?.preference).toBe('gpu');
   expect(transcription?.had_speech).toBe(true);
   expect(transcription?.input_sample_rate).toBe(16000);
+  expect(transcription?.runtime_backend).toBeTruthy();
   expect(transcription?.text).toContain('Recognized');
 });
