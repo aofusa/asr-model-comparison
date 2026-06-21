@@ -25,6 +25,7 @@ function getMicrophoneUnavailableStatus(error?: unknown): string {
 }
 
 type AudioSourceKind = 'microphone' | 'system' | 'window';
+type HardwareAcceleratorKind = 'auto' | 'gpu' | 'cpu';
 
 const audioSourceOptions: { value: AudioSourceKind; label: string; description: string }[] = [
   {
@@ -41,6 +42,24 @@ const audioSourceOptions: { value: AudioSourceKind; label: string; description: 
     value: 'window',
     label: 'Window',
     description: 'Choose a specific window, app, or tab when the browser share picker opens.',
+  },
+];
+
+const hardwareAcceleratorOptions: { value: HardwareAcceleratorKind; label: string; description: string }[] = [
+  {
+    value: 'auto',
+    label: 'Auto (prefer GPU)',
+    description: 'Use CUDA, Metal, CoreML, Vulkan, or BLAS when available, then fall back safely.',
+  },
+  {
+    value: 'gpu',
+    label: 'GPU first',
+    description: 'Require a GPU-first attempt, with CPU fallback if no accelerator is usable.',
+  },
+  {
+    value: 'cpu',
+    label: 'CPU only',
+    description: 'Skip GPU accelerators for predictable compatibility.',
   },
 ];
 
@@ -343,6 +362,7 @@ export default component$(() => {
   const selectedLanguage = useSignal('auto');
   const translationTarget = useSignal('none');
   const selectedAudioSource = useSignal<AudioSourceKind>('microphone');
+  const selectedHardwareAccelerator = useSignal<HardwareAcceleratorKind>('auto');
 
   // A: localStorage persistence for settings
   const SETTINGS_KEY = 'asr-settings-v1';
@@ -358,6 +378,7 @@ export default component$(() => {
         selectedLanguage: selectedLanguage.value,
         translationTarget: translationTarget.value,
         selectedAudioSource: selectedAudioSource.value,
+        selectedHardwareAccelerator: selectedHardwareAccelerator.value,
       }));
     } catch {}
   });
@@ -414,6 +435,9 @@ export default component$(() => {
         if (typeof saved.translationTarget === 'string') translationTarget.value = saved.translationTarget;
         if (['microphone', 'system', 'window'].includes(saved.selectedAudioSource)) {
           selectedAudioSource.value = saved.selectedAudioSource;
+        }
+        if (['auto', 'gpu', 'cpu'].includes(saved.selectedHardwareAccelerator)) {
+          selectedHardwareAccelerator.value = saved.selectedHardwareAccelerator;
         }
       }
     } catch {}
@@ -549,6 +573,8 @@ export default component$(() => {
         use_dedicated_class: useDedicatedClass.value,
         return_timestamps: true,
         audio_source: selectedAudioSource.value,
+        accelerator: selectedHardwareAccelerator.value,
+        hardware_accelerator: selectedHardwareAccelerator.value,
       };
 
       // Critical for real-time: send accumulated context on reconnect
@@ -1098,6 +1124,8 @@ export default component$(() => {
         if (languageSelect) languageSelect.value = selectedLanguage.value;
         const translationSelect = document.querySelector('[data-testid="translation-target-select"]') as HTMLSelectElement | null;
         if (translationSelect) translationSelect.value = translationTarget.value;
+        const acceleratorSelect = document.querySelector('[data-testid="hardware-accelerator-select"]') as HTMLSelectElement | null;
+        if (acceleratorSelect) acceleratorSelect.value = selectedHardwareAccelerator.value;
         const audioRadio = document.querySelector(`input[name="audio-source"][value="${selectedAudioSource.value}"]`) as HTMLInputElement | null;
         if (audioRadio) audioRadio.checked = true;
       };
@@ -1311,6 +1339,15 @@ export default component$(() => {
             return;
           }
 
+          if (target.matches('[data-testid="hardware-accelerator-select"]')) {
+            const value = (target as HTMLSelectElement).value;
+            if (['auto', 'gpu', 'cpu'].includes(value)) {
+              selectedHardwareAccelerator.value = value as HardwareAcceleratorKind;
+              saveFn();
+            }
+            return;
+          }
+
           if (target.matches('input[name="audio-source"]')) {
             const radio = target as HTMLInputElement;
             if (radio.checked && ['microphone', 'system', 'window'].includes(radio.value)) {
@@ -1387,6 +1424,14 @@ export default component$(() => {
       if (languageSelect) languageSelect.addEventListener('change', (e: any) => { selectedLanguage.value = (e.target as HTMLSelectElement).value; saveFn(); });
       const translationSelect = document.querySelector('[data-testid="translation-target-select"]');
       if (translationSelect) translationSelect.addEventListener('change', (e: any) => { translationTarget.value = (e.target as HTMLSelectElement).value; saveFn(); });
+      const acceleratorSelect = document.querySelector('[data-testid="hardware-accelerator-select"]');
+      if (acceleratorSelect) acceleratorSelect.addEventListener('change', (e: any) => {
+        const value = (e.target as HTMLSelectElement).value;
+        if (['auto', 'gpu', 'cpu'].includes(value)) {
+          selectedHardwareAccelerator.value = value as HardwareAcceleratorKind;
+          saveFn();
+        }
+      });
       document.querySelectorAll('input[name="audio-source"]').forEach((r) => {
         r.addEventListener('change', (e: any) => {
           const t = e.target as HTMLInputElement;
@@ -1488,6 +1533,25 @@ export default component$(() => {
                   <option value="none">No Translation</option>
                   {languageOptions.filter((language) => language.value !== 'auto').map((language) => (
                     <option key={language.value} value={language.value}>{language.label}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Hardware Acceleration
+                <select
+                  data-testid="hardware-accelerator-select"
+                  value={selectedHardwareAccelerator.value}
+                  onChange$={(e) => {
+                    const value = (e.target as HTMLSelectElement).value;
+                    if (['auto', 'gpu', 'cpu'].includes(value)) {
+                      selectedHardwareAccelerator.value = value as HardwareAcceleratorKind;
+                      saveSettings();
+                    }
+                  }}
+                >
+                  {hardwareAcceleratorOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
               </label>

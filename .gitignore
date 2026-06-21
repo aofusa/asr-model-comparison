@@ -88,6 +88,9 @@ docs/artifact/
 # Playwright generated artifacts
 frontend/playwright-report/
 frontend/test-results/
+app/playwright-report/
+app/test-results/
+app/src-tauri/target/
 
 # Generated frontend build copied for backend serving
 backend/static/

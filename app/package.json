@@ -15,7 +15,7 @@
     "test:e2e:headed": "playwright test --headed"
   },
   "devDependencies": {
-    "@playwright/test": "^1.48.0",
+    "@playwright/test": "^1.60.0",
     "@tauri-apps/cli": "^2.0.0"
   }
 }
