@@ -117,6 +117,7 @@ test('hardware acceleration setting is sent in websocket config', async ({ page 
   await page.goto('/');
   await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
 
+  await openAdvancedSettings(page);
   await page.getByTestId('hardware-accelerator-select').selectOption('gpu');
   await page.getByTestId('start-recording').click();
 
@@ -139,8 +140,11 @@ test('compact top workflow controls are visible', async ({ page }) => {
   await expect(page.getByTestId('audio-source-selector')).toContainText('Mic');
   await expect(page.getByTestId('language-select')).toBeVisible();
   await expect(page.getByTestId('translation-target-select')).toBeVisible();
-  await expect(page.getByTestId('hardware-accelerator-select')).toBeVisible();
   await expect(page.locator('details.advanced-settings summary')).toContainText('Advanced settings');
+  await expect(page.getByTestId('hardware-accelerator-select')).toBeHidden();
+
+  await openAdvancedSettings(page);
+  await expect(page.getByTestId('hardware-accelerator-select')).toBeVisible();
 });
 
 test('audio source selection uses display media for window/app capture', async ({ page }) => {

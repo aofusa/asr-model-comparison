@@ -1573,24 +1573,6 @@ export default component$(() => {
                 </select>
               </label>
 
-              <label>
-                Hardware Acceleration
-                <select
-                  data-testid="hardware-accelerator-select"
-                  value={selectedHardwareAccelerator.value}
-                  onChange$={(e) => {
-                    const value = (e.target as HTMLSelectElement).value;
-                    if (['auto', 'gpu', 'cpu'].includes(value)) {
-                      selectedHardwareAccelerator.value = value as HardwareAcceleratorKind;
-                      saveSettings();
-                    }
-                  }}
-                >
-                  {hardwareAcceleratorOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
             </div>
 
             <details class="advanced-settings">
@@ -1617,6 +1599,25 @@ export default component$(() => {
               </div>
 
               <div class="settings-controls">
+                <label>
+                  Hardware Acceleration
+                  <select
+                    data-testid="hardware-accelerator-select"
+                    value={selectedHardwareAccelerator.value}
+                    onChange$={(e) => {
+                      const value = (e.target as HTMLSelectElement).value;
+                      if (['auto', 'gpu', 'cpu'].includes(value)) {
+                        selectedHardwareAccelerator.value = value as HardwareAcceleratorKind;
+                        saveSettings();
+                      }
+                    }}
+                  >
+                    {hardwareAcceleratorOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+
                 <label>
                   Beam Size
                   <input type="number" min="1" max="10" value={beamSize.value}
