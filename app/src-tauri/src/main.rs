@@ -1,5 +1,5 @@
 use amcp_tauri::config::{Cli, Command};
-use amcp_tauri::{server, AppConfig};
+use amcp_tauri::{server, validation, AppConfig};
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
@@ -10,10 +10,9 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let config = match cli.command {
-        Some(Command::Server(args)) => AppConfig::from(args),
-        None => AppConfig::default(),
-    };
-
-    server::run(config).await
+    match cli.command {
+        Some(Command::Server(args)) => server::run(AppConfig::from(args)).await,
+        Some(Command::Validate(args)) => validation::run(args).await,
+        None => server::run(AppConfig::default()).await,
+    }
 }

@@ -85,6 +85,8 @@ pub struct ModelProgress {
     pub phase: String,
     pub message: String,
     pub progress: Option<u8>,
+    pub bytes_downloaded: Option<u64>,
+    pub total_bytes: Option<u64>,
     pub elapsed_seconds: Option<f64>,
 }
 
@@ -156,6 +158,8 @@ impl HybridModelManager {
                     message: "Unloading previous model to keep single-model memory usage."
                         .to_string(),
                     progress: Some(20),
+                    bytes_downloaded: None,
+                    total_bytes: None,
                     elapsed_seconds: Some(started.elapsed().as_secs_f64()),
                 });
             }
@@ -166,8 +170,25 @@ impl HybridModelManager {
                 phase: "validating".to_string(),
                 message: artifact_validation_message(&runtime_backend),
                 progress: Some(45),
+                bytes_downloaded: None,
+                total_bytes: None,
                 elapsed_seconds: Some(started.elapsed().as_secs_f64()),
             });
+
+            for event in
+                hybrid::prepare_real_model_assets(&options.model_id).map_err(AsrError::Backend)?
+            {
+                progress.push(ModelProgress {
+                    r#type: "model_progress",
+                    model_id: options.model_id.clone(),
+                    phase: event.phase,
+                    message: event.message,
+                    progress: event.progress,
+                    bytes_downloaded: event.bytes_downloaded,
+                    total_bytes: event.total_bytes,
+                    elapsed_seconds: Some(started.elapsed().as_secs_f64()),
+                });
+            }
 
             progress.push(ModelProgress {
                 r#type: "model_progress",
@@ -178,6 +199,8 @@ impl HybridModelManager {
                     family, runtime_backend.backend, accelerator.selected
                 ),
                 progress: Some(60),
+                bytes_downloaded: None,
+                total_bytes: None,
                 elapsed_seconds: Some(started.elapsed().as_secs_f64()),
             });
 
@@ -191,6 +214,8 @@ impl HybridModelManager {
             phase: "ready".to_string(),
             message: format!("{} {}", accelerator.reason, runtime_backend.reason),
             progress: Some(100),
+            bytes_downloaded: None,
+            total_bytes: None,
             elapsed_seconds: Some(started.elapsed().as_secs_f64()),
         });
 

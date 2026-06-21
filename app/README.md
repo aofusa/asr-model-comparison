@@ -36,7 +36,9 @@
 - 日本語 -> 英語翻訳前の小さい日本語数字正規化
 - 翻訳コマンドランナー境界 (`AMCP_TRANSLATION_COMMAND` / `AMCP_TRANSLATION_JA_EN_COMMAND`) と、Python版と同じ `Helsinki-NLP/opus-mt-ja-en` を使う `scripts/translate_hf.py`
 - 単一モデルロード制約の管理
-- モデル準備進捗イベント (`loading` / `validating` / `ready`)
+- モデル準備進捗イベント (`loading` / `validating` / `downloading` / `downloaded` / `ready`)
+- Whisper自動ダウンロード時の `bytes_downloaded` / `total_bytes` 付きバイト単位進捗
+- Windows実機で実モデルの速度/品質を測る `validate` CLI
 - `auto` / `gpu` / `cpu` の選択と安全なCPUフォールバック
 - Windows優先の実機アクセラレータ検出 (`CUDA_PATH`/`nvidia-smi`、`VK_SDK`/`vulkaninfo`、DirectML、OpenVINO、WGPU等)
 - Qwen3-ASR向けのCUDA/DirectML/Metal/CoreML/Vulkan/WGPU/OpenVINO/NNAPI/BLAS優先戦略
@@ -49,7 +51,7 @@
 
 未完了:
 
-- 実モデルの詳細なバイト単位ダウンロード/ロード進捗
+- Qwen/Voxtral/翻訳モデルのネイティブランナー内部ロードに対する詳細進捗
 - Voxtral ONNX実モデルファイルを配置したWindows実機での出力品質・速度検証
 - Android/iOS実機でのマイク・画面音声取得制約の検証
 - Android/iOS向けの実モデルバイナリ、モデル配置、アプリサイズ最適化
@@ -352,6 +354,34 @@ npm run test:voxtral:cuda:compile
 - `/api/models`、`/api/status` のAPI形状
 - `/api/status.runtime_backends[].artifacts` による不足モデルファイル診断
 - `/api/status.translation` による翻訳ランナー設定診断
+
+### Windows実機モデル検証
+
+実モデルファイルとランナーを配置したWindows環境では、`validate` CLIで音声ファイル単位の速度と品質を確認できます。
+
+Whisper:
+
+```powershell
+cd app
+npm run validate:windows:whisper -- --audio "C:\audio\sample.wav" --model-id whisper-tiny --language ja --expected-text "期待する文字起こし" --json
+```
+
+Qwen:
+
+```powershell
+$env:AMCP_QWEN_ASR_LIB="C:\models\qwen-asr\qwen_asr.dll"
+$env:AMCP_QWEN_MODEL_DIR="C:\models\qwen3-asr-0.6b"
+npm run validate:windows:qwen -- --audio "C:\audio\sample.wav" --model-id qwen3-asr-0.6b --language ja --expected-text "期待する文字起こし" --json
+```
+
+Voxtral:
+
+```powershell
+$env:AMCP_VOXTRAL_MODEL_DIR="C:\models\voxtral"
+npm run validate:windows:voxtral -- --audio "C:\audio\sample.wav" --model-id voxtral-mini-4b --language ja --expected-text "期待する文字起こし" --json
+```
+
+出力には `audio_duration_seconds`、`wall_time_seconds`、`realtime_factor`、`runtime_backend`、`accelerator`、`character_error_rate` が含まれます。`realtime_factor` は 1.0 未満なら実時間より高速です。
 
 ### Playwright E2Eのみ
 

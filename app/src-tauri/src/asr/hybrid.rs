@@ -12,6 +12,23 @@ pub struct BackendTranscription {
     pub chunks: Vec<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackendAssetProgress {
+    pub phase: String,
+    pub message: String,
+    pub progress: Option<u8>,
+    pub bytes_downloaded: Option<u64>,
+    pub total_bytes: Option<u64>,
+}
+
+pub fn prepare_real_model_assets(model_id: &str) -> Result<Vec<BackendAssetProgress>, String> {
+    if model_id.starts_with("whisper") {
+        return prepare_whisper_assets(model_id);
+    }
+
+    Ok(Vec::new())
+}
+
 pub fn try_transcribe_real(
     audio: &PreprocessedAudio,
     options: &TranscriptionOptions,
@@ -28,6 +45,18 @@ pub fn try_transcribe_real(
     }
 
     Ok(None)
+}
+
+#[cfg(feature = "whisper")]
+fn prepare_whisper_assets(model_id: &str) -> Result<Vec<BackendAssetProgress>, String> {
+    let mut events = Vec::new();
+    let _ = resolve_whisper_model_path_with_progress(model_id, |event| events.push(event))?;
+    Ok(events)
+}
+
+#[cfg(not(feature = "whisper"))]
+fn prepare_whisper_assets(_model_id: &str) -> Result<Vec<BackendAssetProgress>, String> {
+    Ok(Vec::new())
 }
 
 pub fn transcribe_placeholder(audio: &PreprocessedAudio, options: &TranscriptionOptions) -> String {
@@ -181,6 +210,14 @@ fn try_transcribe_whisper(
 
 #[cfg(feature = "whisper")]
 fn resolve_whisper_model_path(model_id: &str) -> Result<Option<String>, String> {
+    resolve_whisper_model_path_with_progress(model_id, |_| {})
+}
+
+#[cfg(feature = "whisper")]
+fn resolve_whisper_model_path_with_progress(
+    model_id: &str,
+    mut progress: impl FnMut(BackendAssetProgress),
+) -> Result<Option<String>, String> {
     let suffix = model_id
         .trim_start_matches("whisper-")
         .replace('-', "_")
@@ -213,7 +250,7 @@ fn resolve_whisper_model_path(model_id: &str) -> Result<Option<String>, String> 
 
     std::fs::create_dir_all(&model_dir)
         .map_err(|error| format!("failed to create model cache {model_dir:?}: {error}"))?;
-    download_file(url, &model_path)?;
+    download_file(url, &model_path, &mut progress)?;
     Ok(Some(model_path.to_string_lossy().to_string()))
 }
 
@@ -241,19 +278,88 @@ fn whisper_model_download(model_id: &str) -> Option<(&'static str, &'static str)
 }
 
 #[cfg(feature = "whisper")]
-fn download_file(url: &str, path: &std::path::Path) -> Result<(), String> {
+fn download_file(
+    url: &str,
+    path: &std::path::Path,
+    progress: &mut impl FnMut(BackendAssetProgress),
+) -> Result<(), String> {
+    use std::io::Read;
+
     let tmp_path = path.with_extension("download");
     let mut response = reqwest::blocking::get(url)
         .map_err(|error| format!("failed to download model from {url}: {error}"))?
         .error_for_status()
         .map_err(|error| format!("model download failed for {url}: {error}"))?;
+    let total_bytes = response.content_length();
     let mut output = std::fs::File::create(&tmp_path)
         .map_err(|error| format!("failed to create temporary model file {tmp_path:?}: {error}"))?;
-    std::io::copy(&mut response, &mut output)
-        .map_err(|error| format!("failed to write model file {tmp_path:?}: {error}"))?;
+    let mut downloaded = 0_u64;
+    let mut last_reported = 0_u8;
+    let mut buffer = [0_u8; 256 * 1024];
+    progress(BackendAssetProgress {
+        phase: "downloading".to_string(),
+        message: format!("Downloading model from {url}."),
+        progress: Some(0),
+        bytes_downloaded: Some(0),
+        total_bytes,
+    });
+
+    loop {
+        let read = response
+            .read(&mut buffer)
+            .map_err(|error| format!("failed to read model download stream: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        std::io::Write::write_all(&mut output, &buffer[..read])
+            .map_err(|error| format!("failed to write model file {tmp_path:?}: {error}"))?;
+        downloaded += read as u64;
+        let percent = total_bytes
+            .map(|total| ((downloaded.saturating_mul(100)) / total.max(1)).min(100) as u8)
+            .unwrap_or(0);
+        if percent >= last_reported.saturating_add(5) || total_bytes.is_none() {
+            last_reported = percent;
+            progress(BackendAssetProgress {
+                phase: "downloading".to_string(),
+                message: format!(
+                    "Downloaded {}{}.",
+                    human_bytes(downloaded),
+                    total_bytes
+                        .map(|total| format!(" / {}", human_bytes(total)))
+                        .unwrap_or_default()
+                ),
+                progress: total_bytes.map(|_| percent),
+                bytes_downloaded: Some(downloaded),
+                total_bytes,
+            });
+        }
+    }
     std::fs::rename(&tmp_path, path)
         .map_err(|error| format!("failed to move model into cache {path:?}: {error}"))?;
+    progress(BackendAssetProgress {
+        phase: "downloaded".to_string(),
+        message: format!("Model download complete: {}.", path.display()),
+        progress: Some(100),
+        bytes_downloaded: Some(downloaded),
+        total_bytes: total_bytes.or(Some(downloaded)),
+    });
     Ok(())
+}
+
+#[cfg(feature = "whisper")]
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
 }
 
 #[cfg(feature = "whisper")]

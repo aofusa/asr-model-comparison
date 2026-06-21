@@ -74,14 +74,15 @@ Tauriデスクトップ/モバイルでは、WebViewから同一アプリ内Rust
 - Qwen3-ASR向けにCUDA/DirectML/Metal/CoreML/Vulkan/WGPU/OpenVINO/NNAPI/BLASの優先戦略を追加済み。
 - Windows優先の実機アクセラレータ検出と`AMCP_AVAILABLE_BACKENDS`明示指定を追加済み。
 - `whisper-rs` feature有効時に、環境変数で指定したwhisper.cpp互換モデルを使うWhisper実推論を追加済み。
-- Whisperモデルのローカルキャッシュ確認と自動ダウンロードを追加済み。
+- Whisperモデルのローカルキャッシュ確認、自動ダウンロード、`bytes_downloaded` / `total_bytes` 付きバイト単位進捗を追加済み。
 - `/api/status`とWS応答でランタイムバックエンド状態を返し、Qwen3-ASR C FFI / Voxtral ONNX のfeature境界、artifact診断、翻訳ランナー診断、モデル準備時の`validating`進捗を追加済み。
 - Qwen3-ASR C FFIの動的ライブラリロード、`qwen_load`/`qwen_transcribe_audio`/`qwen_free`シンボル検証、モデルディレクトリ検証、実音声サンプル推論呼び出しを追加済み。
 - Voxtral ONNX Runtimeセッション初期化、分割ONNX構成 (`audio_encoder.onnx`、`embed_tokens.onnx`、`decoder_model_merged.onnx`、`tokenizer.json`) の設定解決、log-mel入力生成、KV cache付き自己回帰デコード、DirectML/CUDA featureコンパイルを追加済み。
 - 翻訳レスポンス契約、日本語->英語翻訳前の小さい日本語数字正規化、翻訳コマンドランナー境界、Python版と同じ `Helsinki-NLP/opus-mt-ja-en` を呼ぶ `app/scripts/translate_hf.py` を追加済み。
+- Windows実機で実モデルの速度/品質を測る `validate` CLI を追加済み。
 - 実モデル統合はfeature境界を定義済み。各ネイティブ依存のCI整備後に有効化する。
 
 ## 未完了・残タスク
 
-- 実モデルの詳細なバイト単位ダウンロード/ロード進捗、Voxtral ONNX/翻訳モデルファイルを配置したWindows実機での出力品質・速度検証は未完了。
+- Qwen/Voxtral/翻訳モデルの外部ネイティブランナー内部ロードに対する詳細進捗、Voxtral ONNX/翻訳モデルファイルを配置したWindows実機での実測は未完了。
 - Android/iOS実機でのマイク/共有音声取得、モデル配置、バイナリサイズ、権限設定の検証が必要。

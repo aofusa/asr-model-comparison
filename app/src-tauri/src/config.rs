@@ -43,6 +43,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Server(ServerArgs),
+    Validate(ValidateArgs),
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -55,6 +56,24 @@ pub struct ServerArgs {
     pub accelerator: AcceleratorArg,
     #[arg(long)]
     pub static_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Parser)]
+pub struct ValidateArgs {
+    #[arg(long)]
+    pub audio: PathBuf,
+    #[arg(long, default_value = "whisper-tiny")]
+    pub model_id: String,
+    #[arg(long, default_value = "auto")]
+    pub language: String,
+    #[arg(long)]
+    pub target_language: Option<String>,
+    #[arg(long)]
+    pub expected_text: Option<String>,
+    #[arg(long, value_enum, default_value_t = AcceleratorArg::Auto)]
+    pub accelerator: AcceleratorArg,
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
