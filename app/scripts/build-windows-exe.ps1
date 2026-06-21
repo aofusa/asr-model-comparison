@@ -21,7 +21,10 @@ try {
     Copy-Item -Force -Path $sourceExe -Destination $distExe
 
     $item = Get-Item $distExe
+    $item.LastWriteTime = Get-Date
+    $item.Refresh()
     Write-Host "Windows distributable executable created:"
+    Write-Host "  Source: $sourceExe"
     Write-Host "  $($item.FullName)"
     Write-Host "  $([Math]::Round($item.Length / 1MB, 2)) MB"
 }
