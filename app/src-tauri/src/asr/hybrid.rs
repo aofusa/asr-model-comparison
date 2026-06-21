@@ -1,6 +1,7 @@
+use super::audio::PreprocessedAudio;
 use super::TranscriptionOptions;
 
-pub fn transcribe_placeholder(audio: &[u8], options: &TranscriptionOptions) -> String {
+pub fn transcribe_placeholder(audio: &PreprocessedAudio, options: &TranscriptionOptions) -> String {
     let family_hint = if options.model_id.starts_with("qwen3-asr") {
         "Qwen3-ASR"
     } else if options.model_id.starts_with("voxtral") {
@@ -10,8 +11,9 @@ pub fn transcribe_placeholder(audio: &[u8], options: &TranscriptionOptions) -> S
     };
 
     format!(
-        "Recognized {bytes} bytes with {family_hint} ({model}).",
-        bytes = audio.len(),
+        "Recognized {duration:.2}s / {samples} samples with {family_hint} ({model}).",
+        duration = audio.duration_seconds,
+        samples = audio.samples.len(),
         model = options.model_id
     )
 }

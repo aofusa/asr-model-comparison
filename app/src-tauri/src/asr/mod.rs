@@ -8,6 +8,7 @@ use std::time::Instant;
 use thiserror::Error;
 use tokio::sync::Mutex;
 
+pub mod audio;
 pub mod hybrid;
 
 #[derive(Debug, Error)]
@@ -16,6 +17,8 @@ pub enum AsrError {
     UnsupportedModel(String),
     #[error("audio payload is empty")]
     EmptyAudio,
+    #[error("{0}")]
+    Audio(#[from] audio::AudioError),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +61,11 @@ pub struct TranscriptionResult {
     pub target_language: Option<String>,
     pub chunks: Vec<serde_json::Value>,
     pub had_speech: bool,
+    pub audio_duration_seconds: f64,
+    pub input_sample_rate: u32,
+    pub input_channels: u16,
+    pub input_rms: f32,
+    pub input_peak: f32,
     pub accelerator: AcceleratorSelection,
 }
 
@@ -171,8 +179,13 @@ impl HybridModelManager {
 
         let started = Instant::now();
         let (accelerator, _) = self.prepare_model(&options).await?;
+        let preprocessed = audio::load_and_preprocess_wav(audio)?;
         let previous = options.previous_text.as_deref().unwrap_or("").trim();
-        let text = hybrid::transcribe_placeholder(audio, &options);
+        let text = if preprocessed.had_speech {
+            hybrid::transcribe_placeholder(&preprocessed, &options)
+        } else {
+            String::new()
+        };
         let transcript_text = merge_context(previous, &text);
 
         Ok(TranscriptionResult {
@@ -185,8 +198,21 @@ impl HybridModelManager {
             target_language: options
                 .target_language
                 .filter(|value| !matches!(value.as_str(), "" | "none" | "auto")),
-            chunks: Vec::new(),
-            had_speech: true,
+            chunks: vec![serde_json::json!({
+                "sample_rate": preprocessed.sample_rate,
+                "original_sample_rate": preprocessed.original_sample_rate,
+                "channels": preprocessed.channels,
+                "duration_seconds": preprocessed.duration_seconds,
+                "rms": preprocessed.rms,
+                "peak": preprocessed.peak,
+                "had_speech": preprocessed.had_speech,
+            })],
+            had_speech: preprocessed.had_speech,
+            audio_duration_seconds: preprocessed.duration_seconds,
+            input_sample_rate: preprocessed.original_sample_rate,
+            input_channels: preprocessed.channels,
+            input_rms: preprocessed.rms,
+            input_peak: preprocessed.peak,
             accelerator,
         })
     }
@@ -226,12 +252,15 @@ mod tests {
             ..Default::default()
         };
         manager
-            .transcribe(b"fake wav", options.clone())
+            .transcribe(&test_wav(&[10_000, -10_000]), options.clone())
             .await
             .unwrap();
 
         options.model_id = "qwen3-asr-0.6b".to_string();
-        manager.transcribe(b"fake wav", options).await.unwrap();
+        manager
+            .transcribe(&test_wav(&[10_000, -10_000]), options)
+            .await
+            .unwrap();
 
         let status = manager.status().await;
         assert_eq!(status.loaded_model_id.as_deref(), Some("qwen3-asr-0.6b"));
@@ -243,5 +272,41 @@ mod tests {
         assert_eq!(merge_context("hello world", "world"), "hello world");
         assert_eq!(merge_context("hello", "hello world"), "hello world");
         assert_eq!(merge_context("hello", "world"), "hello world");
+    }
+
+    #[tokio::test]
+    async fn silent_audio_returns_no_speech_without_text() {
+        let manager = HybridModelManager::new(vec![HardwareBackend::Cpu]);
+
+        let result = manager
+            .transcribe(&test_wav(&[0, 1, -1, 0]), TranscriptionOptions::default())
+            .await
+            .unwrap();
+
+        assert!(!result.had_speech);
+        assert_eq!(result.text, "");
+        assert!(result.input_rms < 0.006);
+    }
+
+    fn test_wav(samples: &[i16]) -> Vec<u8> {
+        let data_size = samples.len() * 2;
+        let mut wav = Vec::with_capacity(44 + data_size);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_size as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16_u32.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&16_000_u32.to_le_bytes());
+        wav.extend_from_slice(&(16_000_u32 * 2).to_le_bytes());
+        wav.extend_from_slice(&2_u16.to_le_bytes());
+        wav.extend_from_slice(&16_u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(data_size as u32).to_le_bytes());
+        for sample in samples {
+            wav.extend_from_slice(&sample.to_le_bytes());
+        }
+        wav
     }
 }

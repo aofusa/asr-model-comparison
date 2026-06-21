@@ -26,16 +26,19 @@
 - モデル一覧API
 - ステータスAPI
 - HTTP/WS文字起こしAPIのレスポンス形状
+- PCM WAVデコード、16kHzモノラル化、RMS/peak計算
+- 無音判定と`had_speech=false`応答
 - 単一モデルロード制約の管理
 - モデル準備進捗イベント
 - `auto` / `gpu` / `cpu` の選択と安全なCPUフォールバック
+- Qwen3-ASR向けのCUDA/DirectML/Metal/CoreML/Vulkan/WGPU/OpenVINO/NNAPI/BLAS優先戦略
 - Tauriデスクトップ/モバイルWebViewからRust APIへ接続するための埋め込みサーバー
 - Android/iOS向けTauriビルドスクリプト
 
 未完了:
 
 - Whisper / Qwen3-ASR / Voxtral の実モデル推論
-- Python版と同等の音声前処理、無音判定、翻訳処理
+- Python版と同等の多形式音声デコードと翻訳処理
 - 実モデルのダウンロード/ロード進捗
 - 実機GPU/Metal/CoreML/NNAPI/CUDA/Vulkanの可用性検出
 - Android/iOS実機でのマイク・画面音声取得制約の検証
@@ -232,11 +235,11 @@ npm run test:e2e:headed
   - iOS: Metal -> CPU
   - Android: Vulkan -> CPU
 - Qwen3-ASR
-  - macOS: Accelerate/BLAS -> CPU
-  - Linux: OpenBLAS -> CPU
-  - Windows: BLAS -> CPU
-  - iOS: Accelerate/BLAS -> CPU
-  - Android: BLAS -> CPU
+  - Windows: CUDA -> DirectML -> Vulkan -> WGPU -> OpenVINO -> BLAS -> CPU
+  - Linux: CUDA -> Vulkan -> WGPU -> OpenVINO -> BLAS -> CPU
+  - macOS: Metal -> CoreML -> WGPU -> Accelerate/BLAS -> CPU
+  - iOS: Metal -> CoreML -> Accelerate/BLAS -> CPU
+  - Android: NNAPI -> Vulkan -> WGPU -> BLAS -> CPU
 - Voxtral
   - Windows/Linux: CUDA -> CPU
   - macOS: CoreML -> CPU
