@@ -27,6 +27,11 @@ function getMicrophoneUnavailableStatus(error?: unknown): string {
 type AudioSourceKind = 'microphone' | 'system' | 'window';
 type HardwareAcceleratorKind = 'auto' | 'gpu' | 'cpu';
 
+type BackendStatus = {
+  available_backends?: unknown;
+  loaded_backend?: unknown;
+};
+
 declare global {
   interface Window {
     __AMCP_API_BASE_URL__?: string;
@@ -102,6 +107,47 @@ function getTranscribeWebSocketUrl(): string {
   const url = new URL('/api/ws/transcribe', apiBase);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return url.toString();
+}
+
+function formatDetectedAccelerators(status: BackendStatus | null): string {
+  const backends = status?.available_backends;
+  if (!Array.isArray(backends)) {
+    return 'Not reported by this backend';
+  }
+
+  const labels = backends
+    .map((backend) => String(backend).trim())
+    .filter(Boolean)
+    .map((backend) => backend.toUpperCase());
+
+  return labels.length > 0 ? labels.join(', ') : 'None detected';
+}
+
+function formatBackendLabel(backend: unknown): string | null {
+  if (typeof backend !== 'string') {
+    return null;
+  }
+  const value = backend.trim();
+  return value ? value.toUpperCase() : null;
+}
+
+function formatCurrentAccelerator(status: BackendStatus | null): string {
+  if (!status || !('loaded_backend' in status)) {
+    return 'Not reported by this backend';
+  }
+
+  return formatBackendLabel(status.loaded_backend) ?? 'No model loaded yet';
+}
+
+function selectedAcceleratorFromMessage(data: unknown): string | null {
+  if (!data || typeof data !== 'object' || !('accelerator' in data)) {
+    return null;
+  }
+  const accelerator = (data as { accelerator?: unknown }).accelerator;
+  if (!accelerator || typeof accelerator !== 'object' || !('selected' in accelerator)) {
+    return null;
+  }
+  return formatBackendLabel((accelerator as { selected?: unknown }).selected);
 }
 
 function getSharedAudioUnavailableStatus(source: AudioSourceKind, error?: unknown): string {
@@ -400,6 +446,9 @@ export default component$(() => {
   const translationTarget = useSignal('none');
   const selectedAudioSource = useSignal<AudioSourceKind>('microphone');
   const selectedHardwareAccelerator = useSignal<HardwareAcceleratorKind>('auto');
+  const acceleratorStatus = useSignal<BackendStatus | null>(null);
+  const acceleratorStatusMessage = useSignal('Checking detected accelerators...');
+  const currentAcceleratorMessage = useSignal('Checking current accelerator...');
 
   // A: localStorage persistence for settings
   const SETTINGS_KEY = 'asr-settings-v1';
@@ -478,6 +527,23 @@ export default component$(() => {
         }
       }
     } catch {}
+  });
+
+  useVisibleTask$(async () => {
+    try {
+      const response = await fetch(`${getApiBaseUrl()}/api/status`);
+      if (!response.ok) {
+        throw new Error(`status request failed: ${response.status}`);
+      }
+      const data = await response.json() as BackendStatus;
+      acceleratorStatus.value = data;
+      acceleratorStatusMessage.value = formatDetectedAccelerators(data);
+      currentAcceleratorMessage.value = formatCurrentAccelerator(data);
+    } catch {
+      acceleratorStatus.value = null;
+      acceleratorStatusMessage.value = 'Not reported by this backend';
+      currentAcceleratorMessage.value = 'Not reported by this backend';
+    }
   });
 
   // Explicit client render / takeover marker for static shell prod build.
@@ -656,11 +722,31 @@ export default component$(() => {
           const statusEl = document.querySelector('[data-testid="status"]');
           if (statusEl) statusEl.textContent = `Status: ${status.value}`;
         } catch {}
+        const selected = selectedAcceleratorFromMessage(data);
+        if (selected) {
+          currentAcceleratorMessage.value = selected;
+        } else {
+          void fetch(`${getApiBaseUrl()}/api/status`)
+            .then((response) => response.ok ? response.json() : null)
+            .then((nextStatus: BackendStatus | null) => {
+              if (nextStatus) {
+                acceleratorStatus.value = nextStatus;
+                acceleratorStatusMessage.value = formatDetectedAccelerators(nextStatus);
+                currentAcceleratorMessage.value = formatCurrentAccelerator(nextStatus);
+              }
+            })
+            .catch(() => {});
+        }
       }
 
       if (data.type === 'transcription') {
         if (!isRecording.value && refs.intentionalStop) {
           return;
+        }
+
+        const selected = selectedAcceleratorFromMessage(data);
+        if (selected) {
+          currentAcceleratorMessage.value = selected;
         }
 
         const hadSpeech = data.had_speech !== false;
@@ -1598,26 +1684,7 @@ export default component$(() => {
                 <button type="button" onClick$={setFaster}>Faster</button>
               </div>
 
-              <div class="settings-controls">
-                <label>
-                  Hardware Acceleration
-                  <select
-                    data-testid="hardware-accelerator-select"
-                    value={selectedHardwareAccelerator.value}
-                    onChange$={(e) => {
-                      const value = (e.target as HTMLSelectElement).value;
-                      if (['auto', 'gpu', 'cpu'].includes(value)) {
-                        selectedHardwareAccelerator.value = value as HardwareAcceleratorKind;
-                        saveSettings();
-                      }
-                    }}
-                  >
-                    {hardwareAcceleratorOptions.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-
+              <div class="settings-controls generation-settings-row" data-testid="generation-settings-row">
                 <label>
                   Beam Size
                   <input type="number" min="1" max="10" value={beamSize.value}
@@ -1641,6 +1708,33 @@ export default component$(() => {
                          onChange$={(e) => { useDedicatedClass.value = (e.target as HTMLInputElement).checked; saveSettings(); }} />
                   Use Dedicated Class
                 </label>
+              </div>
+
+              <div class="settings-controls hardware-settings-row" data-testid="hardware-settings-row">
+                <label>
+                  Hardware Acceleration
+                  <select
+                    data-testid="hardware-accelerator-select"
+                    value={selectedHardwareAccelerator.value}
+                    onChange$={(e) => {
+                      const value = (e.target as HTMLSelectElement).value;
+                      if (['auto', 'gpu', 'cpu'].includes(value)) {
+                        selectedHardwareAccelerator.value = value as HardwareAcceleratorKind;
+                        saveSettings();
+                      }
+                    }}
+                  >
+                    {hardwareAcceleratorOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <span class="accelerator-detected" data-testid="detected-accelerators">
+                  Detected accelerators: {acceleratorStatusMessage.value}
+                </span>
+                <span class="accelerator-current" data-testid="current-accelerator">
+                  Current accelerator: {currentAcceleratorMessage.value}
+                </span>
               </div>
             </details>
           </div>
