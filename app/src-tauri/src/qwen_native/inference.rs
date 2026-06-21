@@ -103,6 +103,11 @@ unsafe impl Send for AsrInferenceInner {}
 pub struct AsrInference {
     pub(crate) inner: Mutex<AsrInferenceInner>,
 }
+
+pub struct LoadedAsrInference {
+    pub model_dir: std::path::PathBuf,
+    pub engine: AsrInference,
+}
 // AsrInference: Send + Sync automatically — Mutex<T>: Send+Sync when T: Send.
 
 impl AsrInference {
@@ -121,9 +126,8 @@ impl AsrInference {
         maybe_convert_weights_for_cpu(&mut weights, &device);
 
         info!("Loading tokenizer...");
-        let tokenizer = tokenizers::Tokenizer::from_file(model_dir.join("tokenizer.json"))
-            .map_err(|e| anyhow::anyhow!("tokenizer load failed: {}", e))
-            .map_err(AsrError::ModelLoad)?;
+        let tokenizer =
+            crate::qwen_native::hub::load_tokenizer(model_dir).map_err(AsrError::ModelLoad)?;
 
         info!("Model loaded successfully.");
         Self::build_engine(config, weights, tokenizer, device).map_err(AsrError::ModelLoad)
@@ -153,10 +157,21 @@ impl AsrInference {
         model_id: &str,
         cache_dir: &Path,
         device: Device,
-    ) -> crate::qwen_native::Result<Self> {
+    ) -> crate::qwen_native::Result<LoadedAsrInference> {
         let model_dir = crate::qwen_native::hub::ensure_model_cached(model_id, cache_dir)
             .map_err(AsrError::ModelLoad)?;
-        Self::load(&model_dir, device)
+        let engine = Self::load(&model_dir, device)?;
+        Ok(LoadedAsrInference { model_dir, engine })
+    }
+
+    pub fn from_huggingface_cache(
+        model_id: &str,
+        device: Device,
+    ) -> crate::qwen_native::Result<LoadedAsrInference> {
+        let model_dir = crate::qwen_native::hub::ensure_model_in_huggingface_cache(model_id)
+            .map_err(AsrError::ModelLoad)?;
+        let engine = Self::load(&model_dir, device)?;
+        Ok(LoadedAsrInference { model_dir, engine })
     }
 
     fn build_engine(

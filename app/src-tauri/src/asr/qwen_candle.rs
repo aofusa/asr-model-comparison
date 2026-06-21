@@ -12,6 +12,7 @@ pub struct QwenCandleConfig {
     pub model_id: String,
     pub backends: Vec<HardwareBackend>,
     pub auto_download: bool,
+    pub uses_hf_cache: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -47,19 +48,23 @@ pub fn configure_qwen_candle(
 ) -> QwenCandleConfig {
     let hf_model_id = qwen_hf_model_id(model_id);
     let explicit_dir = qwen_explicit_model_dir(&hf_model_id);
-    let model_dir = explicit_dir.unwrap_or_else(|| {
-        std::env::var("AMCP_MODEL_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| default_qwen_model_root())
-            .join("qwen")
-            .join(hf_model_id.replace('/', "--"))
-    });
+    let (model_dir, uses_hf_cache) = if let Some(model_dir) = explicit_dir {
+        (model_dir, false)
+    } else if let Some(model_root) = qwen_explicit_model_root() {
+        (
+            model_root.join("qwen").join(hf_model_id.replace('/', "--")),
+            false,
+        )
+    } else {
+        (default_qwen_model_dir(&hf_model_id), !cfg!(test))
+    };
 
     QwenCandleConfig {
         model_dir,
         model_id: hf_model_id,
         backends: qwen_backend_plan(available_backends),
         auto_download: qwen_auto_download_enabled(),
+        uses_hf_cache,
     }
 }
 
@@ -78,13 +83,69 @@ fn qwen_explicit_model_dir(hf_model_id: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn default_qwen_model_root() -> PathBuf {
+fn qwen_explicit_model_root() -> Option<PathBuf> {
     if cfg!(test) {
-        return std::env::temp_dir().join("amcp-qwen-test-models");
+        return None;
     }
-    std::env::current_dir()
+    std::env::var("AMCP_MODEL_DIR")
+        .ok()
+        .filter(|path| !path.trim().is_empty())
+        .map(PathBuf::from)
+}
+
+fn default_qwen_model_dir(hf_model_id: &str) -> PathBuf {
+    if cfg!(test) {
+        return std::env::temp_dir()
+            .join("amcp-qwen-test-models")
+            .join("qwen")
+            .join(hf_model_id.replace('/', "--"));
+    }
+    existing_hf_snapshot_dir(hf_model_id).unwrap_or_else(|| default_hf_repo_cache_dir(hf_model_id))
+}
+
+fn existing_hf_snapshot_dir(hf_model_id: &str) -> Option<PathBuf> {
+    let repo_dir = default_hf_repo_cache_dir(hf_model_id);
+    let revision = std::fs::read_to_string(repo_dir.join("refs").join("main")).ok()?;
+    let revision = revision.trim();
+    if revision.is_empty() {
+        return None;
+    }
+    let snapshot = repo_dir.join("snapshots").join(revision);
+    snapshot.is_dir().then_some(snapshot)
+}
+
+fn default_hf_repo_cache_dir(hf_model_id: &str) -> PathBuf {
+    default_hf_hub_cache_dir().join(format!("models--{}", hf_model_id.replace('/', "--")))
+}
+
+fn default_hf_hub_cache_dir() -> PathBuf {
+    if let Ok(cache) = std::env::var("HF_HUB_CACHE") {
+        let cache = cache.trim();
+        if !cache.is_empty() {
+            return PathBuf::from(cache);
+        }
+    }
+    let hf_home = std::env::var("HF_HOME")
+        .ok()
+        .filter(|path| !path.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var("XDG_CACHE_HOME")
+                .ok()
+                .filter(|path| !path.trim().is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(default_user_cache_dir)
+                .join("huggingface")
+        });
+    hf_home.join("hub")
+}
+
+fn default_user_cache_dir() -> PathBuf {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join("models")
+        .join(".cache")
 }
 
 pub fn qwen_backend_plan(available_backends: &[HardwareBackend]) -> Vec<HardwareBackend> {
@@ -103,11 +164,10 @@ pub fn qwen_backend_plan(available_backends: &[HardwareBackend]) -> Vec<Hardware
 
 pub fn validate_qwen_candle(config: &QwenCandleConfig) -> Result<QwenCandleValidation, String> {
     let config_path = config.model_dir.join("config.json");
-    let tokenizer_path = config.model_dir.join("tokenizer.json");
     Ok(QwenCandleValidation {
         model_dir: config.model_dir.clone(),
         config_exists: config_path.is_file(),
-        tokenizer_exists: tokenizer_path.is_file(),
+        tokenizer_exists: qwen_tokenizer_available(&config.model_dir),
         weights_exist: qwen_weights_exist(&config.model_dir),
         auto_download: config.auto_download,
     })
@@ -366,13 +426,26 @@ fn ensure_qwen_model_dir(config: &QwenCandleConfig) -> Result<PathBuf, String> {
             config.model_dir.display()
         ));
     }
+    if config.uses_hf_cache {
+        return AsrInference::from_huggingface_cache(
+            &config.model_id,
+            qwen_device(&config.backends),
+        )
+        .map(|loaded| loaded.model_dir)
+        .map_err(|error| {
+            format!(
+                "failed to download/load Qwen model {} from Hugging Face cache: {error}",
+                config.model_id
+            )
+        });
+    }
     let cache_dir = config
         .model_dir
         .parent()
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| config.model_dir.clone());
     AsrInference::from_pretrained(&config.model_id, &cache_dir, qwen_device(&config.backends))
-        .map(|_| cache_dir.join(config.model_id.replace('/', "--")))
+        .map(|loaded| loaded.model_dir)
         .map_err(|error| {
             format!(
                 "failed to download/load Qwen model {}: {error}",
@@ -384,8 +457,15 @@ fn ensure_qwen_model_dir(config: &QwenCandleConfig) -> Result<PathBuf, String> {
 #[cfg(feature = "qwen")]
 fn qwen_model_ready(model_dir: &std::path::Path) -> bool {
     model_dir.join("config.json").is_file()
-        && model_dir.join("tokenizer.json").is_file()
+        && qwen_tokenizer_available(model_dir)
         && qwen_weights_exist(model_dir)
+}
+
+fn qwen_tokenizer_available(model_dir: &std::path::Path) -> bool {
+    model_dir.join("tokenizer.json").is_file()
+        || (model_dir.join("tokenizer_config.json").is_file()
+            && model_dir.join("vocab.json").is_file()
+            && model_dir.join("merges.txt").is_file())
 }
 
 fn qwen_weights_exist(model_dir: &std::path::Path) -> bool {
@@ -573,5 +653,20 @@ mod tests {
             qwen_translation_model_id(Some("ja"), Some("en")).as_deref(),
             Some("voiceping-ai/qwen3-asr-ja-en-speech-translation")
         );
+    }
+
+    #[test]
+    fn qwen_tokenizer_accepts_huggingface_source_files() {
+        let dir =
+            std::env::temp_dir().join(format!("amcp-qwen-tokenizer-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tokenizer_config.json"), "{}").unwrap();
+        std::fs::write(dir.join("vocab.json"), "{}").unwrap();
+        std::fs::write(dir.join("merges.txt"), "").unwrap();
+
+        assert!(qwen_tokenizer_available(&dir));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

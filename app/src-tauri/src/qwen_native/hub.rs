@@ -1,4 +1,5 @@
 use anyhow::Context;
+use hf_hub::{api::sync::Api, Repo, RepoType};
 use log::info;
 use std::path::Path;
 
@@ -147,10 +148,70 @@ pub(crate) fn ensure_model_cached(
     Ok(model_dir)
 }
 
+/// Ensure the model exists in Hugging Face Hub's standard cache and return the
+/// resolved snapshot directory. This cache is shared with Python
+/// `transformers` / `huggingface_hub` when `HF_HOME` or `HF_HUB_CACHE` match.
+pub(crate) fn ensure_model_in_huggingface_cache(
+    model_id: &str,
+) -> anyhow::Result<std::path::PathBuf> {
+    let api = Api::new().context("create Hugging Face Hub API")?;
+    let repo = api.repo(Repo::new(model_id.to_string(), RepoType::Model));
+
+    info!("Resolving '{}' in the Hugging Face Hub cache", model_id);
+    let config_path = repo.get("config.json").context("download config.json")?;
+    let model_dir = config_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("config.json has no parent directory"))?
+        .to_path_buf();
+
+    if let Ok(index_path) = repo.get("model.safetensors.index.json") {
+        let index_text = std::fs::read_to_string(&index_path)?;
+        let index: serde_json::Value = serde_json::from_str(&index_text)?;
+        let weight_map = index["weight_map"]
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("invalid model.safetensors.index.json"))?;
+        let shards: std::collections::HashSet<String> = weight_map
+            .values()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
+        for shard in &shards {
+            repo.get(shard)
+                .with_context(|| format!("download shard {}", shard))?;
+        }
+    } else {
+        repo.get("model.safetensors")
+            .context("download model.safetensors")?;
+    }
+
+    for filename in ["tokenizer_config.json", "vocab.json", "merges.txt"] {
+        repo.get(filename)
+            .with_context(|| format!("download {filename}"))?;
+    }
+
+    Ok(model_dir)
+}
+
+pub(crate) fn load_tokenizer(model_dir: &Path) -> anyhow::Result<tokenizers::Tokenizer> {
+    let tokenizer_path = model_dir.join("tokenizer.json");
+    if tokenizer_path.is_file() {
+        return tokenizers::Tokenizer::from_file(&tokenizer_path)
+            .map_err(|error| anyhow::anyhow!("tokenizer load failed: {}", error));
+    }
+
+    let tok_config = std::fs::read_to_string(model_dir.join("tokenizer_config.json"))
+        .context("read tokenizer_config.json")?;
+    let vocab = std::fs::read_to_string(model_dir.join("vocab.json")).context("read vocab.json")?;
+    let merges =
+        std::fs::read_to_string(model_dir.join("merges.txt")).context("read merges.txt")?;
+    let tokenizer_json = build_qwen3_tokenizer_json(&vocab, &merges, &tok_config)?;
+    tokenizers::Tokenizer::from_bytes(tokenizer_json)
+        .map_err(|error| anyhow::anyhow!("tokenizer build failed: {}", error))
+}
+
 /// Build the Qwen3 tokenizer JSON from vocab.json, merges.txt, and tokenizer_config.json.
 /// The added_tokens list is derived from tokenizer_config.json's added_tokens_decoder field,
 /// so no special tokens need to be hardcoded here.
-fn build_qwen3_tokenizer_json(
+pub(crate) fn build_qwen3_tokenizer_json(
     vocab: &str,
     merges: &str,
     tok_config: &str,

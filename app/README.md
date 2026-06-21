@@ -110,7 +110,7 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin amcp-server -- server --hos
 
 Whisperは `whisper-rs` / whisper.cpp を使った実推論に対応しています。通常ビルドでは依存を有効化せず、`whisper` feature付きで起動した場合のみ実推論を使います。
 
-既定ではwhisper.cpp互換のGGMLモデルを `models/whisper/` に自動ダウンロードします。保存先を変えたい場合は `AMCP_MODEL_DIR` を指定してください。
+既定ではwhisper.cpp互換のGGMLモデルを `models/whisper/` に自動ダウンロードします。Whisper Rust実装は whisper.cpp 用GGMLモデルを使うため、Python backend の Transformers/Hugging Faceモデルとは別物です。保存先を変えたい場合は `AMCP_MODEL_DIR` を指定してください。
 
 ```powershell
 $env:AMCP_MODEL_DIR="C:\models\amcp"
@@ -147,7 +147,7 @@ npm run server:whisper:cuda
 
 ### Qwen3-ASR Candle実推論
 
-Qwen3-ASRは `qwen` feature付きでCandleベースのRust実装へ接続し、外部C DLLなしで16kHz mono f32サンプルを実推論します。`AMCP_QWEN_MODEL_DIR` を指定した場合はそのディレクトリを使い、未指定時は `AMCP_MODEL_DIR\qwen\Qwen--Qwen3-ASR-0.6B` などへHugging Faceモデルを自動キャッシュします。
+Qwen3-ASRは `qwen` feature付きでCandleベースのRust実装へ接続し、外部C DLLなしで16kHz mono f32サンプルを実推論します。未指定時は Python backend の `from_pretrained()` と同じ Hugging Face Hub 標準キャッシュ (`HF_HUB_CACHE`、または `HF_HOME\hub`) を使い、`config.json`、`model.safetensors`、tokenizerソースを同じ snapshot から参照します。`AMCP_QWEN_MODEL_DIR` を指定した場合はそのディレクトリを使い、`AMCP_MODEL_DIR` を指定した場合は従来通り `AMCP_MODEL_DIR\qwen\Qwen--Qwen3-ASR-0.6B` などを使います。
 
 ```powershell
 $env:AMCP_QWEN_MODEL_DIR="C:\models\qwen\Qwen--Qwen3-ASR-0.6B"

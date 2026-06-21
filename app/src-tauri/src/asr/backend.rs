@@ -298,8 +298,8 @@ fn qwen_artifacts(config: &qwen_candle::QwenCandleConfig) -> Vec<RuntimeArtifact
             false,
         ),
         file_artifact(
-            "qwen_tokenizer",
-            &config.model_dir.join("tokenizer.json"),
+            "qwen_tokenizer_source",
+            &config.model_dir.join("tokenizer_config.json"),
             Some("AMCP_QWEN_MODEL_DIR"),
             false,
         ),
@@ -325,8 +325,15 @@ fn qwen_artifacts(config: &qwen_candle::QwenCandleConfig) -> Vec<RuntimeArtifact
 
 fn qwen_model_files_available(model_dir: &std::path::Path) -> bool {
     model_dir.join("config.json").is_file()
-        && model_dir.join("tokenizer.json").is_file()
+        && qwen_tokenizer_available(model_dir)
         && qwen_model_weights_available(model_dir)
+}
+
+fn qwen_tokenizer_available(model_dir: &std::path::Path) -> bool {
+    model_dir.join("tokenizer.json").is_file()
+        || (model_dir.join("tokenizer_config.json").is_file()
+            && model_dir.join("vocab.json").is_file()
+            && model_dir.join("merges.txt").is_file())
 }
 
 fn qwen_model_weights_available(model_dir: &std::path::Path) -> bool {
