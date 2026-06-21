@@ -7,7 +7,7 @@
     "beforeDevCommand": "npm --prefix ../frontend run dev",
     "devUrl": "http://localhost:5173",
     "beforeBuildCommand": "npm --prefix ../frontend run build",
-    "frontendDist": "../frontend/dist"
+    "frontendDist": "../../frontend/dist"
   },
   "app": {
     "withGlobalTauri": true,
@@ -24,8 +24,10 @@
     }
   },
   "bundle": {
-    "active": true,
-    "targets": "all",
-    "icon": []
+    "active": false,
+    "targets": [],
+    "icon": [
+      "icons/icon.ico"
+    ]
   }
 }

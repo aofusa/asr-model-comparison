@@ -225,6 +225,30 @@ ONNX Runtimeの動的ライブラリを手動指定する場合は `ORT_DYLIB_PA
 
 ## ビルド方法
 
+### Windows配布用の単一exeを作成
+
+Windows向けに配布する場合は、Tauriのリリースビルドで生成されるデスクトップ実行ファイルを `app/dist/AMCP.exe` にコピーします。
+
+```powershell
+cd app
+npm run build:windows:exe
+```
+
+生成物:
+
+```text
+app\dist\AMCP.exe
+```
+
+この `AMCP.exe` はフロントエンド資産とRust APIサーバーを同梱した単一の実行ファイルです。実行時はアプリ内でRust APIサーバーを `127.0.0.1:8765` に起動し、Tauri WebViewから接続します。
+
+配布時の注意:
+
+- Windows 10/11 を対象にしています。
+- Microsoft Edge WebView2 Runtime が必要です。通常のWindows 10/11環境には入っていますが、未導入環境ではMicrosoft公式のWebView2 Runtimeを導入してください。
+- Whisper / Qwen3-ASR / Voxtral のモデルファイルはexeに同梱しません。必要に応じて `AMCP_MODEL_DIR`、`AMCP_QWEN_MODEL_DIR`、`AMCP_VOXTRAL_MODEL_DIR` などで配置先を指定するか、対応実装の自動ダウンロードを利用します。
+- 単一exe配布では、必ず `app\dist\AMCP.exe` を渡してください。インストーラー形式が必要になった場合は、`.ico` アイコンを追加し、Tauriの `bundle.active` と `bundle.targets` を有効化してください。
+
 ### Tauriアプリをビルド
 
 ```powershell
@@ -232,7 +256,7 @@ cd app
 npm run build
 ```
 
-このコマンドはTauriのビルドを実行します。Tauri設定により、ビルド前に `frontend/` の本番ビルドも実行されます。
+このコマンドはTauriのビルドを実行します。Tauri設定により、ビルド前に `frontend/` の本番ビルドも実行されます。Windows配布用の `app\dist\AMCP.exe` を作る場合は、上記の `npm run build:windows:exe` を使用してください。
 
 ### Rust serverのみをビルド
 
@@ -341,6 +365,7 @@ npm run test:voxtral:cuda:compile
 ### Windows実機モデル検証
 
 実モデルファイルを配置したWindows環境では、`validate` CLIで音声ファイル単位の速度と品質を確認できます。
+日本語の実音声検証には、リポジトリ内の `..\backend\tests\audio_samples\ja_01.mp3` を使います。
 
 実測前に現在のモデル配置と翻訳設定を確認する場合:
 
@@ -353,21 +378,21 @@ Whisper:
 
 ```powershell
 cd app
-npm run validate:windows:whisper -- --audio "C:\audio\sample.wav" --model-id whisper-tiny --language ja --expected-text "期待する文字起こし" --json
+npm run validate:windows:whisper -- --audio "..\backend\tests\audio_samples\ja_01.mp3" --model-id whisper-tiny --language ja --expected-text "期待する文字起こし" --json
 ```
 
 Qwen Candle:
 
 ```powershell
 $env:AMCP_QWEN_MODEL_DIR="C:\models\qwen\Qwen--Qwen3-ASR-0.6B"
-npm run validate:windows:qwen -- --audio "C:\audio\sample.wav" --model-id qwen3-asr-0.6b --language ja --expected-text "期待する文字起こし" --json
+npm run validate:windows:qwen -- --audio "..\backend\tests\audio_samples\ja_01.mp3" --model-id qwen3-asr-0.6b --language ja --expected-text "期待する文字起こし" --json
 ```
 
 Voxtral:
 
 ```powershell
 $env:AMCP_VOXTRAL_MODEL_DIR="C:\models\voxtral"
-npm run validate:windows:voxtral:directml -- --audio "C:\audio\sample.wav" --model-id voxtral-mini-4b --language ja --expected-text "期待する文字起こし" --json
+npm run validate:windows:voxtral:directml -- --audio "..\backend\tests\audio_samples\ja_01.mp3" --model-id voxtral-mini-4b --language ja --expected-text "期待する文字起こし" --json
 ```
 
 出力には `audio_duration_seconds`、`wall_time_seconds`、`realtime_factor`、`runtime_backend`、`accelerator`、`character_error_rate` が含まれます。`realtime_factor` は 1.0 未満なら実時間より高速です。
