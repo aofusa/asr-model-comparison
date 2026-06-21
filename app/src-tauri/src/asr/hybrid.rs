@@ -42,7 +42,7 @@ fn try_transcribe_whisper(
     audio: &PreprocessedAudio,
     options: &TranscriptionOptions,
 ) -> Result<Option<BackendTranscription>, String> {
-    let Some(model_path) = whisper_model_path(&options.model_id) else {
+    let Some(model_path) = resolve_whisper_model_path(&options.model_id)? else {
         return Ok(None);
     };
 
@@ -119,17 +119,80 @@ fn try_transcribe_whisper(
 }
 
 #[cfg(feature = "whisper")]
-fn whisper_model_path(model_id: &str) -> Option<String> {
+fn resolve_whisper_model_path(model_id: &str) -> Result<Option<String>, String> {
     let suffix = model_id
         .trim_start_matches("whisper-")
         .replace('-', "_")
         .to_ascii_uppercase();
     let specific_key = format!("AMCP_WHISPER_{suffix}_MODEL_PATH");
 
-    std::env::var(&specific_key)
+    if let Some(path) = std::env::var(&specific_key)
         .ok()
         .or_else(|| std::env::var("AMCP_WHISPER_MODEL_PATH").ok())
         .filter(|path| !path.trim().is_empty())
+    {
+        return Ok(Some(path));
+    }
+
+    let Some((file_name, url)) = whisper_model_download(model_id) else {
+        return Ok(None);
+    };
+    let model_dir = std::env::var("AMCP_MODEL_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join("models")
+                .join("whisper")
+        });
+    let model_path = model_dir.join(file_name);
+    if model_path.is_file() {
+        return Ok(Some(model_path.to_string_lossy().to_string()));
+    }
+
+    std::fs::create_dir_all(&model_dir)
+        .map_err(|error| format!("failed to create model cache {model_dir:?}: {error}"))?;
+    download_file(url, &model_path)?;
+    Ok(Some(model_path.to_string_lossy().to_string()))
+}
+
+#[cfg(feature = "whisper")]
+fn whisper_model_download(model_id: &str) -> Option<(&'static str, &'static str)> {
+    match model_id {
+        "whisper-tiny" => Some((
+            "ggml-tiny.bin",
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+        )),
+        "whisper-small" => Some((
+            "ggml-small.bin",
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+        )),
+        "whisper-medium" => Some((
+            "ggml-medium.bin",
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
+        )),
+        "whisper-large-v3-turbo" => Some((
+            "ggml-large-v3-turbo.bin",
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+        )),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "whisper")]
+fn download_file(url: &str, path: &std::path::Path) -> Result<(), String> {
+    let tmp_path = path.with_extension("download");
+    let mut response = reqwest::blocking::get(url)
+        .map_err(|error| format!("failed to download model from {url}: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("model download failed for {url}: {error}"))?;
+    let mut output = std::fs::File::create(&tmp_path)
+        .map_err(|error| format!("failed to create temporary model file {tmp_path:?}: {error}"))?;
+    std::io::copy(&mut response, &mut output)
+        .map_err(|error| format!("failed to write model file {tmp_path:?}: {error}"))?;
+    std::fs::rename(&tmp_path, path)
+        .map_err(|error| format!("failed to move model into cache {path:?}: {error}"))?;
+    Ok(())
 }
 
 #[cfg(feature = "whisper")]

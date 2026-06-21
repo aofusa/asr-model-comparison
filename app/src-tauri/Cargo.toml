@@ -20,7 +20,7 @@ required-features = ["desktop"]
 [features]
 default = []
 desktop = ["dep:tauri"]
-whisper = ["dep:whisper-rs"]
+whisper = ["dep:reqwest", "dep:whisper-rs"]
 whisper-cuda = ["whisper", "whisper-rs/cuda"]
 whisper-vulkan = ["whisper", "whisper-rs/vulkan"]
 qwen = []
@@ -34,6 +34,7 @@ clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
 http = "1"
 mime_guess = "2"
+reqwest = { version = "0.13.4", features = ["blocking", "rustls"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", optional = true }
