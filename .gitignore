@@ -43,7 +43,6 @@ coverage.xml
 .pytest_cache/
 
 # ASR / ML Model caches (very large - do not commit)
-# Only match cache directories, not our source app/models/
 **/model_cache/
 **/models/*.bin
 **/models/*.safetensors
@@ -56,14 +55,6 @@ faster-whisper/
 __pycache__/
 *.pt
 *.pth
-
-# Rust/Tauri runtime model cache (keep directory only)
-app/models/**
-!app/models/
-!app/models/.gitkeep
-app/src-tauri/models/**
-!app/src-tauri/models/
-!app/src-tauri/models/.gitkeep
 
 # Explicitly allow our Pydantic models directory
 !backend/app/models/
