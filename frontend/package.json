@@ -2,6 +2,7 @@
   "name": "amcp-frontend",
   "version": "0.1.0",
   "description": "ASR Model Comparison Platform Frontend (Qwik) - Focused on Qwen3-ASR and Voxtral real-time",
+  "license": "Apache-2.0 OR MIT",
   "private": true,
   "type": "module",
   "scripts": {

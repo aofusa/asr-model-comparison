@@ -236,7 +236,7 @@ asr-model-comparison-project/
 
 ## ライセンス
 
-Apache License 2.0
+Apache License 2.0 または MIT License のデュアルライセンスです。
 
 ## 著者
 

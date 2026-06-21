@@ -2,6 +2,7 @@
   "name": "amcp-tauri-app",
   "version": "0.1.0",
   "description": "Rust + Tauri rewrite of ASR Model Comparison Platform",
+  "license": "Apache-2.0 OR MIT",
   "private": true,
   "type": "module",
   "scripts": {
