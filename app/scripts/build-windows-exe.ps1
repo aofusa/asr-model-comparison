@@ -8,14 +8,11 @@ $distExe = Join-Path $distDir "AMCP.exe"
 
 Push-Location $appRoot
 try {
-    npm --prefix ../frontend run build
-    if ($LASTEXITCODE -ne 0) {
-        throw "Frontend build failed with exit code $LASTEXITCODE"
-    }
+    Remove-Item -Force -ErrorAction SilentlyContinue -Path $sourceExe, $distExe
 
-    cargo build --manifest-path src-tauri/Cargo.toml --release --features desktop --bin amcp-desktop
+    npm run build
     if ($LASTEXITCODE -ne 0) {
-        throw "Rust desktop release build failed with exit code $LASTEXITCODE"
+        throw "Tauri build failed with exit code $LASTEXITCODE"
     }
 
     if (-not (Test-Path $sourceExe)) {
@@ -26,7 +23,10 @@ try {
     Copy-Item -Force -Path $sourceExe -Destination $distExe
 
     $item = Get-Item $distExe
+    $item.LastWriteTime = Get-Date
+    $item.Refresh()
     Write-Host "Windows distributable executable created:"
+    Write-Host "  Source: $sourceExe"
     Write-Host "  $($item.FullName)"
     Write-Host "  $([Math]::Round($item.Length / 1MB, 2)) MB"
 }

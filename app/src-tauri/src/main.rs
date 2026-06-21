@@ -1,4 +1,4 @@
-use amcp_tauri::config::{Cli, Command};
+use amcp_tauri::config::{normalize_cli_args, Cli, Command};
 use amcp_tauri::{server, validation, AppConfig};
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
@@ -9,7 +9,7 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(normalize_cli_args(std::env::args_os()));
     match cli.command {
         Some(Command::Server(args)) => server::run(AppConfig::from(args)).await,
         Some(Command::Validate(args)) => validation::run(args).await,

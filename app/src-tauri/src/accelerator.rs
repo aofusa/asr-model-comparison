@@ -287,18 +287,59 @@ fn push_unique(backends: &mut Vec<HardwareBackend>, backend: HardwareBackend) {
 }
 
 fn command_exists(command: &str) -> bool {
-    let checker = if cfg!(windows) { "where" } else { "sh" };
-    let mut cmd = std::process::Command::new(checker);
-    if cfg!(windows) {
-        cmd.arg(command);
-    } else {
-        cmd.arg("-c").arg(format!("command -v {command}"));
+    command_exists_in_path(command, std::env::var_os("PATH"), std::env::var_os("PATHEXT"))
+}
+
+fn command_exists_in_path(
+    command: &str,
+    path: Option<std::ffi::OsString>,
+    path_ext: Option<std::ffi::OsString>,
+) -> bool {
+    let command_path = std::path::Path::new(command);
+    if command_path.components().count() > 1 {
+        return command_path.is_file();
     }
-    cmd.stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+
+    let Some(path) = path else {
+        return false;
+    };
+
+    let extensions = executable_extensions(command, path_ext);
+    std::env::split_paths(&path).any(|dir| {
+        extensions
+            .iter()
+            .any(|extension| dir.join(format!("{command}{extension}")).is_file())
+    })
+}
+
+fn executable_extensions(
+    command: &str,
+    path_ext: Option<std::ffi::OsString>,
+) -> Vec<String> {
+    if std::path::Path::new(command).extension().is_some() {
+        return vec![String::new()];
+    }
+
+    if cfg!(windows) {
+        let configured = path_ext
+            .and_then(|value| value.into_string().ok())
+            .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_string());
+        configured
+            .split(';')
+            .filter_map(|extension| {
+                let trimmed = extension.trim();
+                (!trimmed.is_empty()).then(|| {
+                    if trimmed.starts_with('.') {
+                        trimmed.to_string()
+                    } else {
+                        format!(".{trimmed}")
+                    }
+                })
+            })
+            .collect()
+    } else {
+        vec![String::new()]
+    }
 }
 
 fn prioritized_plan(
@@ -468,5 +509,31 @@ mod tests {
         assert!(detected.contains(&HardwareBackend::DirectMl));
         assert!(detected.contains(&HardwareBackend::Wgpu));
         assert!(detected.contains(&HardwareBackend::Cpu));
+    }
+
+    #[test]
+    fn command_lookup_does_not_require_external_where_command() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "amcp-command-lookup-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_root);
+        std::fs::create_dir_all(&temp_root).unwrap();
+
+        let executable = if cfg!(windows) {
+            temp_root.join("vulkaninfo.EXE")
+        } else {
+            temp_root.join("vulkaninfo")
+        };
+        std::fs::write(&executable, b"").unwrap();
+
+        let found = command_exists_in_path(
+            "vulkaninfo",
+            Some(temp_root.as_os_str().to_os_string()),
+            Some(".EXE;.CMD".into()),
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+        assert!(found);
     }
 }

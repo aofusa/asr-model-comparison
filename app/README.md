@@ -234,13 +234,36 @@ cd app
 npm run build:windows:exe
 ```
 
-生成物:
+Tauri CLIの一次出力:
+
+```text
+app\src-tauri\target\release\amcp-desktop.exe
+```
+
+配布用コピー:
 
 ```text
 app\dist\AMCP.exe
 ```
 
+`npm run build:windows:exe` は、Tauri CLIが生成した `amcp-desktop.exe` を `app\dist\AMCP.exe` へコピーして配布名に揃えるためのラッパーです。更新されたか確認する場合は、以下のように更新時刻とハッシュを比較してください。
+コード変更がなくTauriの出力バイナリが同一の場合、SHA256は前回と同じになります。このラッパーは配布コピーを実行したことが分かるように、コピー後の `app\dist\AMCP.exe` の更新時刻を実行時刻へ更新します。
+
+```powershell
+Get-Item .\dist\AMCP.exe, .\src-tauri\target\release\amcp-desktop.exe | Select-Object FullName, LastWriteTime, Length
+Get-FileHash .\dist\AMCP.exe, .\src-tauri\target\release\amcp-desktop.exe -Algorithm SHA256
+```
+
 この `AMCP.exe` はフロントエンド資産とRust APIサーバーを同梱した単一の実行ファイルです。実行時はアプリ内でRust APIサーバーを `127.0.0.1:8765` に起動し、Tauri WebViewから接続します。
+必ず `npm run build:windows:exe` または `npm run build` のようにTauri CLI経由でビルドしてください。`cargo build --bin amcp-desktop` で直接作ったexeは、Tauriの本番Webアセット埋め込みが行われず、開発用の `localhost:5173` に接続しようとします。
+
+同じ `AMCP.exe` は、明示的に `--server` を付けた場合だけHTTP serverモードで起動します。
+
+```powershell
+.\dist\AMCP.exe --server --host 127.0.0.1 --port 8000
+```
+
+引数なしでダブルクリックした場合は、通常のTauriデスクトップアプリとして起動します。
 
 配布時の注意:
 
