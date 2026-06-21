@@ -303,25 +303,46 @@ fn qwen_artifacts(config: &qwen_candle::QwenCandleConfig) -> Vec<RuntimeArtifact
             Some("AMCP_QWEN_MODEL_DIR"),
             false,
         ),
+        RuntimeArtifactStatus {
+            name: "qwen_weights".to_string(),
+            kind: RuntimeArtifactKind::File,
+            path: Some(
+                config
+                    .model_dir
+                    .join("model.safetensors")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+            env_var: Some("AMCP_QWEN_MODEL_DIR".to_string()),
+            required: false,
+            exists: qwen_model_weights_available(&config.model_dir),
+            note: Some(
+                "single model.safetensors, sharded index, or any *.safetensors file".to_string(),
+            ),
+        },
     ]
 }
 
 fn qwen_model_files_available(model_dir: &std::path::Path) -> bool {
     model_dir.join("config.json").is_file()
         && model_dir.join("tokenizer.json").is_file()
-        && (model_dir.join("model.safetensors").is_file()
-            || model_dir.join("model.safetensors.index.json").is_file()
-            || std::fs::read_dir(model_dir)
-                .ok()
-                .into_iter()
-                .flat_map(|entries| entries.filter_map(Result::ok))
-                .any(|entry| {
-                    entry
-                        .path()
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(|name| name.ends_with(".safetensors"))
-                }))
+        && qwen_model_weights_available(model_dir)
+}
+
+fn qwen_model_weights_available(model_dir: &std::path::Path) -> bool {
+    model_dir.join("model.safetensors").is_file()
+        || model_dir.join("model.safetensors.index.json").is_file()
+        || std::fs::read_dir(model_dir)
+            .ok()
+            .into_iter()
+            .flat_map(|entries| entries.filter_map(Result::ok))
+            .any(|entry| {
+                entry
+                    .path()
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with(".safetensors"))
+            })
 }
 
 fn voxtral_artifacts(
@@ -461,6 +482,10 @@ mod tests {
             .artifacts
             .iter()
             .any(|artifact| artifact.env_var.as_deref() == Some("AMCP_QWEN_MODEL_DIR")));
+        assert!(status
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.name == "qwen_weights"));
     }
 
     #[test]

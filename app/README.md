@@ -41,7 +41,7 @@
 - Windows実機で実モデルの速度/品質を測る `validate` CLI
 - `auto` / `gpu` / `cpu` の選択と安全なCPUフォールバック
 - Windows優先の実機アクセラレータ検出 (`CUDA_PATH`/`nvidia-smi`、`VK_SDK`/`vulkaninfo`、DirectML、OpenVINO、WGPU等)
-- Qwen3-ASR向けのCUDA/DirectML/Metal/CoreML/Vulkan/WGPU/OpenVINO/NNAPI/BLAS優先戦略
+- Qwen3-ASR向けのCandle CUDA/Metal/CPU優先戦略（DirectML/WGPUはCandleのQwen実行経路が対応するまでCPUフォールバック）
 - `/api/status`とWS応答でのランタイムバックエンド状態 (`whisper-rs` / `qwen-native` / `voxtral-onnx` / `placeholder`) と、モデルファイル/ディレクトリ/model-native翻訳のartifact診断
 - Qwen3-ASR Candle / Voxtral ORT のfeature境界と設定検証 (`AMCP_QWEN_*`、`AMCP_VOXTRAL_*`、`ORT_DYLIB_PATH`)
 - Qwen3-ASR Candleのモデルロード、自動キャッシュ、モデルディレクトリ検証、実音声サンプル推論呼び出し
@@ -165,7 +165,7 @@ npm run server:qwen:cuda
 
 ### 翻訳実推論
 
-翻訳は外部Python/コマンドランナーを使いません。Qwen3-ASRは `target_language` 指定時にRust/Candle経路で2回生成し、1回目で原文ASR、2回目で翻訳先言語を `language` プロンプトへ指定した翻訳文を生成します。ja/en翻訳では既定で `voiceping-ai/qwen3-asr-ja-en-speech-translation` を翻訳用checkpointとして使い、`AMCP_QWEN_TRANSLATION_MODEL_ID` で別checkpointへ差し替えできます。VoxtralはLLM型の音声+テキストモデルとして扱い、まず原文ASRを生成し、`target_language` が指定された場合は同じRust/ORT経路で「音声を指定言語へ翻訳し、翻訳文のみ返す」プロンプトを追加実行します。レスポンスは `transcript_text` に原文、`translated_text` に翻訳結果、`text` に表示用テキストを保持します。
+翻訳は外部Python/コマンドランナーを使いません。Qwen3-ASRは `target_language` 指定時にRust/Candle経路で原文ASRと翻訳を同一API処理内で返します。ja/en翻訳では既定で `voiceping-ai/qwen3-asr-ja-en-speech-translation` を翻訳用checkpointとして使い、`AMCP_QWEN_TRANSLATION_MODEL_ID` / `AMCP_QWEN_TRANSLATION_MODEL_DIR` で別checkpointへ差し替えできます。`AMCP_QWEN_TRANSLATION_MODEL_ID` に同じQwen3-ASRモデルを明示した場合は、音声エンコードを1回だけ行い同じ音声埋め込みから原文ASRと翻訳先言語プロンプトの生成を実行します。VoxtralはLLM型の音声+テキストモデルとして扱い、まず原文ASRを生成し、`target_language` が指定された場合は同じRust/ORT経路で「音声を指定言語へ翻訳し、翻訳文のみ返す」プロンプトを追加実行します。レスポンスは `transcript_text` に原文、`translated_text` に翻訳結果、`text` に表示用テキストを保持します。
 
 ### Voxtral ORT実推論
 
@@ -409,7 +409,7 @@ npm run test:e2e:headed
 Rust実装はAPI/WS契約、アクセラレータ選択、フォールバック、実モデル検証CLIを維持しつつ、以下のfeature境界で実ASRへ接続します。
 
 - `whisper`: `whisper-rs` / whisper.cpp
-- `qwen`: `qwen3-asr` / Candle
+- `qwen`: in-tree Qwen3-ASR Candle implementation (`candle-core` / `candle-nn` / `tokenizers` / `safetensors`)
 - `voxtral`: `ort` + ONNX Runtime (DirectML/CUDA feature)
 
 想定する優先アクセラレータ:

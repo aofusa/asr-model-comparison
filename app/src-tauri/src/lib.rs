@@ -2,6 +2,8 @@ pub mod accelerator;
 pub mod asr;
 pub mod config;
 pub mod models;
+#[cfg(feature = "qwen")]
+pub mod qwen_native;
 pub mod server;
 pub mod translation;
 pub mod validation;

@@ -107,3 +107,52 @@ test('rust websocket accepts accelerator config and streams transcription result
   expect(transcription?.runtime_backend).toBeTruthy();
   expect(transcription?.text).toContain('Recognized');
 });
+
+test('rust websocket preserves qwen transcript and translation fields', async ({ page }) => {
+  await page.goto('/health');
+
+  const wavBytes = makePcm16Wav([0, 10000, -10000, 5000, -5000, 0]);
+  const transcription = await page.evaluate(async (audioBytes) => {
+    return new Promise<any>((resolve, reject) => {
+      const ws = new WebSocket('ws://127.0.0.1:8787/api/ws/transcribe');
+      const timeout = setTimeout(() => {
+        ws.close();
+        reject(new Error('qwen websocket test timed out'));
+      }, 5000);
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({
+          type: 'config',
+          model_id: 'qwen3-asr-0.6b',
+          language: 'ja',
+          target_language: 'en',
+          accelerator: 'gpu',
+          hardware_accelerator: 'gpu',
+        }));
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'ready') {
+          ws.send(new Uint8Array(audioBytes));
+        }
+        if (data.type === 'transcription') {
+          clearTimeout(timeout);
+          ws.close();
+          resolve(data);
+        }
+      };
+
+      ws.onerror = () => {
+        clearTimeout(timeout);
+        reject(new Error('qwen websocket failed'));
+      };
+    });
+  }, wavBytes);
+
+  expect(transcription.model_id).toBe('qwen3-asr-0.6b');
+  expect(transcription.transcript_text).toBeTruthy();
+  expect(transcription.target_language).toBe('en');
+  expect(transcription.accelerator.preference).toBe('gpu');
+  expect(transcription.runtime_backend).toBeTruthy();
+});

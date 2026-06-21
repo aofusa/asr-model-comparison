@@ -23,8 +23,18 @@ desktop = ["dep:tauri"]
 whisper = ["dep:reqwest", "dep:whisper-rs"]
 whisper-cuda = ["whisper", "whisper-rs/cuda"]
 whisper-vulkan = ["whisper", "whisper-rs/vulkan"]
-qwen = ["dep:candle-core", "dep:qwen3-asr"]
-qwen-cuda = ["qwen", "candle-core/cuda", "qwen3-asr/cuda"]
+qwen = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:hound",
+    "dep:log",
+    "dep:reqwest",
+    "dep:rubato",
+    "dep:rustfft",
+    "dep:safetensors",
+    "dep:tokenizers",
+]
+qwen-cuda = ["qwen", "candle-core/cuda", "candle-nn/cuda"]
 voxtral = ["dep:ndarray", "dep:ort", "dep:rustfft", "dep:tokenizers"]
 voxtral-directml = ["voxtral", "ort/directml"]
 voxtral-cuda = ["voxtral", "ort/cuda"]
@@ -34,16 +44,20 @@ anyhow = "1"
 axum = { version = "0.8", features = ["json", "multipart", "ws"] }
 bytes = "1"
 candle-core = { version = "0.9.2", optional = true }
+candle-nn = { version = "0.9.2", optional = true }
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
+hound = { version = "3", optional = true }
 http = "1"
 libc = "0.2.186"
+log = { version = "0.4", optional = true }
 mime_guess = "2"
 ndarray = { version = "0.17.2", optional = true }
 ort = { version = "2.0.0-rc.12", optional = true }
-qwen3-asr = { version = "0.2.2", default-features = false, features = ["hub"], optional = true }
 reqwest = { version = "0.13.4", features = ["blocking", "rustls"], optional = true }
+rubato = { version = "0.15", optional = true }
 rustfft = { version = "6.4.1", optional = true }
+safetensors = { version = "0.7.0", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 symphonia = { version = "0.6.0", features = ["all"] }
