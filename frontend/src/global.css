@@ -442,10 +442,16 @@ button:disabled {
   accent-color: #3b82f6;
 }
 
-.accelerator-detected {
+.accelerator-detected,
+.accelerator-current {
   color: #93c5fd;
   font-size: 0.74rem;
   line-height: 1.3;
+}
+
+.accelerator-current {
+  color: #bfdbfe;
+  font-weight: 700;
 }
 
 .advanced-settings {

@@ -68,7 +68,13 @@ test('hardware acceleration setting is sent in websocket config', async ({ page 
               data: JSON.stringify({
                 type: 'ready',
                 model_id: parsed.model_id,
-                accelerator: parsed.accelerator,
+                accelerator: {
+                  preference: parsed.accelerator,
+                  selected: 'vulkan',
+                  attempted: ['vulkan', 'cpu'],
+                  fallback_used: false,
+                  reason: 'vulkan is the preferred backend for this test.',
+                },
               }),
             }));
           }, 0);
@@ -130,6 +136,7 @@ test('hardware acceleration setting is sent in websocket config', async ({ page 
   await expect.poll(async () => page.evaluate(() => (window as any).__lastWsUrl), {
     timeout: 5000,
   }).toBe('ws://127.0.0.1:8765/api/ws/transcribe');
+  await expect(page.getByTestId('current-accelerator')).toContainText('VULKAN');
 });
 
 test('compact top workflow controls are visible', async ({ page }) => {
@@ -139,6 +146,7 @@ test('compact top workflow controls are visible', async ({ page }) => {
       body: JSON.stringify({
         service: 'amcp-rust-backend',
         available_backends: ['cuda', 'vulkan', 'cpu'],
+        loaded_backend: 'cuda',
       }),
     });
   });
@@ -156,6 +164,7 @@ test('compact top workflow controls are visible', async ({ page }) => {
   await openAdvancedSettings(page);
   await expect(page.getByTestId('hardware-accelerator-select')).toBeVisible();
   await expect(page.getByTestId('detected-accelerators')).toContainText('CUDA, VULKAN, CPU');
+  await expect(page.getByTestId('current-accelerator')).toContainText('CUDA');
 
   const generationRow = await page.getByTestId('generation-settings-row').boundingBox();
   const hardwareRow = await page.getByTestId('hardware-settings-row').boundingBox();

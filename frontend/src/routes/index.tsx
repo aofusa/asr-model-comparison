@@ -29,6 +29,7 @@ type HardwareAcceleratorKind = 'auto' | 'gpu' | 'cpu';
 
 type BackendStatus = {
   available_backends?: unknown;
+  loaded_backend?: unknown;
 };
 
 declare global {
@@ -120,6 +121,33 @@ function formatDetectedAccelerators(status: BackendStatus | null): string {
     .map((backend) => backend.toUpperCase());
 
   return labels.length > 0 ? labels.join(', ') : 'None detected';
+}
+
+function formatBackendLabel(backend: unknown): string | null {
+  if (typeof backend !== 'string') {
+    return null;
+  }
+  const value = backend.trim();
+  return value ? value.toUpperCase() : null;
+}
+
+function formatCurrentAccelerator(status: BackendStatus | null): string {
+  if (!status || !('loaded_backend' in status)) {
+    return 'Not reported by this backend';
+  }
+
+  return formatBackendLabel(status.loaded_backend) ?? 'No model loaded yet';
+}
+
+function selectedAcceleratorFromMessage(data: unknown): string | null {
+  if (!data || typeof data !== 'object' || !('accelerator' in data)) {
+    return null;
+  }
+  const accelerator = (data as { accelerator?: unknown }).accelerator;
+  if (!accelerator || typeof accelerator !== 'object' || !('selected' in accelerator)) {
+    return null;
+  }
+  return formatBackendLabel((accelerator as { selected?: unknown }).selected);
 }
 
 function getSharedAudioUnavailableStatus(source: AudioSourceKind, error?: unknown): string {
@@ -420,6 +448,7 @@ export default component$(() => {
   const selectedHardwareAccelerator = useSignal<HardwareAcceleratorKind>('auto');
   const acceleratorStatus = useSignal<BackendStatus | null>(null);
   const acceleratorStatusMessage = useSignal('Checking detected accelerators...');
+  const currentAcceleratorMessage = useSignal('Checking current accelerator...');
 
   // A: localStorage persistence for settings
   const SETTINGS_KEY = 'asr-settings-v1';
@@ -509,9 +538,11 @@ export default component$(() => {
       const data = await response.json() as BackendStatus;
       acceleratorStatus.value = data;
       acceleratorStatusMessage.value = formatDetectedAccelerators(data);
+      currentAcceleratorMessage.value = formatCurrentAccelerator(data);
     } catch {
       acceleratorStatus.value = null;
       acceleratorStatusMessage.value = 'Not reported by this backend';
+      currentAcceleratorMessage.value = 'Not reported by this backend';
     }
   });
 
@@ -691,11 +722,31 @@ export default component$(() => {
           const statusEl = document.querySelector('[data-testid="status"]');
           if (statusEl) statusEl.textContent = `Status: ${status.value}`;
         } catch {}
+        const selected = selectedAcceleratorFromMessage(data);
+        if (selected) {
+          currentAcceleratorMessage.value = selected;
+        } else {
+          void fetch(`${getApiBaseUrl()}/api/status`)
+            .then((response) => response.ok ? response.json() : null)
+            .then((nextStatus: BackendStatus | null) => {
+              if (nextStatus) {
+                acceleratorStatus.value = nextStatus;
+                acceleratorStatusMessage.value = formatDetectedAccelerators(nextStatus);
+                currentAcceleratorMessage.value = formatCurrentAccelerator(nextStatus);
+              }
+            })
+            .catch(() => {});
+        }
       }
 
       if (data.type === 'transcription') {
         if (!isRecording.value && refs.intentionalStop) {
           return;
+        }
+
+        const selected = selectedAcceleratorFromMessage(data);
+        if (selected) {
+          currentAcceleratorMessage.value = selected;
         }
 
         const hadSpeech = data.had_speech !== false;
@@ -1680,6 +1731,9 @@ export default component$(() => {
                 </label>
                 <span class="accelerator-detected" data-testid="detected-accelerators">
                   Detected accelerators: {acceleratorStatusMessage.value}
+                </span>
+                <span class="accelerator-current" data-testid="current-accelerator">
+                  Current accelerator: {currentAcceleratorMessage.value}
                 </span>
               </div>
             </details>
