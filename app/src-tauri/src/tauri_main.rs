@@ -9,6 +9,7 @@ use amcp_tauri::{server, validation, AppConfig};
 use clap::Parser;
 use std::ffi::OsString;
 use std::sync::Arc;
+use tauri::{WebviewUrl, WebviewWindowBuilder};
 
 const EMBEDDED_SERVER_PORT: u16 = 8765;
 
@@ -153,6 +154,14 @@ fn run_desktop() {
             api_base_url,
         })
         .invoke_handler(tauri::generate_handler![backend_status, accelerator_plan])
+        .setup(|app| {
+            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                .title("ASR Model Comparison Platform")
+                .inner_size(1240.0, 900.0)
+                .resizable(true)
+                .build()?;
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running AMCP desktop app");
 }

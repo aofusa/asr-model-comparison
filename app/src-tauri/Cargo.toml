@@ -10,13 +10,13 @@ name = "amcp_tauri"
 path = "src/lib.rs"
 
 [[bin]]
-name = "amcp-server"
-path = "src/main.rs"
-
-[[bin]]
 name = "amcp-desktop"
 path = "src/tauri_main.rs"
 required-features = ["desktop"]
+
+[[bin]]
+name = "amcp-server"
+path = "src/main.rs"
 
 [features]
 default = []

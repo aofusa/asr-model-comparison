@@ -8,6 +8,8 @@ $distExe = Join-Path $distDir "AMCP.exe"
 
 Push-Location $appRoot
 try {
+    Remove-Item -Force -ErrorAction SilentlyContinue -Path $sourceExe, $distExe
+
     npm run build
     if ($LASTEXITCODE -ne 0) {
         throw "Tauri build failed with exit code $LASTEXITCODE"
