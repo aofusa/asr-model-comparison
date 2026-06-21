@@ -13,11 +13,6 @@ try {
         throw "Tauri build failed with exit code $LASTEXITCODE"
     }
 
-    cargo build --manifest-path src-tauri/Cargo.toml --release --features desktop --bin amcp-desktop
-    if ($LASTEXITCODE -ne 0) {
-        throw "Rust desktop release rebuild failed with exit code $LASTEXITCODE"
-    }
-
     if (-not (Test-Path $sourceExe)) {
         throw "Tauri release executable was not found: $sourceExe"
     }
