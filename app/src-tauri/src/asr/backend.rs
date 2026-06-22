@@ -217,7 +217,10 @@ fn voxtral_llamacpp_status(
     family: ModelFamily,
     available_backends: &[HardwareBackend],
 ) -> RuntimeBackendStatus {
-    let configured = cfg!(feature = "voxtral-llamacpp-native");
+    let configured = cfg!(any(
+        feature = "voxtral-llamacpp-native",
+        feature = "voxtral-llamacpp-realtime-patched"
+    ));
     let config = voxtral_llamacpp::configure_voxtral_llamacpp(available_backends);
     let validation = voxtral_llamacpp::validate_voxtral_llamacpp_config(&config);
     let real_inference_available = configured && validation.configured;
@@ -235,14 +238,22 @@ fn voxtral_llamacpp_status(
         artifacts: voxtral_llamacpp_artifacts(&config),
         reason: if real_inference_available {
             format!(
-                "voxtral-llamacpp feature is enabled and Voxtral GGUF/mmproj files are configured for {}. Vulkan acceleration is {}.",
+                "voxtral-llamacpp feature is enabled and Voxtral GGUF/mmproj files are configured for {}. Vulkan acceleration is {}. Patched Voxtral Realtime bridge is {}.",
                 config.model_id,
                 if cfg!(feature = "voxtral-llamacpp-vulkan") {
                     "compiled in"
                 } else {
                     "not compiled in"
+                },
+                if cfg!(feature = "voxtral-llamacpp-realtime-patched") {
+                    "compiled in"
+                } else {
+                    "not compiled in"
                 }
             )
+        } else if configured && cfg!(feature = "voxtral-llamacpp-realtime-patched") {
+            "voxtral-llamacpp-realtime-patched feature is enabled, but AMCP_VOXTRAL_LLAMA_MODEL_PATH and AMCP_VOXTRAL_LLAMA_MMPROJ_PATH are not fully configured."
+                .to_string()
         } else if configured && cfg!(feature = "voxtral-llamacpp-vulkan") {
             "voxtral-llamacpp-vulkan feature is enabled, but AMCP_VOXTRAL_LLAMA_MODEL_PATH and AMCP_VOXTRAL_LLAMA_MMPROJ_PATH are not fully configured."
                 .to_string()
@@ -537,6 +548,18 @@ fn voxtral_llamacpp_artifacts(
             required: false,
             exists: cfg!(feature = "voxtral-llamacpp-vulkan"),
             note: Some("llama-cpp-4 Vulkan feature requires Vulkan SDK at build time".to_string()),
+        },
+        RuntimeArtifactStatus {
+            name: "voxtral_llama_realtime_patched".to_string(),
+            kind: RuntimeArtifactKind::Command,
+            path: Some("feature=voxtral-llamacpp-realtime-patched".to_string()),
+            env_var: Some("AMCP_VOXTRAL_PATCHED_LLAMA_DIR".to_string()),
+            required: false,
+            exists: cfg!(feature = "voxtral-llamacpp-realtime-patched"),
+            note: Some(
+                "links a patched llama.cpp build that exports Voxtral Realtime dual-stream mtmd helpers"
+                    .to_string(),
+            ),
         },
     ]
 }

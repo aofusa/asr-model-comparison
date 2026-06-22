@@ -259,7 +259,27 @@ npm run server:voxtral:llamacpp
 - `AMCP_VOXTRAL_LLAMA_CONTEXT_SIZE`: llama.cpp context sizeです。既定は4096です。
 - `AMCP_VOXTRAL_LLAMA_MAX_TOKENS`: llama.cpp生成トークン数です。未指定時は `AMCP_VOXTRAL_MAX_TOKENS`、それも未指定なら512です。
 
-`voxtral-llamacpp` featureは診断とルーティング用adapterを有効化します。実推論には `voxtral-llamacpp-native` featureで `llama-cpp-4` の `mtmd` 組み込みを使います。Windows AMD GPU環境では `voxtral-llamacpp-vulkan` featureを使い、Vulkan SDK、runtime、driverを事前に用意してください。GGUFとmmprojの入手先・ファイル名は配布元のVoxtral Realtime GGUF releaseに合わせてください。
+`voxtral-llamacpp` featureは診断とルーティング用adapterを有効化します。実推論には通常 `voxtral-llamacpp-native` featureで `llama-cpp-4` の `mtmd` 組み込みを使います。Windows AMD GPU環境では `voxtral-llamacpp-vulkan` featureを使い、Vulkan SDK、runtime、driverを事前に用意してください。GGUFとmmprojの入手先・ファイル名は配布元のVoxtral Realtime GGUF releaseに合わせてください。
+
+Voxtral Mini 4B Realtime GGUFは、標準の `llama-cpp-4` 同梱 `llama.cpp` では `ada_norm` tensorとdual-stream音声処理が不足する場合があります。その場合は `voxtral-llamacpp-realtime-patched` featureを使い、Voxtral Realtime対応パッチ済み `llama.cpp` をアプリ本体へC ABIブリッジでリンクします。この経路は外部runnerプロセスを起動せず、パッチ済み `llama.cpp` ライブラリを同一プロセス内で呼び出します。
+
+パッチ済み経路のビルド時環境変数:
+
+- `AMCP_VOXTRAL_PATCHED_LLAMA_DIR`: パッチ済み `llama.cpp` のsource rootです。`include/llama.h` と `tools/mtmd/mtmd-helper.h` を含むディレクトリを指定します。
+- `AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR`: CMakeビルド済みのimport libraryまたは共有ライブラリがあるディレクトリです。
+- `AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR`: WindowsでDLLが `bin` に出る場合の任意指定です。build時のlink search pathに追加します。
+
+例:
+
+```powershell
+$env:AMCP_VOXTRAL_RUNTIME="llamacpp"
+$env:AMCP_VOXTRAL_PATCHED_LLAMA_DIR="C:\src\llama.cpp-voxtral-realtime"
+$env:AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR="C:\src\llama.cpp-voxtral-realtime\build"
+$env:AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR="C:\src\llama.cpp-voxtral-realtime\build\bin"
+npm run server:voxtral:llamacpp:realtime
+```
+
+Windowsではbuild時に `AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR` 配下の `llama.dll`、`mtmd.dll`、`ggml*.dll` をCargoのprofile出力ディレクトリへコピーします。これにより、以前の `llama-cpp-4` ビルドで残った同名DLLを誤ってロードすることを避けます。
 
 日本語サンプルで検証する場合:
 
@@ -268,6 +288,12 @@ $env:AMCP_VOXTRAL_RUNTIME="llamacpp"
 $env:AMCP_VOXTRAL_LLAMA_MODEL_PATH="C:\models\voxtral\Voxtral-Mini-4B-Realtime.gguf"
 $env:AMCP_VOXTRAL_LLAMA_MMPROJ_PATH="C:\models\voxtral\mmproj-Voxtral-Mini-4B-Realtime.gguf"
 npm run validate:windows:voxtral:llamacpp -- --audio "..\backend\tests\audio_samples\ja_01.mp3" --model-id voxtral-mini-4b --language ja --json
+```
+
+パッチ済み経路で検証する場合:
+
+```powershell
+npm run validate:windows:voxtral:llamacpp:realtime -- --audio "..\backend\tests\audio_samples\ja_01.mp3" --model-id voxtral-mini-4b --language ja --json
 ```
 
 ## ビルド方法

@@ -1,5 +1,8 @@
 use super::audio::PreprocessedAudio;
-#[cfg(feature = "voxtral-llamacpp-native")]
+#[cfg(any(
+    feature = "voxtral-llamacpp-native",
+    feature = "voxtral-llamacpp-realtime-patched"
+))]
 use super::audio::TARGET_SAMPLE_RATE;
 use crate::accelerator::HardwareBackend;
 use serde::{Deserialize, Serialize};
@@ -149,7 +152,10 @@ pub fn llamacpp_provider_plan(available_backends: &[HardwareBackend]) -> Vec<Har
     providers
 }
 
-#[cfg(feature = "voxtral-llamacpp-native")]
+#[cfg(any(
+    feature = "voxtral-llamacpp-native",
+    feature = "voxtral-llamacpp-realtime-patched"
+))]
 pub fn transcribe_voxtral_audio(
     audio: &PreprocessedAudio,
     language: Option<&str>,
@@ -199,7 +205,10 @@ pub fn transcribe_voxtral_audio(
     }))
 }
 
-#[cfg(not(feature = "voxtral-llamacpp-native"))]
+#[cfg(not(any(
+    feature = "voxtral-llamacpp-native",
+    feature = "voxtral-llamacpp-realtime-patched"
+)))]
 pub fn transcribe_voxtral_audio(
     _audio: &PreprocessedAudio,
     _language: Option<&str>,
@@ -213,7 +222,98 @@ pub fn transcribe_voxtral_audio(
     )
 }
 
-#[cfg(feature = "voxtral-llamacpp-native")]
+#[cfg(feature = "voxtral-llamacpp-realtime-patched")]
+fn run_llamacpp_generation(
+    audio: &PreprocessedAudio,
+    config: &VoxtralLlamaCppConfig,
+    _instruction: &str,
+) -> Result<String, String> {
+    use std::ffi::{CStr, CString};
+    use std::os::raw::{c_char, c_float, c_int};
+
+    extern "C" {
+        fn amcp_voxtral_realtime_transcribe(
+            model_path: *const c_char,
+            mmproj_path: *const c_char,
+            pcm_samples: *const c_float,
+            n_samples: usize,
+            context_size: u32,
+            batch_size: u32,
+            max_tokens: u32,
+            n_gpu_layers: c_int,
+            use_gpu: bool,
+            print_timings: bool,
+            out_text: *mut *mut c_char,
+            out_error: *mut *mut c_char,
+        ) -> c_int;
+        fn amcp_voxtral_realtime_free(value: *mut c_char);
+    }
+
+    let model_path = config
+        .model_path
+        .as_ref()
+        .ok_or_else(|| "AMCP_VOXTRAL_LLAMA_MODEL_PATH is not configured.".to_string())?;
+    let mmproj_path = config
+        .mmproj_path
+        .as_ref()
+        .ok_or_else(|| "AMCP_VOXTRAL_LLAMA_MMPROJ_PATH is not configured.".to_string())?;
+    let model_path = CString::new(model_path.to_string_lossy().as_bytes())
+        .map_err(|_| "Voxtral Realtime model path contains an embedded NUL byte.".to_string())?;
+    let mmproj_path = CString::new(mmproj_path.to_string_lossy().as_bytes())
+        .map_err(|_| "Voxtral Realtime mmproj path contains an embedded NUL byte.".to_string())?;
+
+    let mut out_text: *mut c_char = std::ptr::null_mut();
+    let mut out_error: *mut c_char = std::ptr::null_mut();
+    let result = unsafe {
+        amcp_voxtral_realtime_transcribe(
+            model_path.as_ptr(),
+            mmproj_path.as_ptr(),
+            audio.samples.as_ptr(),
+            audio.samples.len(),
+            config.context_size,
+            config.batch_size,
+            u32::try_from(config.max_tokens).unwrap_or(u32::MAX),
+            i32::try_from(config.n_gpu_layers).unwrap_or(i32::MAX),
+            config.use_gpu,
+            config.print_timings,
+            &mut out_text,
+            &mut out_error,
+        )
+    };
+
+    let error = if out_error.is_null() {
+        None
+    } else {
+        let error = unsafe { CStr::from_ptr(out_error) }
+            .to_string_lossy()
+            .into_owned();
+        unsafe { amcp_voxtral_realtime_free(out_error) };
+        Some(error)
+    };
+
+    if result != 0 {
+        if !out_text.is_null() {
+            unsafe { amcp_voxtral_realtime_free(out_text) };
+        }
+        return Err(error.unwrap_or_else(|| {
+            format!("Voxtral Realtime patched llama.cpp bridge failed with code {result}.")
+        }));
+    }
+    if out_text.is_null() {
+        return Err("Voxtral Realtime patched llama.cpp bridge returned no text.".to_string());
+    }
+
+    let text = unsafe { CStr::from_ptr(out_text) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe { amcp_voxtral_realtime_free(out_text) };
+    Ok(clean_model_output(&text))
+}
+
+#[cfg(all(
+    feature = "voxtral-llamacpp-native",
+    not(feature = "voxtral-llamacpp-realtime-patched")
+))]
 fn run_llamacpp_generation(
     audio: &PreprocessedAudio,
     config: &VoxtralLlamaCppConfig,
@@ -329,12 +429,19 @@ fn run_llamacpp_generation(
     Ok(clean_model_output(&String::from_utf8_lossy(&output)))
 }
 
-#[cfg(feature = "voxtral-llamacpp-native")]
+#[cfg(all(
+    feature = "voxtral-llamacpp-native",
+    not(feature = "voxtral-llamacpp-realtime-patched")
+))]
 fn build_llamacpp_prompt(marker: &str, instruction: &str) -> String {
     format!("[INST] {marker}\n{} [/INST]", instruction.trim())
 }
 
-#[cfg(any(feature = "voxtral-llamacpp-native", test))]
+#[cfg(any(
+    feature = "voxtral-llamacpp-native",
+    feature = "voxtral-llamacpp-realtime-patched",
+    test
+))]
 fn missing_config_error(
     config: &VoxtralLlamaCppConfig,
     validation: &VoxtralLlamaCppValidation,
@@ -347,7 +454,10 @@ model_path={:?} model_exists={} mmproj_path={:?} mmproj_exists={}",
     )
 }
 
-#[cfg(feature = "voxtral-llamacpp-native")]
+#[cfg(any(
+    feature = "voxtral-llamacpp-native",
+    feature = "voxtral-llamacpp-realtime-patched"
+))]
 fn transcription_prompt(language: Option<&str>, previous_text: Option<&str>) -> String {
     let language = language_name(language)
         .map(|language| format!(" in {language}"))
@@ -360,7 +470,11 @@ fn transcription_prompt(language: Option<&str>, previous_text: Option<&str>) -> 
     format!("Transcribe this audio{language}. Return only the transcription.{previous}")
 }
 
-#[cfg(any(feature = "voxtral-llamacpp-native", test))]
+#[cfg(any(
+    feature = "voxtral-llamacpp-native",
+    feature = "voxtral-llamacpp-realtime-patched",
+    test
+))]
 fn translation_prompt(
     source_language: Option<&str>,
     target_language: &str,
@@ -380,7 +494,10 @@ fn translation_prompt(
     format!("{source}{previous}Original transcript: {transcript_text}\nTranslate the audio and original transcript into {target}. Return only the translated text.")
 }
 
-#[cfg(feature = "voxtral-llamacpp-native")]
+#[cfg(any(
+    feature = "voxtral-llamacpp-native",
+    feature = "voxtral-llamacpp-realtime-patched"
+))]
 fn normalize_target_language(language: Option<&str>) -> Option<String> {
     let language = language?.trim().to_ascii_lowercase();
     match language.as_str() {
@@ -392,7 +509,11 @@ fn normalize_target_language(language: Option<&str>) -> Option<String> {
     }
 }
 
-#[cfg(any(feature = "voxtral-llamacpp-native", test))]
+#[cfg(any(
+    feature = "voxtral-llamacpp-native",
+    feature = "voxtral-llamacpp-realtime-patched",
+    test
+))]
 fn language_name(language: Option<&str>) -> Option<String> {
     match language?.trim().to_ascii_lowercase().as_str() {
         "" | "auto" | "none" => None,
@@ -542,7 +663,10 @@ fn default_user_cache_dir() -> PathBuf {
         .join(".cache")
 }
 
-#[cfg(feature = "voxtral-llamacpp-native")]
+#[cfg(any(
+    feature = "voxtral-llamacpp-native",
+    feature = "voxtral-llamacpp-realtime-patched"
+))]
 fn clean_model_output(text: &str) -> String {
     text.replace("[/INST]", "")
         .replace("[INST]", "")
