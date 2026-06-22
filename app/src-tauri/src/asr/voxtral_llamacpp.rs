@@ -987,8 +987,11 @@ fn extract_executorch_transcript(output: &str) -> Option<String> {
                 }
             }
         }
-        if is_probable_transcript_line(trimmed) {
-            fallback = Some(clean_runner_line(trimmed));
+        if fallback.is_none() && is_probable_transcript_line(trimmed) {
+            let value = clean_runner_line(trimmed);
+            if !value.is_empty() {
+                fallback = Some(value);
+            }
         }
     }
     fallback.filter(|value| !value.is_empty())
@@ -996,6 +999,7 @@ fn extract_executorch_transcript(output: &str) -> Option<String> {
 
 #[cfg(any(feature = "voxtral-executorch", test))]
 fn clean_runner_line(line: &str) -> String {
+    let line = strip_runner_log_suffix(line.trim());
     line.trim()
         .trim_matches('"')
         .trim_matches('\'')
@@ -1004,16 +1008,58 @@ fn clean_runner_line(line: &str) -> String {
 }
 
 #[cfg(any(feature = "voxtral-executorch", test))]
+fn strip_runner_log_suffix(line: &str) -> &str {
+    for marker in [
+        "I 00:",
+        "E 00:",
+        "W 00:",
+        "WARNING:",
+        "PyTorchObserver",
+        "--- Metal Backend",
+    ] {
+        if let Some(index) = line.find(marker) {
+            return &line[..index];
+        }
+    }
+    line
+}
+
+#[cfg(any(feature = "voxtral-executorch", test))]
 fn is_probable_transcript_line(line: &str) -> bool {
-    let lower = line.to_ascii_lowercase();
-    !lower.starts_with("info")
+    let candidate = strip_runner_log_suffix(line).trim();
+    let lower = candidate.to_ascii_lowercase();
+    let without_separators = candidate.trim_matches('-').trim();
+    !without_separators.is_empty()
+        && candidate.chars().any(|ch| ch.is_alphanumeric())
+        && !lower.starts_with("info")
         && !lower.starts_with("warning")
         && !lower.starts_with("error")
+        && !lower.starts_with("i ")
+        && !lower.starts_with("e0000")
+        && !lower.contains("executorch:")
+        && !lower.contains("tokenizers:")
         && !lower.contains("model_path")
         && !lower.contains("tokenizer")
         && !lower.contains("preprocessor")
         && !lower.contains("loaded")
         && !lower.contains("runner")
+        && !lower.contains("breakdown")
+        && !lower.contains("performance statistics")
+        && !lower.contains("pytorchobserver")
+        && !lower.contains("generated tokens")
+        && !lower.contains("prompt tokens")
+        && !lower.contains("model load time")
+        && !lower.contains("inference time")
+        && !lower.contains("time to first")
+        && !lower.contains("sampling time")
+        && !lower.contains(" rate:")
+        && !lower.contains(" calls)")
+        && !lower.contains("avg:")
+        && !lower.contains("token_embedding")
+        && !lower.contains("text_decoder")
+        && !lower.contains("encode_audio_chunk")
+        && !lower.contains("metal init")
+        && !lower.contains("metal execute")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1432,6 +1478,23 @@ mod tests {
         assert_eq!(
             extract_executorch_transcript(output).as_deref(),
             Some("本日の東京の天気は晴れ。")
+        );
+    }
+
+    #[test]
+    fn extracts_executorch_transcript_before_inline_stats_log() {
+        let output = "\
+I 00:00:05.285460 executorch:wav_loader.h:307] Loaded 135168 audio samples
+本日の東京の天気は晴れ、最高気温は23度です。I 00:00:13.515908 executorch:stats.h:161] Generated Tokens: 112
+--- Metal Backend Performance Statistics ---
+  Per-method execute breakdown:
+    token_embedding: 51.5522 ms (119 calls) (avg: 0.433212 ms/call)
+--------------------------------------------
+";
+
+        assert_eq!(
+            extract_executorch_transcript(output).as_deref(),
+            Some("本日の東京の天気は晴れ、最高気温は23度です。")
         );
     }
 
