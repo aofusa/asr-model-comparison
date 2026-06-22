@@ -6,16 +6,21 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 const DEFAULT_LLAMA_MODEL_ID: &str = "mistralai/Voxtral-Mini-4B-Realtime-2602-GGUF";
+const DEFAULT_LLAMA_REPO_ID: &str = DEFAULT_LLAMA_MODEL_ID;
 const DEFAULT_CONTEXT_SIZE: u32 = 4096;
 const DEFAULT_BATCH_SIZE: u32 = 512;
 const DEFAULT_MAX_TOKENS: usize = 512;
 const DEFAULT_GPU_LAYERS: u32 = 999;
+const HF_SNAPSHOT_SEARCH_DEPTH: usize = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VoxtralLlamaCppConfig {
     pub model_path: Option<PathBuf>,
     pub mmproj_path: Option<PathBuf>,
     pub model_id: String,
+    pub repo_id: String,
+    pub model_file: Option<String>,
+    pub mmproj_file: Option<String>,
     pub context_size: u32,
     pub batch_size: u32,
     pub max_tokens: usize,
@@ -52,11 +57,22 @@ pub fn configure_voxtral_llamacpp(available_backends: &[HardwareBackend]) -> Vox
                 .iter()
                 .any(|backend| *backend != HardwareBackend::Cpu)
     });
+    let repo_id = env_string("AMCP_VOXTRAL_LLAMA_REPO_ID")
+        .unwrap_or_else(|| DEFAULT_LLAMA_REPO_ID.to_string());
+    let model_file = env_string("AMCP_VOXTRAL_LLAMA_MODEL_FILE");
+    let mmproj_file = env_string("AMCP_VOXTRAL_LLAMA_MMPROJ_FILE");
     VoxtralLlamaCppConfig {
-        model_path: env_path("AMCP_VOXTRAL_LLAMA_MODEL_PATH"),
-        mmproj_path: env_path("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH"),
+        model_path: env_path("AMCP_VOXTRAL_LLAMA_MODEL_PATH").or_else(|| {
+            resolve_hf_cached_gguf(&repo_id, model_file.as_deref(), LlamaCppGgufKind::TextModel)
+        }),
+        mmproj_path: env_path("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH").or_else(|| {
+            resolve_hf_cached_gguf(&repo_id, mmproj_file.as_deref(), LlamaCppGgufKind::Mmproj)
+        }),
         model_id: env_string("AMCP_VOXTRAL_LLAMA_MODEL_ID")
             .unwrap_or_else(|| DEFAULT_LLAMA_MODEL_ID.to_string()),
+        repo_id,
+        model_file,
+        mmproj_file,
         context_size: env_u32("AMCP_VOXTRAL_LLAMA_CONTEXT_SIZE")
             .unwrap_or(DEFAULT_CONTEXT_SIZE)
             .clamp(512, 262_144),
@@ -325,7 +341,7 @@ fn missing_config_error(
 ) -> String {
     format!(
         "Voxtral llama.cpp runtime is selected, but GGUF/mmproj files are not configured or missing. \
-Set AMCP_VOXTRAL_LLAMA_MODEL_PATH and AMCP_VOXTRAL_LLAMA_MMPROJ_PATH. \
+Set AMCP_VOXTRAL_LLAMA_MODEL_PATH and AMCP_VOXTRAL_LLAMA_MMPROJ_PATH, or cache them in Hugging Face Hub under AMCP_VOXTRAL_LLAMA_REPO_ID with optional AMCP_VOXTRAL_LLAMA_MODEL_FILE / AMCP_VOXTRAL_LLAMA_MMPROJ_FILE. \
 model_path={:?} model_exists={} mmproj_path={:?} mmproj_exists={}",
         config.model_path, validation.model_exists, config.mmproj_path, validation.mmproj_exists
     )
@@ -410,6 +426,122 @@ fn is_llamacpp_runtime(runtime: &str) -> bool {
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LlamaCppGgufKind {
+    TextModel,
+    Mmproj,
+}
+
+fn resolve_hf_cached_gguf(
+    repo_id: &str,
+    file_name: Option<&str>,
+    kind: LlamaCppGgufKind,
+) -> Option<PathBuf> {
+    let snapshot = existing_hf_snapshot_dir(repo_id)?;
+    if let Some(file_name) = file_name {
+        return find_hf_cached_file(&snapshot, HF_SNAPSHOT_SEARCH_DEPTH, &|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case(file_name))
+        })
+        .into_iter()
+        .next();
+    }
+
+    let candidates = find_hf_cached_file(&snapshot, HF_SNAPSHOT_SEARCH_DEPTH, &|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| is_llamacpp_gguf_name(name, kind))
+    });
+    if candidates.len() == 1 {
+        candidates.into_iter().next()
+    } else {
+        None
+    }
+}
+
+fn find_hf_cached_file(
+    root: &std::path::Path,
+    max_depth: usize,
+    predicate: &dyn Fn(&std::path::Path) -> bool,
+) -> Vec<PathBuf> {
+    let mut matches = Vec::new();
+    collect_hf_cached_files(root, max_depth, predicate, &mut matches);
+    matches.sort();
+    matches
+}
+
+fn collect_hf_cached_files(
+    root: &std::path::Path,
+    max_depth: usize,
+    predicate: &dyn Fn(&std::path::Path) -> bool,
+    matches: &mut Vec<PathBuf>,
+) {
+    if max_depth == 0 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_file() {
+            if predicate(&path) {
+                matches.push(path);
+            }
+        } else if path.is_dir() {
+            collect_hf_cached_files(&path, max_depth - 1, predicate, matches);
+        }
+    }
+}
+
+fn is_llamacpp_gguf_name(name: &str, kind: LlamaCppGgufKind) -> bool {
+    let lower = name.to_ascii_lowercase();
+    if !lower.ends_with(".gguf") {
+        return false;
+    }
+    let is_mmproj = lower.contains("mmproj") || lower.contains("mm-project");
+    match kind {
+        LlamaCppGgufKind::TextModel => !is_mmproj,
+        LlamaCppGgufKind::Mmproj => is_mmproj,
+    }
+}
+
+fn existing_hf_snapshot_dir(repo_id: &str) -> Option<PathBuf> {
+    let repo_dir = default_hf_repo_cache_dir(repo_id);
+    let revision = std::fs::read_to_string(repo_dir.join("refs").join("main")).ok()?;
+    let revision = revision.trim();
+    if revision.is_empty() {
+        return None;
+    }
+    let snapshot = repo_dir.join("snapshots").join(revision);
+    snapshot.is_dir().then_some(snapshot)
+}
+
+fn default_hf_repo_cache_dir(repo_id: &str) -> PathBuf {
+    default_hf_hub_cache_dir().join(format!("models--{}", repo_id.replace('/', "--")))
+}
+
+fn default_hf_hub_cache_dir() -> PathBuf {
+    if let Some(cache) = env_path("HF_HUB_CACHE") {
+        return cache;
+    }
+    let hf_home = env_path("HF_HOME").unwrap_or_else(|| {
+        env_path("XDG_CACHE_HOME")
+            .unwrap_or_else(default_user_cache_dir)
+            .join("huggingface")
+    });
+    hf_home.join("hub")
+}
+
+fn default_user_cache_dir() -> PathBuf {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".cache")
+}
+
 #[cfg(feature = "voxtral-llamacpp-native")]
 fn clean_model_output(text: &str) -> String {
     text.replace("[/INST]", "")
@@ -457,6 +589,12 @@ fn env_bool(key: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn routes_japanese_requests_to_llamacpp() {
@@ -488,6 +626,9 @@ mod tests {
             model_path: None,
             mmproj_path: None,
             model_id: DEFAULT_LLAMA_MODEL_ID.to_string(),
+            repo_id: DEFAULT_LLAMA_REPO_ID.to_string(),
+            model_file: None,
+            mmproj_file: None,
             context_size: DEFAULT_CONTEXT_SIZE,
             batch_size: DEFAULT_BATCH_SIZE,
             max_tokens: DEFAULT_MAX_TOKENS,
@@ -504,6 +645,35 @@ mod tests {
         assert!(
             missing_config_error(&config, &validation).contains("AMCP_VOXTRAL_LLAMA_MODEL_PATH")
         );
+    }
+
+    #[test]
+    fn resolves_gguf_and_mmproj_from_hf_cache() {
+        let _guard = env_lock().lock().unwrap();
+        let cache_root =
+            std::env::temp_dir().join(format!("amcp-voxtral-hf-cache-{}", std::process::id()));
+        let repo_dir = cache_root.join("models--example--voxtral-gguf");
+        let snapshot_dir = repo_dir.join("snapshots").join("abc123");
+        let _ = std::fs::remove_dir_all(&cache_root);
+        std::fs::create_dir_all(repo_dir.join("refs")).unwrap();
+        std::fs::create_dir_all(&snapshot_dir).unwrap();
+        std::fs::write(repo_dir.join("refs").join("main"), "abc123").unwrap();
+        let model_path = snapshot_dir.join("voxtral-q4_k_m.gguf");
+        let mmproj_path = snapshot_dir.join("mmproj-voxtral.gguf");
+        std::fs::write(&model_path, b"model").unwrap();
+        std::fs::write(&mmproj_path, b"mmproj").unwrap();
+
+        std::env::set_var("HF_HUB_CACHE", &cache_root);
+        std::env::remove_var("AMCP_VOXTRAL_LLAMA_MODEL_PATH");
+        std::env::remove_var("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH");
+        std::env::set_var("AMCP_VOXTRAL_LLAMA_REPO_ID", "example/voxtral-gguf");
+        let config = configure_voxtral_llamacpp(&[HardwareBackend::Cpu]);
+        std::env::remove_var("HF_HUB_CACHE");
+        std::env::remove_var("AMCP_VOXTRAL_LLAMA_REPO_ID");
+        let _ = std::fs::remove_dir_all(&cache_root);
+
+        assert_eq!(config.model_path.as_deref(), Some(model_path.as_path()));
+        assert_eq!(config.mmproj_path.as_deref(), Some(mmproj_path.as_path()));
     }
 
     #[test]

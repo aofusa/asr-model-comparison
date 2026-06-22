@@ -237,11 +237,24 @@ cd app
 npm run server:voxtral:llamacpp
 ```
 
+Hugging Faceの共通キャッシュを使う場合は、GGUFとmmprojを通常のHub cacheへ配置し、repo/file名だけを指定できます。明示pathが未設定の場合、`HF_HUB_CACHE`、`HF_HOME`、既定の `%USERPROFILE%\.cache\huggingface\hub` の順に参照します。
+
+```powershell
+$env:AMCP_VOXTRAL_RUNTIME="llamacpp"
+$env:AMCP_VOXTRAL_LLAMA_REPO_ID="mistralai/Voxtral-Mini-4B-Realtime-2602-GGUF"
+$env:AMCP_VOXTRAL_LLAMA_MODEL_FILE="Voxtral-Mini-4B-Realtime.gguf"
+$env:AMCP_VOXTRAL_LLAMA_MMPROJ_FILE="mmproj-Voxtral-Mini-4B-Realtime.gguf"
+npm run server:voxtral:llamacpp
+```
+
 主な環境変数:
 
 - `AMCP_VOXTRAL_RUNTIME=llamacpp`: Voxtralで組み込み `llama.cpp` runnerを明示的に使います。未指定でも `language=ja` または `target_language=ja` のVoxtral処理は `llama.cpp` へ回します。
-- `AMCP_VOXTRAL_LLAMA_MODEL_PATH`: Voxtral Realtimeのtext model GGUFです。必須です。
-- `AMCP_VOXTRAL_LLAMA_MMPROJ_PATH`: Voxtral Realtimeの音声encoder mmproj GGUFです。必須です。
+- `AMCP_VOXTRAL_LLAMA_MODEL_PATH`: Voxtral Realtimeのtext model GGUFです。未設定時はHF共通キャッシュを参照します。
+- `AMCP_VOXTRAL_LLAMA_MMPROJ_PATH`: Voxtral Realtimeの音声encoder mmproj GGUFです。未設定時はHF共通キャッシュを参照します。
+- `AMCP_VOXTRAL_LLAMA_REPO_ID`: HF共通キャッシュで参照するrepo IDです。既定は `mistralai/Voxtral-Mini-4B-Realtime-2602-GGUF` です。
+- `AMCP_VOXTRAL_LLAMA_MODEL_FILE`: repo snapshot内のtext GGUFファイル名です。未設定かつ候補が1つだけの場合は自動検出します。
+- `AMCP_VOXTRAL_LLAMA_MMPROJ_FILE`: repo snapshot内のmmproj GGUFファイル名です。未設定かつ候補が1つだけの場合は自動検出します。
 - `AMCP_VOXTRAL_LLAMA_GPU_LAYERS`: GPUへoffloadするlayer数です。既定は999で、可能な限りGPUへ寄せます。
 - `AMCP_VOXTRAL_LLAMA_CONTEXT_SIZE`: llama.cpp context sizeです。既定は4096です。
 - `AMCP_VOXTRAL_LLAMA_MAX_TOKENS`: llama.cpp生成トークン数です。未指定時は `AMCP_VOXTRAL_MAX_TOKENS`、それも未指定なら512です。

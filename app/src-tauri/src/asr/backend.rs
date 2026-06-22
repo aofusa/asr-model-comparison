@@ -515,6 +515,18 @@ fn voxtral_llamacpp_artifacts(
             true,
         ),
         RuntimeArtifactStatus {
+            name: "voxtral_llama_hf_repo".to_string(),
+            kind: RuntimeArtifactKind::Download,
+            path: Some(config.repo_id.clone()),
+            env_var: Some("AMCP_VOXTRAL_LLAMA_REPO_ID".to_string()),
+            required: false,
+            exists: config.model_path.is_some() || config.mmproj_path.is_some(),
+            note: Some(format!(
+                "uses the shared Hugging Face cache when explicit paths are unset; model_file={:?} mmproj_file={:?}",
+                config.model_file, config.mmproj_file
+            )),
+        },
+        RuntimeArtifactStatus {
             name: "voxtral_llama_vulkan".to_string(),
             kind: RuntimeArtifactKind::Command,
             path: Some(format!(
