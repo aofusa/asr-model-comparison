@@ -13,6 +13,7 @@ pub mod audio;
 pub mod backend;
 pub mod hybrid;
 pub mod qwen_candle;
+pub mod voxtral_mistralrs;
 pub mod voxtral_onnx;
 
 #[derive(Debug, Error)]
@@ -233,8 +234,6 @@ impl HybridModelManager {
 
         let started = Instant::now();
         let (accelerator, _) = self.prepare_model(&options).await?;
-        let runtime_backend =
-            backend::runtime_backend_kind(&options.model_id, &self.available_backends);
         let preprocessed = audio::load_and_preprocess_wav(audio)?;
         let previous = options.previous_text.as_deref().unwrap_or("").trim();
         let backend_result = if preprocessed.had_speech {
@@ -284,6 +283,12 @@ impl HybridModelManager {
             .translated_text
             .clone()
             .unwrap_or_else(|| translation.transcript_text.clone());
+        let runtime_backend = backend_result
+            .as_ref()
+            .and_then(|result| result.runtime_backend)
+            .unwrap_or_else(|| {
+                backend::runtime_backend_kind(&options.model_id, &self.available_backends)
+            });
 
         Ok(TranscriptionResult {
             model_id: options.model_id,

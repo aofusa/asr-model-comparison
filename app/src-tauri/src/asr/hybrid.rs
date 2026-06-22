@@ -1,7 +1,9 @@
 use super::audio::PreprocessedAudio;
+use super::backend::RuntimeBackendKind;
 use super::TranscriptionOptions;
 use crate::accelerator::HardwareBackend;
 use crate::asr::qwen_candle;
+use crate::asr::voxtral_mistralrs;
 use crate::asr::voxtral_onnx;
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +16,7 @@ pub struct BackendTranscription {
     pub translation_engine: Option<String>,
     pub language: Option<String>,
     pub chunks: Vec<serde_json::Value>,
+    pub runtime_backend: Option<RuntimeBackendKind>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -307,6 +310,7 @@ fn try_transcribe_qwen(
             "sample_rate": audio.sample_rate,
             "duration_seconds": audio.duration_seconds,
         })],
+        runtime_backend: Some(RuntimeBackendKind::QwenNative),
     }))
 }
 
@@ -315,6 +319,13 @@ fn try_transcribe_voxtral(
     options: &TranscriptionOptions,
     available_backends: &[HardwareBackend],
 ) -> Result<Option<BackendTranscription>, String> {
+    if voxtral_mistralrs::should_route_to_mistralrs(
+        options.language.as_deref(),
+        options.target_language.as_deref(),
+    ) {
+        return try_transcribe_voxtral_mistralrs(audio, options, available_backends);
+    }
+
     let Some(result) = voxtral_onnx::transcribe_voxtral_audio(
         audio,
         options.language.as_deref(),
@@ -345,6 +356,44 @@ fn try_transcribe_voxtral(
             "sample_rate": audio.sample_rate,
             "duration_seconds": audio.duration_seconds,
         })],
+        runtime_backend: Some(RuntimeBackendKind::VoxtralOnnx),
+    }))
+}
+
+fn try_transcribe_voxtral_mistralrs(
+    audio: &PreprocessedAudio,
+    options: &TranscriptionOptions,
+    available_backends: &[HardwareBackend],
+) -> Result<Option<BackendTranscription>, String> {
+    let Some(result) = voxtral_mistralrs::transcribe_voxtral_audio(
+        audio,
+        options.language.as_deref(),
+        options.target_language.as_deref(),
+        options.previous_text.as_deref(),
+        available_backends,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(BackendTranscription {
+        text: result
+            .translated_text
+            .clone()
+            .unwrap_or_else(|| result.transcript_text.clone()),
+        transcript_text: Some(result.transcript_text),
+        translated_text: result.translated_text,
+        target_language: result.target_language,
+        translation_engine: Some("voxtral-mistralrs".to_string()),
+        language: options.language.clone(),
+        chunks: vec![serde_json::json!({
+            "backend": "voxtral-mistralrs",
+            "model_id": result.model_id,
+            "url": result.url,
+            "sample_rate": audio.sample_rate,
+            "duration_seconds": audio.duration_seconds,
+        })],
+        runtime_backend: Some(RuntimeBackendKind::VoxtralMistralRs),
     }))
 }
 
@@ -422,6 +471,7 @@ fn try_transcribe_whisper(
         translation_engine: None,
         language: options.language.clone(),
         chunks,
+        runtime_backend: Some(RuntimeBackendKind::WhisperRs),
     }))
 }
 

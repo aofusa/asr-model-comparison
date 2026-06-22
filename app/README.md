@@ -223,6 +223,41 @@ npm run server:voxtral:cuda
 
 ONNX Runtimeの動的ライブラリを手動指定する場合は `ORT_DYLIB_PATH` を設定してください。旧式の `AMCP_VOXTRAL_ONNX_MODEL_PATH` は単一ONNXのセッション初期化確認用として残していますが、実推論には上記の分割モデル一式が必要です。
 
+### Voxtral mistral.rs日本語ランナー
+
+日本語音声認識、または日本語への翻訳をVoxtralで行う場合は、`mistral.rs` のローカルサーバーを外部runnerとして利用できます。現行の `onnx-community/Voxtral-Mini-3B-2507-ONNX` ORT経路は維持しますが、日本語ASR/日本語翻訳では `mistralai/Voxtral-Mini-4B-Realtime-2602` を扱うmistral.rs経路へルーティングします。
+
+例:
+
+```powershell
+# 別ターミナルでmistral.rsのOpenAI互換サーバーを起動
+mistralrs serve -m mistralai/Voxtral-Mini-4B-Realtime-2602 --port 1234
+
+# AMCP側
+$env:AMCP_VOXTRAL_RUNTIME="mistralrs"
+$env:AMCP_VOXTRAL_MISTRALRS_URL="http://127.0.0.1:1234"
+cd app
+npm run server:voxtral:mistralrs
+```
+
+主な環境変数:
+
+- `AMCP_VOXTRAL_RUNTIME=mistralrs`: Voxtralでmistral.rs runnerを明示的に使います。未指定でも `language=ja` または `target_language=ja` のVoxtral処理はmistral.rsへ回します。
+- `AMCP_VOXTRAL_MISTRALRS_URL`: ローカルmistral.rs serverのURLです。必須です。
+- `AMCP_VOXTRAL_MISTRALRS_MODEL_ID`: 診断表示用のモデルIDです。既定は `mistralai/Voxtral-Mini-4B-Realtime-2602` です。
+- `AMCP_VOXTRAL_MISTRALRS_API_MODEL`: OpenAI互換APIへ渡す `model` 名です。既定は `default` です。
+- `AMCP_VOXTRAL_MISTRALRS_MAX_TOKENS`: mistral.rs生成トークン数です。未指定時は `AMCP_VOXTRAL_MAX_TOKENS`、それも未指定なら512です。
+
+Windows AMD GPU環境ではmistral.rs側のビルド/起動オプションでGPU backendを有効化してください。AMCP側は `auto` / `gpu` / `cpu` の選択と診断表示を保持しますが、実際のGPU利用可否はmistral.rs server側の起動ログと設定に依存します。
+
+日本語サンプルで検証する場合:
+
+```powershell
+$env:AMCP_VOXTRAL_RUNTIME="mistralrs"
+$env:AMCP_VOXTRAL_MISTRALRS_URL="http://127.0.0.1:1234"
+npm run validate:windows:voxtral:mistralrs -- --audio "..\backend\tests\audio_samples\ja_01.mp3" --model-id voxtral-mini-4b --language ja --json
+```
+
 ## ビルド方法
 
 ### Windows配布用の単一exeを作成

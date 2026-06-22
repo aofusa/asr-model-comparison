@@ -37,7 +37,7 @@ qwen = [
     "dep:tokenizers",
 ]
 qwen-cuda = ["qwen", "candle-core/cuda", "candle-nn/cuda"]
-voxtral = ["dep:hf-hub", "dep:ndarray", "dep:ort", "dep:rustfft", "dep:tokenizers"]
+voxtral = ["dep:hf-hub", "dep:ndarray", "dep:ort", "dep:reqwest", "dep:rustfft", "dep:tokenizers"]
 voxtral-directml = ["voxtral", "ort/directml"]
 voxtral-cuda = ["voxtral", "ort/cuda"]
 
@@ -57,7 +57,7 @@ log = { version = "0.4", optional = true }
 mime_guess = "2"
 ndarray = { version = "0.17.2", optional = true }
 ort = { version = "2.0.0-rc.12", optional = true }
-reqwest = { version = "0.13.4", features = ["blocking", "rustls"], optional = true }
+reqwest = { version = "0.13.4", features = ["blocking", "json", "rustls"], optional = true }
 rubato = { version = "0.15", optional = true }
 rustfft = { version = "6.4.1", optional = true }
 safetensors = { version = "0.7.0", optional = true }

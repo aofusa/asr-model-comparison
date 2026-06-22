@@ -1,5 +1,6 @@
 use crate::accelerator::{HardwareBackend, ModelFamily};
 use crate::asr::qwen_candle;
+use crate::asr::voxtral_mistralrs;
 use crate::asr::voxtral_onnx;
 use crate::models::{available_models, family_for_model};
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,7 @@ pub enum RuntimeBackendKind {
     WhisperRs,
     QwenNative,
     VoxtralOnnx,
+    VoxtralMistralRs,
     Placeholder,
 }
 
@@ -150,6 +152,10 @@ fn voxtral_status(
     family: ModelFamily,
     available_backends: &[HardwareBackend],
 ) -> RuntimeBackendStatus {
+    if voxtral_mistralrs::is_mistralrs_requested() {
+        return voxtral_mistralrs_status(model_id, family, available_backends);
+    }
+
     let configured = cfg!(feature = "voxtral");
     let onnx_config = voxtral_onnx::configure_voxtral_onnx(available_backends);
     let artifacts = voxtral_artifacts(onnx_config.as_ref());
@@ -199,6 +205,41 @@ fn voxtral_status(
                 .to_string()
         } else if configured {
             "voxtral feature is enabled, but audio_encoder.onnx, embed_tokens.onnx, decoder_model_merged.onnx, and tokenizer.json are not fully configured."
+                .to_string()
+        } else {
+            "voxtral feature is not enabled; using placeholder inference.".to_string()
+        },
+    }
+}
+
+fn voxtral_mistralrs_status(
+    model_id: &str,
+    family: ModelFamily,
+    available_backends: &[HardwareBackend],
+) -> RuntimeBackendStatus {
+    let configured = cfg!(feature = "voxtral");
+    let config = voxtral_mistralrs::configure_voxtral_mistralrs(available_backends);
+    let url_configured = config.url.is_some();
+    let real_inference_available = configured && url_configured;
+    RuntimeBackendStatus {
+        model_id: model_id.to_string(),
+        family,
+        backend: if real_inference_available {
+            RuntimeBackendKind::VoxtralMistralRs
+        } else {
+            RuntimeBackendKind::Placeholder
+        },
+        real_inference_available,
+        configured,
+        selected_accelerators: config.providers.clone(),
+        artifacts: voxtral_mistralrs_artifacts(&config),
+        reason: if real_inference_available {
+            format!(
+                "voxtral feature is enabled and mistral.rs local server is configured for {}.",
+                config.model_id
+            )
+        } else if configured {
+            "voxtral feature is enabled, but AMCP_VOXTRAL_MISTRALRS_URL is not configured for the mistral.rs runtime."
                 .to_string()
         } else {
             "voxtral feature is not enabled; using placeholder inference.".to_string()
@@ -439,6 +480,40 @@ fn voxtral_artifacts(
     ]
 }
 
+fn voxtral_mistralrs_artifacts(
+    config: &voxtral_mistralrs::VoxtralMistralRsConfig,
+) -> Vec<RuntimeArtifactStatus> {
+    vec![
+        RuntimeArtifactStatus {
+            name: "voxtral_runtime".to_string(),
+            kind: RuntimeArtifactKind::Command,
+            path: voxtral_mistralrs::voxtral_runtime_preference(),
+            env_var: Some("AMCP_VOXTRAL_RUNTIME".to_string()),
+            required: false,
+            exists: voxtral_mistralrs::is_mistralrs_requested(),
+            note: Some("set to 'mistralrs' to force the mistral.rs runtime".to_string()),
+        },
+        RuntimeArtifactStatus {
+            name: "voxtral_mistralrs_url".to_string(),
+            kind: RuntimeArtifactKind::Command,
+            path: config.url.clone(),
+            env_var: Some("AMCP_VOXTRAL_MISTRALRS_URL".to_string()),
+            required: true,
+            exists: config.url.is_some(),
+            note: Some("local mistral.rs OpenAI-compatible server URL".to_string()),
+        },
+        RuntimeArtifactStatus {
+            name: "voxtral_mistralrs_model".to_string(),
+            kind: RuntimeArtifactKind::Download,
+            path: Some(config.model_id.clone()),
+            env_var: Some("AMCP_VOXTRAL_MISTRALRS_MODEL_ID".to_string()),
+            required: false,
+            exists: true,
+            note: Some("mistral.rs resolves this model in its own cache".to_string()),
+        },
+    ]
+}
+
 fn file_artifact(
     name: &str,
     path: &std::path::Path,
@@ -523,6 +598,12 @@ fn filter_backends(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn reports_placeholder_for_unconfigured_qwen() {
@@ -564,6 +645,9 @@ mod tests {
 
     #[test]
     fn reports_voxtral_artifact_requirements() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::remove_var("AMCP_VOXTRAL_RUNTIME");
+        std::env::remove_var("AMCP_VOXTRAL_MISTRALRS_URL");
         let status = runtime_backend_status("voxtral-mini-4b", &[HardwareBackend::Cpu]);
 
         assert_eq!(status.family, ModelFamily::Voxtral);
@@ -573,5 +657,28 @@ mod tests {
             .any(|artifact| artifact.name == "voxtral_audio_encoder"
                 || artifact.env_var.as_deref() == Some("AMCP_VOXTRAL_MODEL_DIR")));
         assert!(status.artifacts.iter().any(|artifact| artifact.required));
+    }
+
+    #[test]
+    fn reports_voxtral_mistralrs_runtime_when_requested() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var("AMCP_VOXTRAL_RUNTIME", "mistralrs");
+        std::env::set_var("AMCP_VOXTRAL_MISTRALRS_URL", "http://127.0.0.1:1234");
+        let status = runtime_backend_status("voxtral-mini-4b", &[HardwareBackend::Vulkan]);
+        std::env::remove_var("AMCP_VOXTRAL_RUNTIME");
+        std::env::remove_var("AMCP_VOXTRAL_MISTRALRS_URL");
+
+        if cfg!(feature = "voxtral") {
+            assert_eq!(status.backend, RuntimeBackendKind::VoxtralMistralRs);
+        } else {
+            assert_eq!(status.backend, RuntimeBackendKind::Placeholder);
+        }
+        assert!(status
+            .selected_accelerators
+            .contains(&HardwareBackend::Vulkan));
+        assert!(status
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.env_var.as_deref() == Some("AMCP_VOXTRAL_MISTRALRS_URL")));
     }
 }
