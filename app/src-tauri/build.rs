@@ -55,6 +55,7 @@ fn build_voxtral_realtime_bridge() {
         lib_dir.join("src"),
         lib_dir.join("tools").join("mtmd"),
         lib_dir.join("ggml").join("src"),
+        lib_dir.join("ggml").join("src").join("ggml-vulkan"),
         lib_dir.join("bin"),
     ] {
         if search_dir.is_dir() {
@@ -69,7 +70,15 @@ fn build_voxtral_realtime_bridge() {
     }
     let link_vulkan = env::var("AMCP_VOXTRAL_PATCHED_LLAMA_LINK_VULKAN")
         .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-        .unwrap_or_else(|_| lib_dir.join("ggml-vulkan.lib").exists());
+        .unwrap_or_else(|_| {
+            lib_dir.join("ggml-vulkan.lib").exists()
+                || lib_dir
+                    .join("ggml")
+                    .join("src")
+                    .join("ggml-vulkan")
+                    .join("ggml-vulkan.lib")
+                    .exists()
+        });
     if link_vulkan {
         println!("cargo:rustc-link-lib=dylib=ggml-vulkan");
     }

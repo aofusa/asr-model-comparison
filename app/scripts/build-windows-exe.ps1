@@ -24,18 +24,21 @@ function Set-DefaultEnvPath {
 function Initialize-VoxtralPatchedLlamaEnv {
     $script:voxtralPatchedBinDir = $null
     $patchedRoot = Join-Path $repoRoot ".tmp\llama-cpp-voxtral-pr20638"
+    $shortVulkanBuild = "C:\amcp-build\llama-vulkan"
     $patchedVulkanBuild = Join-Path $patchedRoot "build-amcp-vulkan-release"
     $patchedCpuBuild = Join-Path $patchedRoot "build-amcp-cpu-release"
-    $patchedBuild = if (Test-Path (Join-Path $patchedVulkanBuild "bin\ggml-vulkan.dll")) {
+    $patchedBuild = if (Test-Path (Join-Path $shortVulkanBuild "bin\ggml-vulkan.dll")) {
+        $shortVulkanBuild
+    } elseif (Test-Path (Join-Path $patchedVulkanBuild "bin\ggml-vulkan.dll")) {
         $patchedVulkanBuild
     } else {
         $patchedCpuBuild
     }
     $patchedBin = Join-Path $patchedBuild "bin"
 
-    Set-DefaultEnvPath -Name "AMCP_VOXTRAL_PATCHED_LLAMA_DIR" -Path $patchedRoot
-    Set-DefaultEnvPath -Name "AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR" -Path $patchedBuild
-    Set-DefaultEnvPath -Name "AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR" -Path $patchedBin
+    [Environment]::SetEnvironmentVariable("AMCP_VOXTRAL_PATCHED_LLAMA_DIR", (Resolve-Path $patchedRoot).Path, "Process")
+    [Environment]::SetEnvironmentVariable("AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR", (Resolve-Path $patchedBuild).Path, "Process")
+    [Environment]::SetEnvironmentVariable("AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR", (Resolve-Path $patchedBin).Path, "Process")
     if (Test-Path $patchedBin) {
         $script:voxtralPatchedBinDir = (Resolve-Path $patchedBin).Path
     }

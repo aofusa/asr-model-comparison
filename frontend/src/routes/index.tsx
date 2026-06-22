@@ -144,7 +144,17 @@ function formatBackendLabel(backend: unknown): string | null {
   return value ? value.toUpperCase() : null;
 }
 
-function formatCurrentAccelerator(status: BackendStatus | null): string {
+function formatCurrentAccelerator(status: BackendStatus | null, modelId?: string): string {
+  const selectedModelStatus = modelId ? getModelPreparationStatus(status, modelId) : null;
+  if (selectedModelStatus?.loaded_backend) {
+    return formatBackendLabel(selectedModelStatus.loaded_backend) ?? String(selectedModelStatus.loaded_backend).toUpperCase();
+  }
+  if (selectedModelStatus?.selected_accelerators?.length) {
+    return selectedModelStatus.selected_accelerators
+      .map((backend) => String(backend).trim().toUpperCase())
+      .filter(Boolean)
+      .join(', ');
+  }
   if (!status || !('loaded_backend' in status)) {
     return 'Not reported by this backend';
   }
@@ -332,7 +342,7 @@ function getPcmStats(samples: Float32Array): { rms: number; peak: number } {
 
 function isAudiblePcm(samples: Float32Array): boolean {
   const stats = getPcmStats(samples);
-  return stats.rms >= 0.006 || stats.peak >= 0.03;
+  return stats.rms >= 0.002 || stats.peak >= 0.01;
 }
 
 function splitAccumulatedForPartial(accumulatedText: string, latestText: string): { finalText: string; partialText: string } {
@@ -558,6 +568,7 @@ export default component$(() => {
     pcmProcessor: null as NoSerialize<ScriptProcessorNode> | null,
     pcmChunks: null as NoSerialize<Float32Array[]> | null,
     pcmSampleCount: 0,
+    asrReady: false,
     volumeRaf: null as number | null,
     reconnectNow: null as NoSerialize<((isReconnect?: boolean) => void | Promise<void>)> | null,
     intentionalStop: false,
@@ -595,7 +606,7 @@ export default component$(() => {
       const data = await response.json() as BackendStatus;
       acceleratorStatus.value = data;
       acceleratorStatusMessage.value = formatDetectedAccelerators(data);
-      currentAcceleratorMessage.value = formatCurrentAccelerator(data);
+      currentAcceleratorMessage.value = formatCurrentAccelerator(data, selectedModel.value);
     } catch {
       acceleratorStatus.value = null;
       acceleratorStatusMessage.value = 'Not reported by this backend';
@@ -699,6 +710,7 @@ export default component$(() => {
     console.log('[connectWebSocket] creating WS to', wsUrl);
     const ws = new WebSocket(wsUrl);
     refs.ws = noSerialize(ws);
+    refs.asrReady = false;
     modelReady.value = false;
     modelProgress.phase = 'connecting';
     modelProgress.message = 'Connecting to ASR server.';
@@ -769,6 +781,7 @@ export default component$(() => {
 
       if (data.type === 'ready') {
         console.log('[WS] received ready from server, model:', data.model_id);
+        refs.asrReady = true;
         modelReady.value = true;
         modelProgress.phase = 'ready';
         modelProgress.message = 'Model is loaded and ready.';
@@ -789,7 +802,7 @@ export default component$(() => {
               if (nextStatus) {
                 acceleratorStatus.value = nextStatus;
                 acceleratorStatusMessage.value = formatDetectedAccelerators(nextStatus);
-                currentAcceleratorMessage.value = formatCurrentAccelerator(nextStatus);
+                currentAcceleratorMessage.value = formatCurrentAccelerator(nextStatus, selectedModel.value);
               }
             })
             .catch(() => {});
@@ -945,6 +958,7 @@ export default component$(() => {
       if (refs.ws !== ws) {
         return;
       }
+      refs.asrReady = false;
       modelReady.value = false;
       status.value = 'Connection error';
       if (isRecording.value) {
@@ -956,6 +970,7 @@ export default component$(() => {
       if (refs.ws !== ws) {
         return;
       }
+      refs.asrReady = false;
       modelReady.value = false;
       const wasRecording = isRecording.value;
       if (refs.intentionalStop) {
@@ -1037,6 +1052,9 @@ export default component$(() => {
   const startPcmChunkStreaming = $((stream: MediaStream) => {
     try {
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      if (audioContext.state === 'suspended') {
+        void audioContext.resume();
+      }
       const source = audioContext.createMediaStreamSource(stream);
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
       const sampleRate = audioContext.sampleRate;
@@ -1049,7 +1067,7 @@ export default component$(() => {
       refs.pcmSampleCount = 0;
 
       processor.onaudioprocess = (event) => {
-        if (!isRecording.value || !modelReady.value || !refs.ws || refs.ws.readyState !== WebSocket.OPEN) {
+        if (!isRecording.value || !refs.asrReady || !refs.ws || refs.ws.readyState !== WebSocket.OPEN) {
           return;
         }
         if (currentChunkStatus.value === 'processing') {
@@ -1143,6 +1161,7 @@ export default component$(() => {
     const audioSourceLabel = getAudioSourceLabel(audioSource);
     reconnectAttempts.value = 0;
     modelReady.value = false;
+    refs.asrReady = false;
     status.value = `Requesting ${audioSourceLabel}...`;
 
     // Belt-and-suspenders for flaky Qwik reactivity in static client-render:
@@ -1202,7 +1221,7 @@ export default component$(() => {
       if (!usingPcm) {
         refs.mediaRecorder = noSerialize(new MediaRecorder(stream));
         refs.mediaRecorder.ondataavailable = async (event) => {
-          if (event.data.size > 0 && modelReady.value && refs.ws && refs.ws.readyState === WebSocket.OPEN) {
+          if (event.data.size > 0 && refs.asrReady && refs.ws && refs.ws.readyState === WebSocket.OPEN) {
             if (currentChunkStatus.value === 'processing') {
               return;
             }
@@ -1242,6 +1261,7 @@ export default component$(() => {
     isRecording.value = false;
     isReconnecting.value = false;
     modelReady.value = false;
+    refs.asrReady = false;
 
     if (refs.mediaRecorder) {
       refs.mediaRecorder.stop();
@@ -1334,6 +1354,7 @@ export default component$(() => {
         const audioSourceLabel = getAudioSourceLabel(audioSource);
         reconnectAttempts.value = 0;
         modelReady.value = false;
+        refs.asrReady = false;
         setStatusDom(`Requesting ${audioSourceLabel}...`);
         const startBtn = document.querySelector('[data-testid="start-recording"]') as HTMLButtonElement | null;
         if (startBtn) startBtn.disabled = true;
@@ -1375,7 +1396,7 @@ export default component$(() => {
           if (!usingPcm) {
             refs.mediaRecorder = noSerialize(new MediaRecorder(stream));
             refs.mediaRecorder.ondataavailable = async (event) => {
-              if (event.data.size > 0 && modelReady.value && refs.ws && (refs.ws.readyState === WebSocket.OPEN || refs.ws.readyState === 1)) {
+              if (event.data.size > 0 && refs.asrReady && refs.ws && (refs.ws.readyState === WebSocket.OPEN || refs.ws.readyState === 1)) {
                 if (currentChunkStatus.value === 'processing') {
                   return;
                 }
@@ -1421,6 +1442,7 @@ export default component$(() => {
         isRecording.value = false;
         isReconnecting.value = false;
         modelReady.value = false;
+        refs.asrReady = false;
         stopPcmFn();
         if (refs.micStream) {
           try { refs.micStream.getTracks().forEach(track => track.stop()); } catch {}
@@ -1795,7 +1817,7 @@ export default component$(() => {
                   Detected accelerators: {acceleratorStatusMessage.value}
                 </span>
                 <span class="accelerator-current" data-testid="current-accelerator">
-                  Current accelerator: {currentAcceleratorMessage.value}
+                  Current accelerator: {modelReady.value ? currentAcceleratorMessage.value : formatCurrentAccelerator(acceleratorStatus.value, selectedModel.value)}
                 </span>
               </div>
             </details>

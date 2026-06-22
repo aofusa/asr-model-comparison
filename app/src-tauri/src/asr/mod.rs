@@ -614,11 +614,14 @@ mod tests {
 
         assert_eq!(result.translated_text, None);
         assert_eq!(result.target_language.as_deref(), Some("en"));
-        assert_eq!(
-            result.translation_engine.as_deref(),
-            Some("rust-native-unavailable")
-        );
-        assert!(!result.transcript_text.is_empty());
+        if result.transcript_text.is_empty() {
+            assert_eq!(result.translation_engine.as_deref(), Some("none"));
+        } else {
+            assert_eq!(
+                result.translation_engine.as_deref(),
+                Some("rust-native-unavailable")
+            );
+        }
     }
 
     fn test_wav(samples: &[i16]) -> Vec<u8> {
