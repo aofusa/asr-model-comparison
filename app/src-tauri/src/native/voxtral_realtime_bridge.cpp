@@ -100,6 +100,40 @@ static bool amcp_tokenize_prompt(const llama_vocab * vocab, const char * prompt,
     return !tokens.empty();
 }
 
+static std::string amcp_apply_translation_chat_template(llama_model * model, const char * prompt) {
+    const char * tmpl = llama_model_chat_template(model, nullptr);
+    if (!tmpl) {
+        return prompt;
+    }
+
+    const llama_chat_message messages[] = {
+        {
+            "system",
+            "You are a precise translation engine. Return only the translated text, with no explanation.",
+        },
+        { "user", prompt },
+    };
+
+    int32_t size = llama_chat_apply_template(tmpl, messages, 2, true, nullptr, 0);
+    if (size <= 0) {
+        return prompt;
+    }
+
+    std::string formatted(static_cast<size_t>(size), '\0');
+    const int32_t written = llama_chat_apply_template(
+        tmpl,
+        messages,
+        2,
+        true,
+        formatted.data(),
+        size);
+    if (written <= 0) {
+        return prompt;
+    }
+    formatted.resize(static_cast<size_t>(written));
+    return formatted;
+}
+
 extern "C" int32_t amcp_voxtral_realtime_transcribe(
     const char * model_path,
     const char * mmproj_path,
@@ -245,8 +279,9 @@ extern "C" int32_t amcp_voxtral_realtime_generate_text(
     }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
+    const std::string formatted_prompt = amcp_apply_translation_chat_template(model, prompt);
     std::vector<llama_token> prompt_tokens;
-    if (!amcp_tokenize_prompt(vocab, prompt, prompt_tokens)) {
+    if (!amcp_tokenize_prompt(vocab, formatted_prompt.c_str(), prompt_tokens)) {
         llama_free(lctx);
         llama_model_free(model);
         amcp_set_error(out_error, "failed to tokenize Voxtral Realtime text prompt");
@@ -262,27 +297,34 @@ extern "C" int32_t amcp_voxtral_realtime_generate_text(
         return result;
     }
 
+    llama_sampler_chain_params sampler_params = llama_sampler_chain_default_params();
+    sampler_params.no_perf = true;
+    llama_sampler * sampler = llama_sampler_chain_init(sampler_params);
+    if (!sampler) {
+        llama_free(lctx);
+        llama_model_free(model);
+        amcp_set_error(out_error, "failed to create Voxtral Realtime text sampler");
+        return -5;
+    }
+    llama_sampler_chain_add(sampler, llama_sampler_init_penalties(64, 1.15f, 0.0f, 0.0f));
+    llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
+    llama_sampler_chain_add(sampler, llama_sampler_init_top_p(0.90f, 1));
+    llama_sampler_chain_add(sampler, llama_sampler_init_temp(0.30f));
+    llama_sampler_chain_add(sampler, llama_sampler_init_dist(1234));
+    for (const llama_token token : prompt_tokens) {
+        llama_sampler_accept(sampler, token);
+    }
+
     std::vector<llama_token> output_tokens;
     output_tokens.reserve(max_tokens);
     for (uint32_t i = 0; i < max_tokens; ++i) {
-        const float * logits = llama_get_logits_ith(lctx, -1);
-        if (!logits) {
+        const llama_token token = llama_sampler_sample(sampler, lctx, -1);
+        if (llama_vocab_is_eog(vocab, token)) {
             break;
         }
-        const int32_t n_vocab = llama_vocab_n_tokens(vocab);
-        llama_token best_token = 0;
-        float best_logit = logits[0];
-        for (int32_t token = 1; token < n_vocab; ++token) {
-            if (logits[token] > best_logit) {
-                best_logit = logits[token];
-                best_token = token;
-            }
-        }
-        if (llama_vocab_is_eog(vocab, best_token)) {
-            break;
-        }
-        output_tokens.push_back(best_token);
-        std::vector<llama_token> next = { best_token };
+        llama_sampler_accept(sampler, token);
+        output_tokens.push_back(token);
+        std::vector<llama_token> next = { token };
         result = amcp_eval_tokens(lctx, next, 1, &n_past);
         if (result != 0) {
             break;
@@ -290,6 +332,7 @@ extern "C" int32_t amcp_voxtral_realtime_generate_text(
     }
 
     *out_text = amcp_dup_cstr(amcp_detokenize(vocab, output_tokens));
+    llama_sampler_free(sampler);
     llama_free(lctx);
     llama_model_free(model);
     return *out_text ? 0 : -5;

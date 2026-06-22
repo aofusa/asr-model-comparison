@@ -174,7 +174,7 @@ pub fn transcribe_voxtral_audio(
         let instruction =
             translation_prompt(language, target_language, &transcript_text, previous_text);
         let translated = run_llamacpp_text_generation(&config, &instruction)?;
-        if translated.is_empty() || is_low_quality_translation(&translated) {
+        if translated.is_empty() || is_low_quality_translation(&translated, target_language) {
             None
         } else {
             Some(translated)
@@ -723,10 +723,23 @@ fn clean_model_output(text: &str) -> String {
     feature = "voxtral-llamacpp-native",
     feature = "voxtral-llamacpp-realtime-patched"
 ))]
-fn is_low_quality_translation(text: &str) -> bool {
+fn is_low_quality_translation(text: &str, target_language: &str) -> bool {
     let text = text.trim();
     if text.is_empty() || text.contains('\u{fffd}') {
         return true;
+    }
+    match target_language {
+        "zh" => {
+            if !text.chars().any(is_cjk_unified_ideograph) {
+                return true;
+            }
+        }
+        "ko" => {
+            if !text.chars().any(is_hangul_syllable) {
+                return true;
+            }
+        }
+        _ => {}
     }
     let words: Vec<&str> = text.split_whitespace().collect();
     if words.len() < 8 {
@@ -743,6 +756,22 @@ fn is_low_quality_translation(text: &str) -> bool {
         })
         .count();
     repeated_small_words >= 2
+}
+
+#[cfg(any(
+    feature = "voxtral-llamacpp-native",
+    feature = "voxtral-llamacpp-realtime-patched"
+))]
+fn is_cjk_unified_ideograph(ch: char) -> bool {
+    ('\u{4e00}'..='\u{9fff}').contains(&ch)
+}
+
+#[cfg(any(
+    feature = "voxtral-llamacpp-native",
+    feature = "voxtral-llamacpp-realtime-patched"
+))]
+fn is_hangul_syllable(ch: char) -> bool {
+    ('\u{ac00}'..='\u{d7af}').contains(&ch)
 }
 
 fn max_tokens() -> usize {
