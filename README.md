@@ -166,6 +166,56 @@ Invoke-WebRequest http://127.0.0.1:8000/
 New-NetFirewallRule -DisplayName "AMCP Rust Server 8000" -Direction Inbound -Program (Resolve-Path .\dist\AMCP.exe) -Action Allow -Protocol TCP -LocalPort 8000 -Profile Private
 ```
 
+### Rust/Tauri版 macOSアプリをビルドする場合
+
+macOS / Apple Silicon向けRust/Tauri版は `full-runtime-macos` featureでビルドします。WhisperはMetal、Qwen3-ASRはCandle Metal、Voxtralはpatched llama.cpp Metalを優先し、利用できない経路はCPUへフォールバックします。既存Windows向けの `full-runtime` / `full-runtime-cuda` とはfeatureを分けています。
+Whisper MetalやVoxtral patched llama.cppのネイティブビルドにはCMakeが必要です。`build:macos:app` は `MACOSX_DEPLOYMENT_TARGET=11.0` を既定で設定します。
+
+```bash
+cd app
+npm run build:macos:app
+```
+
+成果物:
+
+```text
+app/dist/AMCP-macos
+app/dist/AMCP.app
+app/dist/web/
+```
+
+Voxtral RealtimeをMetalで使う場合は、パッチ済み `llama.cpp` をMetal有効で共有ライブラリビルドし、`AMCP_VOXTRAL_PATCHED_LLAMA_DIR` と `AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR` を指定してください。
+
+```bash
+cd app
+cmake -S ../.tmp/llama-cpp-voxtral-pr20638 \
+  -B ../.tmp/llama-cpp-voxtral-pr20638/build-amcp-metal-release \
+  -DGGML_METAL=ON \
+  -DBUILD_SHARED_LIBS=ON \
+  -DGGML_BACKEND_DL=ON
+cmake --build ../.tmp/llama-cpp-voxtral-pr20638/build-amcp-metal-release --config Release
+
+export AMCP_VOXTRAL_PATCHED_LLAMA_DIR="$(cd ../.tmp/llama-cpp-voxtral-pr20638 && pwd)"
+export AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR="$(cd ../.tmp/llama-cpp-voxtral-pr20638/build-amcp-metal-release && pwd)"
+export AMCP_VOXTRAL_PATCHED_LLAMA_LINK_METAL=1
+npm run build:macos:app
+```
+
+Voxtral patched runtimeをまだ用意していない場合でも、Whisper/QwenのMetal検証はできます。
+
+```bash
+AMCP_MACOS_FEATURES=desktop,whisper-metal,qwen-metal npm run build:macos:app
+```
+
+macOSで日本語サンプル音声を使って実モデル検証する例:
+
+```bash
+cd app
+npm run validate:macos:whisper -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id whisper-tiny --language ja --json
+npm run validate:macos:qwen -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id qwen3-asr-0.6b --language ja --json
+AMCP_VOXTRAL_RUNTIME=llamacpp npm run validate:macos:voxtral -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id voxtral-mini-4b --language ja --json
+```
+
 ## リアルタイム利用のための推奨設定（日本語）
 
 日本語で高精度なリアルタイム認識を行う場合、Qwen3-ASR または Voxtral を選択し、以下の設定を推奨します。Whisper は軽量検証や比較用として有用ですが、本プロジェクトでは Qwen3-ASR / Voxtral を主軸にしています。

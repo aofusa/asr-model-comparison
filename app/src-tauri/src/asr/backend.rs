@@ -85,11 +85,11 @@ fn whisper_status(
     if cfg!(feature = "whisper-cuda") {
         selected_accelerators.push(HardwareBackend::Cuda);
     }
+    if cfg!(feature = "whisper-metal") {
+        selected_accelerators.push(HardwareBackend::Metal);
+    }
     if cfg!(feature = "whisper-vulkan") {
         selected_accelerators.push(HardwareBackend::Vulkan);
-    }
-    if cfg!(any(target_os = "macos", target_os = "ios")) {
-        selected_accelerators.push(HardwareBackend::Metal);
     }
     selected_accelerators.push(HardwareBackend::Cpu);
     let selected_accelerators = filter_backends(available_backends, &selected_accelerators);
@@ -183,8 +183,13 @@ fn voxtral_llamacpp_status(
         artifacts: voxtral_llamacpp_artifacts(&config),
         reason: if real_inference_available {
             format!(
-                "voxtral-llamacpp feature is enabled and Voxtral GGUF/mmproj files are configured for {}. Vulkan acceleration is {}. Patched Voxtral Realtime bridge is {}.",
+                "voxtral-llamacpp feature is enabled and Voxtral GGUF/mmproj files are configured for {}. Metal acceleration is {}. Vulkan acceleration is {}. Patched Voxtral Realtime bridge is {}.",
                 config.model_id,
+                if cfg!(feature = "voxtral-realtime-metal") {
+                    "compiled in"
+                } else {
+                    "not compiled in"
+                },
                 if cfg!(any(
                     feature = "voxtral-llamacpp-vulkan",
                     feature = "voxtral-realtime-vulkan"
@@ -451,6 +456,21 @@ fn voxtral_llamacpp_artifacts(
                 "uses the shared Hugging Face cache when explicit paths are unset; model_file={:?} mmproj_file={:?}",
                 config.model_file, config.mmproj_file
             )),
+        },
+        RuntimeArtifactStatus {
+            name: "voxtral_llama_metal".to_string(),
+            kind: RuntimeArtifactKind::Command,
+            path: Some(format!(
+                "feature=voxtral-realtime-metal use_gpu={} n_gpu_layers={}",
+                config.use_gpu, config.n_gpu_layers
+            )),
+            env_var: Some("AMCP_VOXTRAL_PATCHED_LLAMA_LINK_METAL".to_string()),
+            required: false,
+            exists: cfg!(feature = "voxtral-realtime-metal"),
+            note: Some(
+                "patched llama.cpp Metal build requires libggml-metal.dylib or embedded Metal support at build time"
+                    .to_string(),
+            ),
         },
         RuntimeArtifactStatus {
             name: "voxtral_llama_vulkan".to_string(),

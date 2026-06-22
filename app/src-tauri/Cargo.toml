@@ -23,8 +23,10 @@ default = []
 desktop = ["dep:tauri"]
 full-runtime = ["desktop", "whisper-vulkan", "qwen", "voxtral-realtime-vulkan"]
 full-runtime-cuda = ["desktop", "whisper-cuda", "qwen-cuda", "voxtral-realtime-vulkan"]
+full-runtime-macos = ["desktop", "whisper-metal", "qwen-metal", "voxtral-realtime-metal"]
 whisper = ["dep:hf-hub", "dep:reqwest", "dep:whisper-rs"]
 whisper-cuda = ["whisper", "whisper-rs/cuda"]
+whisper-metal = ["whisper", "whisper-rs/metal"]
 whisper-vulkan = ["whisper", "whisper-rs/vulkan"]
 qwen = [
     "dep:candle-core",
@@ -39,7 +41,9 @@ qwen = [
     "dep:tokenizers",
 ]
 qwen-cuda = ["qwen", "candle-core/cuda", "candle-nn/cuda"]
+qwen-metal = ["qwen", "candle-core/metal", "candle-nn/metal"]
 voxtral = ["voxtral-llamacpp-realtime-patched"]
+voxtral-realtime-metal = ["voxtral"]
 voxtral-realtime-vulkan = ["voxtral"]
 voxtral-llamacpp = ["dep:hf-hub"]
 voxtral-llamacpp-native = ["voxtral-llamacpp", "dep:llama-cpp-4"]

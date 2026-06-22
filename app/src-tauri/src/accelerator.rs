@@ -368,7 +368,7 @@ fn prioritized_plan_for_os(
             HardwareBackend::Cpu,
         ],
         ("macos", ModelFamily::Qwen3) => vec![HardwareBackend::Metal, HardwareBackend::Cpu],
-        ("macos", ModelFamily::Voxtral) => vec![HardwareBackend::Vulkan, HardwareBackend::Cpu],
+        ("macos", ModelFamily::Voxtral) => vec![HardwareBackend::Metal, HardwareBackend::Cpu],
         ("windows", ModelFamily::Whisper) => vec![
             HardwareBackend::Cuda,
             HardwareBackend::Vulkan,
@@ -427,19 +427,25 @@ fn runtime_supported_backends(family: ModelFamily) -> Vec<HardwareBackend> {
             if cfg!(feature = "whisper-cuda") {
                 supported.push(HardwareBackend::Cuda);
             }
+            if cfg!(feature = "whisper-metal") {
+                supported.push(HardwareBackend::Metal);
+            }
             if cfg!(feature = "whisper-vulkan") {
                 supported.push(HardwareBackend::Vulkan);
-            }
-            if cfg!(any(target_os = "macos", target_os = "ios")) {
-                supported.push(HardwareBackend::Metal);
             }
         }
         ModelFamily::Qwen3 => {
             if cfg!(feature = "qwen-cuda") {
                 supported.push(HardwareBackend::Cuda);
             }
+            if cfg!(feature = "qwen-metal") {
+                supported.push(HardwareBackend::Metal);
+            }
         }
         ModelFamily::Voxtral => {
+            if cfg!(feature = "voxtral-realtime-metal") {
+                supported.push(HardwareBackend::Metal);
+            }
             if cfg!(any(
                 feature = "voxtral-llamacpp-vulkan",
                 feature = "voxtral-realtime-vulkan"
@@ -503,7 +509,7 @@ mod tests {
         );
         assert_eq!(
             prioritized_plan_for_os("macos", ModelFamily::Voxtral, AcceleratorPreference::Auto),
-            vec![HardwareBackend::Vulkan, HardwareBackend::Cpu]
+            vec![HardwareBackend::Metal, HardwareBackend::Cpu]
         );
     }
 
@@ -549,7 +555,11 @@ mod tests {
         let selected = select_accelerator(
             ModelFamily::Voxtral,
             AcceleratorPreference::Auto,
-            &[HardwareBackend::Vulkan, HardwareBackend::DirectMl, HardwareBackend::Cpu],
+            &[
+                HardwareBackend::Vulkan,
+                HardwareBackend::DirectMl,
+                HardwareBackend::Cpu,
+            ],
         );
 
         if cfg!(any(

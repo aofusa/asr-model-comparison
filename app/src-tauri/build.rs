@@ -11,7 +11,10 @@ fn build_voxtral_realtime_bridge() {
     use std::env;
     use std::path::PathBuf;
 
-    let source_dir = env_path("AMCP_VOXTRAL_PATCHED_LLAMA_DIR", "patched llama.cpp source root");
+    let source_dir = env_path(
+        "AMCP_VOXTRAL_PATCHED_LLAMA_DIR",
+        "patched llama.cpp source root",
+    );
     let lib_dir = env_path(
         "AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR",
         "patched llama.cpp library directory",
@@ -37,6 +40,7 @@ fn build_voxtral_realtime_bridge() {
     println!("cargo:rerun-if-env-changed=AMCP_VOXTRAL_PATCHED_LLAMA_DIR");
     println!("cargo:rerun-if-env-changed=AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR");
     println!("cargo:rerun-if-env-changed=AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR");
+    println!("cargo:rerun-if-env-changed=AMCP_VOXTRAL_PATCHED_LLAMA_LINK_METAL");
     println!("cargo:rerun-if-env-changed=AMCP_VOXTRAL_PATCHED_LLAMA_LINK_VULKAN");
     println!("cargo:rerun-if-changed=src/native/voxtral_realtime_bridge.cpp");
 
@@ -55,6 +59,7 @@ fn build_voxtral_realtime_bridge() {
         lib_dir.join("src"),
         lib_dir.join("tools").join("mtmd"),
         lib_dir.join("ggml").join("src"),
+        lib_dir.join("ggml").join("src").join("ggml-metal"),
         lib_dir.join("ggml").join("src").join("ggml-vulkan"),
         lib_dir.join("bin"),
     ] {
@@ -82,6 +87,26 @@ fn build_voxtral_realtime_bridge() {
     if link_vulkan {
         println!("cargo:rustc-link-lib=dylib=ggml-vulkan");
     }
+    let link_metal = env::var("AMCP_VOXTRAL_PATCHED_LLAMA_LINK_METAL")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or_else(|_| {
+            lib_dir.join("libggml-metal.dylib").exists()
+                || lib_dir.join("bin").join("libggml-metal.dylib").exists()
+                || lib_dir
+                    .join("ggml")
+                    .join("src")
+                    .join("ggml-metal")
+                    .join("libggml-metal.dylib")
+                    .exists()
+        });
+    if link_metal {
+        println!("cargo:rustc-link-lib=dylib=ggml-metal");
+        if cfg!(target_os = "macos") {
+            println!("cargo:rustc-link-lib=framework=Metal");
+            println!("cargo:rustc-link-lib=framework=Foundation");
+            println!("cargo:rustc-link-lib=framework=Accelerate");
+        }
+    }
 
     if cfg!(target_os = "windows") {
         if let Some(bin_dir) = bin_dir {
@@ -102,10 +127,12 @@ fn env_path(name: &str, description: &str) -> std::path::PathBuf {
 
 fn copy_voxtral_realtime_dlls(bin_dir: &std::path::Path, link_vulkan: bool) {
     let out_dir = env_path("OUT_DIR", "Cargo build output directory");
-    let profile_dir = out_dir
-        .ancestors()
-        .nth(3)
-        .unwrap_or_else(|| panic!("failed to resolve Cargo profile dir from {}", out_dir.display()));
+    let profile_dir = out_dir.ancestors().nth(3).unwrap_or_else(|| {
+        panic!(
+            "failed to resolve Cargo profile dir from {}",
+            out_dir.display()
+        )
+    });
 
     let mut dlls = vec![
         "llama.dll",

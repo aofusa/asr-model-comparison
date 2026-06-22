@@ -7,10 +7,7 @@
     "beforeDevCommand": "npm --prefix ../frontend run dev",
     "devUrl": "http://localhost:5173",
     "beforeBuildCommand": "npm --prefix ../frontend run build",
-    "frontendDist": "../../frontend/dist",
-    "features": [
-      "full-runtime"
-    ]
+    "frontendDist": "../../frontend/dist"
   },
   "app": {
     "withGlobalTauri": true,
@@ -22,6 +19,9 @@
   "bundle": {
     "active": false,
     "targets": [],
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
     "icon": [
       "icons/icon.ico"
     ]

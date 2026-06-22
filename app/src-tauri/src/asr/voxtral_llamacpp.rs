@@ -57,10 +57,11 @@ pub struct VoxtralLlamaCppTranscription {
 pub fn configure_voxtral_llamacpp(available_backends: &[HardwareBackend]) -> VoxtralLlamaCppConfig {
     let providers = llamacpp_provider_plan(available_backends);
     let use_gpu = env_bool("AMCP_VOXTRAL_LLAMA_USE_GPU").unwrap_or_else(|| {
-        cfg!(any(
-            feature = "voxtral-llamacpp-vulkan",
-            feature = "voxtral-realtime-vulkan"
-        )) && runtime_vulkan_available()
+        (cfg!(feature = "voxtral-realtime-metal") && runtime_metal_available()
+            || cfg!(any(
+                feature = "voxtral-llamacpp-vulkan",
+                feature = "voxtral-realtime-vulkan"
+            )) && runtime_vulkan_available())
             && providers
                 .iter()
                 .any(|backend| *backend != HardwareBackend::Cpu)
@@ -147,11 +148,19 @@ pub fn should_route_to_llamacpp_with_runtime(
 
 pub fn llamacpp_provider_plan(available_backends: &[HardwareBackend]) -> Vec<HardwareBackend> {
     let mut providers = Vec::new();
+    let include_metal = cfg!(feature = "voxtral-realtime-metal") && runtime_metal_available();
     let include_vulkan = cfg!(any(
         feature = "voxtral-llamacpp-vulkan",
         feature = "voxtral-realtime-vulkan"
     )) && runtime_vulkan_available();
-    for backend in [HardwareBackend::Vulkan, HardwareBackend::Cpu] {
+    for backend in [
+        HardwareBackend::Metal,
+        HardwareBackend::Vulkan,
+        HardwareBackend::Cpu,
+    ] {
+        if backend == HardwareBackend::Metal && !include_metal {
+            continue;
+        }
         if backend == HardwareBackend::Vulkan && !include_vulkan {
             continue;
         }
@@ -840,6 +849,26 @@ fn runtime_vulkan_available() -> bool {
             .unwrap_or(false)
 }
 
+fn runtime_metal_available() -> bool {
+    env_bool("AMCP_VOXTRAL_PATCHED_LLAMA_LINK_METAL").unwrap_or(false)
+        || std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|dir| dir.join("libggml-metal.dylib")))
+            .is_some_and(|path| path.is_file())
+        || env_path("AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR")
+            .map(|dir| {
+                dir.join("libggml-metal.dylib").is_file()
+                    || dir.join("bin").join("libggml-metal.dylib").is_file()
+                    || dir
+                        .join("ggml")
+                        .join("src")
+                        .join("ggml-metal")
+                        .join("libggml-metal.dylib")
+                        .is_file()
+            })
+            .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -899,6 +928,23 @@ mod tests {
         assert!(
             missing_config_error(&config, &validation).contains("AMCP_VOXTRAL_LLAMA_MODEL_PATH")
         );
+    }
+
+    #[test]
+    fn provider_plan_prefers_metal_when_compiled_and_available() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var("AMCP_VOXTRAL_PATCHED_LLAMA_LINK_METAL", "1");
+        let providers = llamacpp_provider_plan(&[HardwareBackend::Metal, HardwareBackend::Cpu]);
+        std::env::remove_var("AMCP_VOXTRAL_PATCHED_LLAMA_LINK_METAL");
+
+        if cfg!(feature = "voxtral-realtime-metal") {
+            assert_eq!(
+                providers,
+                vec![HardwareBackend::Metal, HardwareBackend::Cpu]
+            );
+        } else {
+            assert_eq!(providers, vec![HardwareBackend::Cpu]);
+        }
     }
 
     #[test]

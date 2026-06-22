@@ -121,6 +121,46 @@ Invoke-WebRequest http://127.0.0.1:8000/
 New-NetFirewallRule -DisplayName "AMCP Rust Server 8000" -Direction Inbound -Program (Resolve-Path .\dist\AMCP.exe) -Action Allow -Protocol TCP -LocalPort 8000 -Profile Private
 ```
 
+### Rust/Tauri版 macOS / Apple Silicon
+
+macOS向けのTauriビルドは `app/` の `npm run build:macos:app` を使う。`full-runtime-macos` featureで Whisper Metal、Qwen3-ASR Candle Metal、Voxtral Realtime patched llama.cpp Metal を優先し、利用できない場合はCPUへ安全にフォールバックする。Windows向け `full-runtime` / `full-runtime-cuda` とはfeatureを分け、WindowsのVulkan/CUDA経路を壊さないこと。
+Whisper Metal / patched llama.cpp のネイティブビルドにはCMakeが必要。`build:macos:app` は `MACOSX_DEPLOYMENT_TARGET=11.0` を既定で設定する。
+
+```bash
+cd app
+npm run build:macos:app
+```
+
+Voxtral RealtimeのMetal実推論を含める場合は、パッチ済み `llama.cpp` をMetal有効で共有ライブラリビルドし、同じシェルでsource/buildを指定する。
+
+```bash
+cmake -S ../.tmp/llama-cpp-voxtral-pr20638 \
+  -B ../.tmp/llama-cpp-voxtral-pr20638/build-amcp-metal-release \
+  -DGGML_METAL=ON \
+  -DBUILD_SHARED_LIBS=ON \
+  -DGGML_BACKEND_DL=ON
+cmake --build ../.tmp/llama-cpp-voxtral-pr20638/build-amcp-metal-release --config Release
+
+export AMCP_VOXTRAL_PATCHED_LLAMA_DIR="$(cd ../.tmp/llama-cpp-voxtral-pr20638 && pwd)"
+export AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR="$(cd ../.tmp/llama-cpp-voxtral-pr20638/build-amcp-metal-release && pwd)"
+export AMCP_VOXTRAL_PATCHED_LLAMA_LINK_METAL=1
+npm run build:macos:app
+```
+
+Whisper/QwenのみをMetalで検証し、Voxtral patched runtimeがまだない場合は以下のfeature overrideを使う。
+
+```bash
+AMCP_MACOS_FEATURES=desktop,whisper-metal,qwen-metal npm run build:macos:app
+```
+
+実モデル検証は必ず日本語サンプル音声で行う。
+
+```bash
+npm run validate:macos:whisper -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id whisper-tiny --language ja --json
+npm run validate:macos:qwen -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id qwen3-asr-0.6b --language ja --json
+AMCP_VOXTRAL_RUNTIME=llamacpp npm run validate:macos:voxtral -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id voxtral-mini-4b --language ja --json
+```
+
 ## アーキテクチャ
 
 **バックエンド:** FastAPI が以下の2つのAPIエンドポイントを提供します:

@@ -28,4 +28,5 @@
 | 15 | 機能 | 未着手 | 配布用 `AMCP.exe` に実推論featureを同梱し、Whisper/Qwen3-ASR/Voxtralをplaceholderではなく実ランタイムで起動できるビルド構成を整備する。 | 現在の通常 `npm run build:windows:exe` 成果物はfeatureなしビルドのため、サンプル音声は前処理とAPI契約確認は可能だが `runtime_backend=placeholder` になる。実推論配布にはfeature選択、DLL同梱、モデル配置、サイズ/起動時間検証が必要。 |
 | 16 | 機能 | 未着手 | Qwen/Voxtralのネイティブランナー内部ロード詳細進捗をUI/ログへ反映する。 | 現在はRust側のフェーズ進捗とログを出す。外部/ネイティブ実装が独自に出す細かなロード率や内部ログの取り込みは未実装。 |
 | 17 | 検証 | 未着手 | Android/iOS/macOS/Linuxを含むクロスプラットフォーム実機検証を行う。 | モバイル/クロスプラットフォームのビルド導線と優先アクセラレータ設計はあるが、実機でのマイク/共有音声取得、モデル配置、バイナリサイズ、権限設定、GPU/専用アクセラレータ動作確認が必要。 |
+| 18 | 機能 | 完了 | Rust/Tauri版 `app/` をmacOS Apple Siliconに対応し、Whisper/Qwen/Voxtralで可能な限りMetal等のアクセラレータを使う。 | macOS用feature、ビルドスクリプト、Metal優先選択、実モデル検証手順を追加。Whisper/Qwen Metalの実音声検証とWhisper/Qwen構成のmacOS Tauriビルドを確認済み。Voxtral Metalはpatched llama.cpp配置後に有効化する。仕様は `docs/backlog/features/backlog-18-macos-tauri-acceleration.md` に記載。 |
 

@@ -153,9 +153,7 @@ pub fn qwen_backend_plan(available_backends: &[HardwareBackend]) -> Vec<Hardware
     if cfg!(feature = "qwen-cuda") && available_backends.contains(&HardwareBackend::Cuda) {
         backends.push(HardwareBackend::Cuda);
     }
-    if cfg!(any(target_os = "macos", target_os = "ios"))
-        && available_backends.contains(&HardwareBackend::Metal)
-    {
+    if cfg!(feature = "qwen-metal") && available_backends.contains(&HardwareBackend::Metal) {
         backends.push(HardwareBackend::Metal);
     }
     backends.push(HardwareBackend::Cpu);
@@ -498,7 +496,21 @@ fn qwen_device(backends: &[HardwareBackend]) -> candle_core::Device {
             return device;
         }
     }
+    if backends.contains(&HardwareBackend::Metal) {
+        #[cfg(feature = "qwen-metal")]
+        if let Some(device) = qwen_metal_device() {
+            return device;
+        }
+    }
     candle_core::Device::Cpu
+}
+
+#[cfg(feature = "qwen-metal")]
+fn qwen_metal_device() -> Option<candle_core::Device> {
+    std::panic::catch_unwind(|| candle_core::Device::metal_if_available(0))
+        .ok()
+        .and_then(Result::ok)
+        .filter(|device| !device.is_cpu())
 }
 
 #[cfg(feature = "qwen")]
@@ -622,7 +634,7 @@ mod tests {
         } else {
             assert!(!backends.contains(&HardwareBackend::Cuda));
         }
-        if cfg!(any(target_os = "macos", target_os = "ios")) {
+        if cfg!(feature = "qwen-metal") {
             assert!(backends.contains(&HardwareBackend::Metal));
         } else {
             assert!(!backends.contains(&HardwareBackend::Metal));
