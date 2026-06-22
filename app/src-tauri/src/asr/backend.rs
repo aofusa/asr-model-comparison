@@ -1,6 +1,6 @@
 use crate::accelerator::{HardwareBackend, ModelFamily};
 use crate::asr::qwen_candle;
-use crate::asr::voxtral_onnx;
+use crate::asr::voxtral_llamacpp;
 use crate::models::{available_models, family_for_model};
 use serde::{Deserialize, Serialize};
 
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 pub enum RuntimeBackendKind {
     WhisperRs,
     QwenNative,
-    VoxtralOnnx,
+    VoxtralLlamaCpp,
     Placeholder,
 }
 
@@ -150,58 +150,60 @@ fn voxtral_status(
     family: ModelFamily,
     available_backends: &[HardwareBackend],
 ) -> RuntimeBackendStatus {
-    let configured = cfg!(feature = "voxtral");
-    let onnx_config = voxtral_onnx::configure_voxtral_onnx(available_backends);
-    let artifacts = voxtral_artifacts(onnx_config.as_ref());
-    let split_files_available = onnx_config
-        .as_ref()
-        .map(|config| {
-            [
-                config.audio_encoder_path.as_ref(),
-                config.embed_tokens_path.as_ref(),
-                config.decoder_path.as_ref(),
-                config.tokenizer_path.as_ref(),
-            ]
-            .into_iter()
-            .all(|path| path.map(|path| path.is_file()).unwrap_or(false))
-        })
-        .unwrap_or(false);
-    let real_inference_available = configured && split_files_available;
+    voxtral_llamacpp_status(model_id, family, available_backends)
+}
+
+fn voxtral_llamacpp_status(
+    model_id: &str,
+    family: ModelFamily,
+    available_backends: &[HardwareBackend],
+) -> RuntimeBackendStatus {
+    let configured = cfg!(any(
+        feature = "voxtral-llamacpp-native",
+        feature = "voxtral-llamacpp-realtime-patched"
+    ));
+    let config = voxtral_llamacpp::configure_voxtral_llamacpp(available_backends);
+    let validation = voxtral_llamacpp::validate_voxtral_llamacpp_config(&config);
+    let real_inference_available = configured && validation.configured;
     RuntimeBackendStatus {
         model_id: model_id.to_string(),
         family,
         backend: if real_inference_available {
-            RuntimeBackendKind::VoxtralOnnx
+            RuntimeBackendKind::VoxtralLlamaCpp
         } else {
             RuntimeBackendKind::Placeholder
         },
         real_inference_available,
         configured,
-        selected_accelerators: onnx_config
-            .as_ref()
-            .map(|config| config.providers.clone())
-            .unwrap_or_else(|| {
-                filter_backends(
-                    available_backends,
-                    &[
-                        HardwareBackend::Cuda,
-                        HardwareBackend::DirectMl,
-                        HardwareBackend::CoreMl,
-                        HardwareBackend::NnApi,
-                        HardwareBackend::Vulkan,
-                        HardwareBackend::Cpu,
-                    ],
-                )
-            }),
-        artifacts,
+        selected_accelerators: config.providers.clone(),
+        artifacts: voxtral_llamacpp_artifacts(&config),
         reason: if real_inference_available {
-            "voxtral feature is enabled and Voxtral split ONNX/tokenizer files are configured."
+            format!(
+                "voxtral-llamacpp feature is enabled and Voxtral GGUF/mmproj files are configured for {}. Vulkan acceleration is {}. Patched Voxtral Realtime bridge is {}.",
+                config.model_id,
+                if cfg!(feature = "voxtral-llamacpp-vulkan") {
+                    "compiled in"
+                } else {
+                    "not compiled in"
+                },
+                if cfg!(feature = "voxtral-llamacpp-realtime-patched") {
+                    "compiled in"
+                } else {
+                    "not compiled in"
+                }
+            )
+        } else if configured && cfg!(feature = "voxtral-llamacpp-realtime-patched") {
+            "voxtral-llamacpp-realtime-patched feature is enabled, but AMCP_VOXTRAL_LLAMA_MODEL_PATH and AMCP_VOXTRAL_LLAMA_MMPROJ_PATH are not fully configured."
+                .to_string()
+        } else if configured && cfg!(feature = "voxtral-llamacpp-vulkan") {
+            "voxtral-llamacpp-vulkan feature is enabled, but AMCP_VOXTRAL_LLAMA_MODEL_PATH and AMCP_VOXTRAL_LLAMA_MMPROJ_PATH are not fully configured."
                 .to_string()
         } else if configured {
-            "voxtral feature is enabled, but audio_encoder.onnx, embed_tokens.onnx, decoder_model_merged.onnx, and tokenizer.json are not fully configured."
+            "voxtral-llamacpp feature is enabled, but AMCP_VOXTRAL_LLAMA_MODEL_PATH and AMCP_VOXTRAL_LLAMA_MMPROJ_PATH are not fully configured. Enable voxtral-llamacpp-vulkan for Vulkan acceleration."
                 .to_string()
         } else {
-            "voxtral feature is not enabled; using placeholder inference.".to_string()
+            "voxtral-llamacpp-native feature is not enabled; using placeholder inference."
+                .to_string()
         },
     }
 }
@@ -401,41 +403,67 @@ fn default_user_cache_dir() -> std::path::PathBuf {
         .join(".cache")
 }
 
-fn voxtral_artifacts(
-    config: Option<&voxtral_onnx::VoxtralOnnxConfig>,
+fn voxtral_llamacpp_artifacts(
+    config: &voxtral_llamacpp::VoxtralLlamaCppConfig,
 ) -> Vec<RuntimeArtifactStatus> {
-    let Some(config) = config else {
-        return vec![missing_env(
-            "voxtral_model_dir",
-            RuntimeArtifactKind::Directory,
-            "AMCP_VOXTRAL_MODEL_DIR",
-        )];
-    };
     vec![
+        RuntimeArtifactStatus {
+            name: "voxtral_runtime".to_string(),
+            kind: RuntimeArtifactKind::Command,
+            path: voxtral_llamacpp::voxtral_runtime_preference(),
+            env_var: Some("AMCP_VOXTRAL_RUNTIME".to_string()),
+            required: false,
+            exists: voxtral_llamacpp::is_llamacpp_requested(),
+            note: Some("set to 'llamacpp' to force the embedded llama.cpp runtime".to_string()),
+        },
         optional_file_artifact(
-            "voxtral_audio_encoder",
-            config.audio_encoder_path.as_ref(),
-            Some("AMCP_VOXTRAL_AUDIO_ENCODER_PATH"),
+            "voxtral_llama_model",
+            config.model_path.as_ref(),
+            Some("AMCP_VOXTRAL_LLAMA_MODEL_PATH"),
             true,
         ),
         optional_file_artifact(
-            "voxtral_embed_tokens",
-            config.embed_tokens_path.as_ref(),
-            Some("AMCP_VOXTRAL_EMBED_TOKENS_PATH"),
+            "voxtral_llama_mmproj",
+            config.mmproj_path.as_ref(),
+            Some("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH"),
             true,
         ),
-        optional_file_artifact(
-            "voxtral_decoder",
-            config.decoder_path.as_ref(),
-            Some("AMCP_VOXTRAL_DECODER_PATH"),
-            true,
-        ),
-        optional_file_artifact(
-            "voxtral_tokenizer",
-            config.tokenizer_path.as_ref(),
-            Some("AMCP_VOXTRAL_TOKENIZER_PATH"),
-            true,
-        ),
+        RuntimeArtifactStatus {
+            name: "voxtral_llama_hf_repo".to_string(),
+            kind: RuntimeArtifactKind::Download,
+            path: Some(config.repo_id.clone()),
+            env_var: Some("AMCP_VOXTRAL_LLAMA_REPO_ID".to_string()),
+            required: false,
+            exists: config.model_path.is_some() || config.mmproj_path.is_some(),
+            note: Some(format!(
+                "uses the shared Hugging Face cache when explicit paths are unset; model_file={:?} mmproj_file={:?}",
+                config.model_file, config.mmproj_file
+            )),
+        },
+        RuntimeArtifactStatus {
+            name: "voxtral_llama_vulkan".to_string(),
+            kind: RuntimeArtifactKind::Command,
+            path: Some(format!(
+                "feature=voxtral-llamacpp-vulkan use_gpu={} n_gpu_layers={}",
+                config.use_gpu, config.n_gpu_layers
+            )),
+            env_var: Some("AMCP_VOXTRAL_LLAMA_GPU_LAYERS".to_string()),
+            required: false,
+            exists: cfg!(feature = "voxtral-llamacpp-vulkan"),
+            note: Some("llama-cpp-4 Vulkan feature requires Vulkan SDK at build time".to_string()),
+        },
+        RuntimeArtifactStatus {
+            name: "voxtral_llama_realtime_patched".to_string(),
+            kind: RuntimeArtifactKind::Command,
+            path: Some("feature=voxtral-llamacpp-realtime-patched".to_string()),
+            env_var: Some("AMCP_VOXTRAL_PATCHED_LLAMA_DIR".to_string()),
+            required: false,
+            exists: cfg!(feature = "voxtral-llamacpp-realtime-patched"),
+            note: Some(
+                "links a patched llama.cpp build that exports Voxtral Realtime dual-stream mtmd helpers"
+                    .to_string(),
+            ),
+        },
     ]
 }
 
@@ -493,18 +521,6 @@ fn optional_file_artifact(
     }
 }
 
-fn missing_env(name: &str, kind: RuntimeArtifactKind, env_var: &str) -> RuntimeArtifactStatus {
-    RuntimeArtifactStatus {
-        name: name.to_string(),
-        kind,
-        path: None,
-        env_var: Some(env_var.to_string()),
-        required: true,
-        exists: false,
-        note: Some("environment variable is not configured".to_string()),
-    }
-}
-
 fn filter_backends(
     available_backends: &[HardwareBackend],
     preferred: &[HardwareBackend],
@@ -523,6 +539,12 @@ fn filter_backends(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn reports_placeholder_for_unconfigured_qwen() {
@@ -564,6 +586,10 @@ mod tests {
 
     #[test]
     fn reports_voxtral_artifact_requirements() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::remove_var("AMCP_VOXTRAL_RUNTIME");
+        std::env::remove_var("AMCP_VOXTRAL_LLAMA_MODEL_PATH");
+        std::env::remove_var("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH");
         let status = runtime_backend_status("voxtral-mini-4b", &[HardwareBackend::Cpu]);
 
         assert_eq!(status.family, ModelFamily::Voxtral);
@@ -573,5 +599,26 @@ mod tests {
             .any(|artifact| artifact.name == "voxtral_audio_encoder"
                 || artifact.env_var.as_deref() == Some("AMCP_VOXTRAL_MODEL_DIR")));
         assert!(status.artifacts.iter().any(|artifact| artifact.required));
+    }
+
+    #[test]
+    fn reports_voxtral_llamacpp_runtime_when_requested() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var("AMCP_VOXTRAL_RUNTIME", "llamacpp");
+        std::env::set_var("AMCP_VOXTRAL_LLAMA_MODEL_PATH", "missing-model.gguf");
+        std::env::set_var("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH", "missing-mmproj.gguf");
+        let status = runtime_backend_status("voxtral-mini-4b", &[HardwareBackend::Vulkan]);
+        std::env::remove_var("AMCP_VOXTRAL_RUNTIME");
+        std::env::remove_var("AMCP_VOXTRAL_LLAMA_MODEL_PATH");
+        std::env::remove_var("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH");
+
+        assert_eq!(status.backend, RuntimeBackendKind::Placeholder);
+        assert!(status
+            .selected_accelerators
+            .contains(&HardwareBackend::Vulkan));
+        assert!(status
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.env_var.as_deref() == Some("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH")));
     }
 }

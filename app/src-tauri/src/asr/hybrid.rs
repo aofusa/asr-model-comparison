@@ -1,8 +1,9 @@
 use super::audio::PreprocessedAudio;
+use super::backend::RuntimeBackendKind;
 use super::TranscriptionOptions;
 use crate::accelerator::HardwareBackend;
 use crate::asr::qwen_candle;
-use crate::asr::voxtral_onnx;
+use crate::asr::voxtral_llamacpp;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,6 +15,7 @@ pub struct BackendTranscription {
     pub translation_engine: Option<String>,
     pub language: Option<String>,
     pub chunks: Vec<serde_json::Value>,
+    pub runtime_backend: Option<RuntimeBackendKind>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,43 +171,19 @@ fn prepare_qwen_assets(
 fn prepare_voxtral_assets(
     available_backends: &[HardwareBackend],
 ) -> Result<Vec<BackendAssetProgress>, String> {
+    let config = voxtral_llamacpp::configure_voxtral_llamacpp(available_backends);
+    let validation = voxtral_llamacpp::validate_voxtral_llamacpp_config(&config);
     let mut events = vec![BackendAssetProgress {
         phase: "voxtral_paths".to_string(),
-        message: "Resolving Voxtral ONNX split model files.".to_string(),
+        message: "Resolving Voxtral Realtime GGUF and mmproj files.".to_string(),
         progress: Some(48),
         bytes_downloaded: None,
         total_bytes: None,
     }];
 
-    if let Some(model_dir) = voxtral_onnx::ensure_default_voxtral_model_cached()? {
-        events.push(BackendAssetProgress {
-            phase: "voxtral_cache".to_string(),
-            message: format!(
-                "Voxtral ONNX assets are ready in Hugging Face cache: {}.",
-                model_dir.display()
-            ),
-            progress: Some(50),
-            bytes_downloaded: None,
-            total_bytes: None,
-        });
-    }
-
-    let Some(config) = voxtral_onnx::configure_voxtral_onnx(available_backends) else {
-        events.push(BackendAssetProgress {
-            phase: "voxtral_missing".to_string(),
-            message: "Voxtral is not configured; set AMCP_VOXTRAL_MODEL_DIR or split ONNX path variables.".to_string(),
-            progress: Some(50),
-            bytes_downloaded: None,
-            total_bytes: None,
-        });
-        return Ok(events);
-    };
-
     for (phase, path) in [
-        ("voxtral_audio_encoder", config.audio_encoder_path.as_ref()),
-        ("voxtral_embed_tokens", config.embed_tokens_path.as_ref()),
-        ("voxtral_decoder", config.decoder_path.as_ref()),
-        ("voxtral_tokenizer", config.tokenizer_path.as_ref()),
+        ("voxtral_llama_model", config.model_path.as_ref()),
+        ("voxtral_llama_mmproj", config.mmproj_path.as_ref()),
     ] {
         events.push(BackendAssetProgress {
             phase: phase.to_string(),
@@ -219,32 +197,19 @@ fn prepare_voxtral_assets(
     }
 
     events.push(BackendAssetProgress {
-        phase: "voxtral_session_metadata".to_string(),
-        message: "Loading Voxtral ONNX sessions to verify input/output metadata.".to_string(),
+        phase: "voxtral_runtime".to_string(),
+        message: if validation.configured {
+            format!(
+                "Voxtral Realtime patched llama.cpp runtime is configured for {}.",
+                config.model_id
+            )
+        } else {
+            "Voxtral Realtime GGUF/mmproj files are missing; set AMCP_VOXTRAL_LLAMA_* or use the Hugging Face cache.".to_string()
+        },
         progress: Some(56),
         bytes_downloaded: None,
         total_bytes: None,
     });
-    match voxtral_onnx::validate_voxtral_session(&config) {
-        Ok(info) => events.push(BackendAssetProgress {
-            phase: "voxtral_session_ready".to_string(),
-            message: format!(
-                "Voxtral ONNX sessions validated: {} inputs, {} outputs.",
-                info.inputs.len(),
-                info.outputs.len()
-            ),
-            progress: Some(58),
-            bytes_downloaded: None,
-            total_bytes: None,
-        }),
-        Err(error) => events.push(BackendAssetProgress {
-            phase: "voxtral_validation_error".to_string(),
-            message: error,
-            progress: Some(58),
-            bytes_downloaded: None,
-            total_bytes: None,
-        }),
-    }
 
     Ok(events)
 }
@@ -307,6 +272,7 @@ fn try_transcribe_qwen(
             "sample_rate": audio.sample_rate,
             "duration_seconds": audio.duration_seconds,
         })],
+        runtime_backend: Some(RuntimeBackendKind::QwenNative),
     }))
 }
 
@@ -315,7 +281,15 @@ fn try_transcribe_voxtral(
     options: &TranscriptionOptions,
     available_backends: &[HardwareBackend],
 ) -> Result<Option<BackendTranscription>, String> {
-    let Some(result) = voxtral_onnx::transcribe_voxtral_audio(
+    try_transcribe_voxtral_llamacpp(audio, options, available_backends)
+}
+
+fn try_transcribe_voxtral_llamacpp(
+    audio: &PreprocessedAudio,
+    options: &TranscriptionOptions,
+    available_backends: &[HardwareBackend],
+) -> Result<Option<BackendTranscription>, String> {
+    let Some(result) = voxtral_llamacpp::transcribe_voxtral_audio(
         audio,
         options.language.as_deref(),
         options.target_language.as_deref(),
@@ -334,17 +308,18 @@ fn try_transcribe_voxtral(
         transcript_text: Some(result.transcript_text),
         translated_text: result.translated_text,
         target_language: result.target_language,
-        translation_engine: Some("voxtral-onnx".to_string()),
+        translation_engine: Some("voxtral-llamacpp".to_string()),
         language: options.language.clone(),
         chunks: vec![serde_json::json!({
-            "backend": "voxtral-onnx",
-            "audio_encoder_path": result.audio_encoder_path,
-            "decoder_path": result.decoder_path,
-            "audio_frames": result.audio_frames,
-            "generated_tokens": result.generated_tokens,
+            "backend": "voxtral-llamacpp",
+            "model_id": result.model_id,
+            "model_path": result.model_path,
+            "mmproj_path": result.mmproj_path,
+            "n_gpu_layers": result.n_gpu_layers,
             "sample_rate": audio.sample_rate,
             "duration_seconds": audio.duration_seconds,
         })],
+        runtime_backend: Some(RuntimeBackendKind::VoxtralLlamaCpp),
     }))
 }
 
@@ -422,6 +397,7 @@ fn try_transcribe_whisper(
         translation_engine: None,
         language: options.language.clone(),
         chunks,
+        runtime_backend: Some(RuntimeBackendKind::WhisperRs),
     }))
 }
 
@@ -664,9 +640,8 @@ pub mod qwen_candle_backend {
 }
 
 #[cfg(feature = "voxtral")]
-pub mod voxtral_onnx_backend {
-    //! Integration point for ONNX Runtime via `ort`.
+pub mod voxtral_llamacpp_backend {
+    //! Integration point for patched Voxtral Realtime llama.cpp / libmtmd.
     //!
-    //! Provider priority should prefer CUDA on Windows/Linux and CoreML on
-    //! Apple Silicon, with CPU execution provider as the final fallback.
+    //! All Voxtral requests use this in-process runtime.
 }
