@@ -368,25 +368,21 @@ fn prioritized_plan_for_os(
             HardwareBackend::Cpu,
         ],
         ("macos", ModelFamily::Qwen3) => vec![HardwareBackend::Metal, HardwareBackend::Cpu],
-        ("macos", ModelFamily::Voxtral) => vec![HardwareBackend::CoreMl, HardwareBackend::Cpu],
+        ("macos", ModelFamily::Voxtral) => vec![HardwareBackend::Vulkan, HardwareBackend::Cpu],
         ("windows", ModelFamily::Whisper) => vec![
             HardwareBackend::Cuda,
             HardwareBackend::Vulkan,
             HardwareBackend::Cpu,
         ],
         ("windows", ModelFamily::Qwen3) => vec![HardwareBackend::Cuda, HardwareBackend::Cpu],
-        ("windows", ModelFamily::Voxtral) => vec![
-            HardwareBackend::DirectMl,
-            HardwareBackend::Cuda,
-            HardwareBackend::Cpu,
-        ],
+        ("windows", ModelFamily::Voxtral) => vec![HardwareBackend::Vulkan, HardwareBackend::Cpu],
         ("linux", ModelFamily::Whisper) => vec![
             HardwareBackend::Cuda,
             HardwareBackend::Vulkan,
             HardwareBackend::Cpu,
         ],
         ("linux", ModelFamily::Qwen3) => vec![HardwareBackend::Cuda, HardwareBackend::Cpu],
-        ("linux", ModelFamily::Voxtral) => vec![HardwareBackend::Cuda, HardwareBackend::Cpu],
+        ("linux", ModelFamily::Voxtral) => vec![HardwareBackend::Vulkan, HardwareBackend::Cpu],
         ("ios", ModelFamily::Whisper) => vec![HardwareBackend::Metal, HardwareBackend::Cpu],
         ("ios", ModelFamily::Qwen3) => vec![HardwareBackend::Cpu],
         ("ios", ModelFamily::Voxtral) => vec![HardwareBackend::CoreMl, HardwareBackend::Cpu],
@@ -399,7 +395,7 @@ fn prioritized_plan_for_os(
         ],
         (_, ModelFamily::Whisper) => vec![HardwareBackend::Vulkan, HardwareBackend::Cpu],
         (_, ModelFamily::Qwen3) => vec![HardwareBackend::Cpu],
-        (_, ModelFamily::Voxtral) => vec![HardwareBackend::Cpu],
+        (_, ModelFamily::Voxtral) => vec![HardwareBackend::Vulkan, HardwareBackend::Cpu],
     };
 
     if preference == AcceleratorPreference::Gpu {
@@ -505,6 +501,10 @@ mod tests {
             prioritized_plan_for_os("ios", ModelFamily::Voxtral, AcceleratorPreference::Auto),
             vec![HardwareBackend::CoreMl, HardwareBackend::Cpu]
         );
+        assert_eq!(
+            prioritized_plan_for_os("macos", ModelFamily::Voxtral, AcceleratorPreference::Auto),
+            vec![HardwareBackend::Vulkan, HardwareBackend::Cpu]
+        );
     }
 
     #[test]
@@ -533,6 +533,37 @@ mod tests {
             prioritized_plan_for_os("android", ModelFamily::Qwen3, AcceleratorPreference::Auto),
             vec![HardwareBackend::Cpu]
         );
+    }
+
+    #[test]
+    fn voxtral_prefers_vulkan_when_patched_runtime_is_available() {
+        assert_eq!(
+            prioritized_plan_for_os("windows", ModelFamily::Voxtral, AcceleratorPreference::Auto),
+            vec![HardwareBackend::Vulkan, HardwareBackend::Cpu]
+        );
+        assert_eq!(
+            prioritized_plan_for_os("linux", ModelFamily::Voxtral, AcceleratorPreference::Auto),
+            vec![HardwareBackend::Vulkan, HardwareBackend::Cpu]
+        );
+
+        let selected = select_accelerator(
+            ModelFamily::Voxtral,
+            AcceleratorPreference::Auto,
+            &[HardwareBackend::Vulkan, HardwareBackend::DirectMl, HardwareBackend::Cpu],
+        );
+
+        if cfg!(any(
+            feature = "voxtral-llamacpp-vulkan",
+            feature = "voxtral-realtime-vulkan"
+        )) {
+            assert_eq!(selected.selected, HardwareBackend::Vulkan);
+            assert_eq!(
+                selected.attempted,
+                vec![HardwareBackend::Vulkan, HardwareBackend::Cpu]
+            );
+        } else {
+            assert_eq!(selected.selected, HardwareBackend::Cpu);
+        }
     }
 
     #[test]
