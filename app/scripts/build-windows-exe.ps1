@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $appRoot = Split-Path -Parent $scriptDir
 $repoRoot = Split-Path -Parent $appRoot
-$sourceExe = Join-Path $appRoot "src-tauri\target\release\amcp-desktop.exe"
+$sourceExe = $null
 $distDir = Join-Path $appRoot "dist"
 $distExe = Join-Path $distDir "AMCP.exe"
 $distWebDir = Join-Path $distDir "web"
@@ -19,6 +19,21 @@ function Set-DefaultEnvPath {
     if (-not [Environment]::GetEnvironmentVariable($Name, "Process") -and (Test-Path $Path)) {
         [Environment]::SetEnvironmentVariable($Name, (Resolve-Path $Path).Path, "Process")
     }
+}
+
+function Initialize-AcceleratedCargoBuildEnv {
+    if (-not [Environment]::GetEnvironmentVariable("CARGO_TARGET_DIR", "Process")) {
+        [Environment]::SetEnvironmentVariable("CARGO_TARGET_DIR", "C:\t", "Process")
+    }
+    if (-not [Environment]::GetEnvironmentVariable("CMAKE_BUILD_PARALLEL_LEVEL", "Process")) {
+        [Environment]::SetEnvironmentVariable("CMAKE_BUILD_PARALLEL_LEVEL", "1", "Process")
+    }
+
+    # whisper-rs Vulkan builds reliably with the Visual Studio generator when
+    # the target path is short. A stale Ninja override conflicts with the
+    # Visual Studio instance selected by the cmake crate.
+    [Environment]::SetEnvironmentVariable("CMAKE_GENERATOR", $null, "Process")
+    [Environment]::SetEnvironmentVariable("CMAKE_GENERATOR_INSTANCE", $null, "Process")
 }
 
 function Initialize-VoxtralPatchedLlamaEnv {
@@ -94,7 +109,10 @@ function Invoke-WithRetry {
 
 Push-Location $appRoot
 try {
+    Initialize-AcceleratedCargoBuildEnv
     Initialize-VoxtralPatchedLlamaEnv
+    $cargoTargetDir = [Environment]::GetEnvironmentVariable("CARGO_TARGET_DIR", "Process")
+    $sourceExe = Join-Path $cargoTargetDir "release\amcp-desktop.exe"
     if (Test-Path $sourceExe) {
         Invoke-WithRetry -Description "Removing old release executable" -Action {
             Remove-Item -Force -Path $sourceExe

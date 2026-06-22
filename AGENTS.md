@@ -86,13 +86,15 @@ ruff check .
 
 Windows向けの配布用exeは `app/` でTauri CLI経由でビルドする。`cargo build --bin amcp-desktop` だけで直接ビルドすると、本番Webアセットの埋め込みが行われず開発用localhostへ接続しようとするため避けること。
 
-`npm run build:windows:exe` は `full-runtime` featureで `AMCP.exe` をビルドし、Whisper、Qwen3-ASR、Voxtral Realtime patched llama.cpp の実推論経路を含める。Voxtral Realtime用のパッチ済み `llama.cpp` が `.tmp\llama-cpp-voxtral-pr20638` にある場合はビルドスクリプトが自動検出する。別の場所にある場合だけ、同じPowerShellセッションでsource/build/binを指定する。
+`npm run build:windows:exe` は `full-runtime` featureで `AMCP.exe` をビルドし、Whisper Vulkan、Qwen3-ASR、Voxtral Realtime patched llama.cpp Vulkan の実推論経路を含める。Whisper Vulkan のWindowsビルドは深いtargetパスで失敗しやすいため、ビルドスクリプトは既定で `CARGO_TARGET_DIR=C:\t` と `CMAKE_BUILD_PARALLEL_LEVEL=1` を設定する。Qwen3-ASR のGPU実行はCandle CUDA featureが必要なため、CUDA環境では `full-runtime-cuda` を使い、CUDAがないWindows/AMD環境ではCPUフォールバックになる。
+
+Voxtral Realtime用のパッチ済み `llama.cpp` が `.tmp\llama-cpp-voxtral-pr20638` または `C:\amcp-build\llama-vulkan` にある場合はビルドスクリプトが自動検出する。別の場所にある場合だけ、同じPowerShellセッションでsource/build/binを指定する。
 
 ```powershell
 cd app
 
 $patchedRoot="C:\Users\5000e\Documents\aofusa\ai\asr-model-comparison-project\.tmp\llama-cpp-voxtral-pr20638"
-$patchedBuild="$patchedRoot\build-amcp-cpu-release"
+$patchedBuild="C:\amcp-build\llama-vulkan"
 $env:AMCP_VOXTRAL_PATCHED_LLAMA_DIR=$patchedRoot
 $env:AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR=$patchedBuild
 $env:AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR="$patchedBuild\bin"
