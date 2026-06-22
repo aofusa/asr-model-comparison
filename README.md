@@ -118,15 +118,19 @@ run.bat --build-only
 
 ### Rust/Tauri版 AMCP.exe をビルドする場合
 
-現行のWindows向けRust/Tauri版は `app/` 配下でビルドします。Tauri CLI経由でフロントエンド資産を埋め込み、配布用コピーとして `app\dist\AMCP.exe` を作成します。
+現行のWindows向けRust/Tauri版は `app/` 配下でビルドします。Tauri CLI経由でフロントエンド資産を埋め込み、配布用コピーとして `app\dist\AMCP.exe` と serverモード配信用の `app\dist\web\` を作成します。
 
-Voxtral Realtimeを有効にしたビルドでは、パッチ済み `llama.cpp` のsource/build/binディレクトリを同じPowerShellセッションで指定してからビルドしてください。
+配布用 `AMCP.exe` は `full-runtime` featureでビルドされ、Whisper Vulkan、Qwen3-ASR、Voxtral Realtime patched llama.cpp Vulkan の実推論経路を含みます。Whisper Vulkan のWindowsビルドは深いtargetパスで失敗しやすいため、`build:windows:exe` は既定で `CARGO_TARGET_DIR=C:\t` と `CMAKE_BUILD_PARALLEL_LEVEL=1` を使います。
+
+Qwen3-ASR のGPU実行は現在Candle CUDA featureが必要です。CUDAがないWindows/AMD環境ではQwenはCPUへフォールバックします。CUDA環境でQwenもGPU化する場合は `full-runtime-cuda` featureを使ってください。
+
+Voxtral Realtime用のパッチ済み `llama.cpp` が `.tmp\llama-cpp-voxtral-pr20638` または `C:\amcp-build\llama-vulkan` にある場合はビルドスクリプトが自動検出します。別の場所にある場合だけ、source/build/binディレクトリを同じPowerShellセッションで指定してください。
 
 ```powershell
 cd app
 
 $patchedRoot="C:\Users\5000e\Documents\aofusa\ai\asr-model-comparison-project\.tmp\llama-cpp-voxtral-pr20638"
-$patchedBuild="$patchedRoot\build-amcp-cpu-release"
+$patchedBuild="C:\amcp-build\llama-vulkan"
 $env:AMCP_VOXTRAL_PATCHED_LLAMA_DIR=$patchedRoot
 $env:AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR=$patchedBuild
 $env:AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR="$patchedBuild\bin"
@@ -138,9 +142,10 @@ npm run build:windows:exe
 
 ```text
 app\dist\AMCP.exe
+app\dist\web\
 ```
 
-`AMCP.exe` は引数なしではTauriデスクトップアプリとして起動します。HTTP serverモードで起動する場合は `--server` を付けます。serverモードは既定で `0.0.0.0` に待ち受けるため、同一ネットワーク上の別端末からも接続できます。
+`AMCP.exe` は引数なしではTauriデスクトップアプリとしてウィンドウを表示します。HTTP serverモードで起動する場合は `--server` を付けます。serverモードは既定で `0.0.0.0` に待ち受け、`app\dist\web\` を配信するため、ブラウザで `http://127.0.0.1:8000/` または起動ログに表示されるLAN URLを開くとWebアプリとして利用できます。
 
 ```powershell
 .\dist\AMCP.exe --server --port 8000
@@ -150,6 +155,7 @@ app\dist\AMCP.exe
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/api/status
+Invoke-WebRequest http://127.0.0.1:8000/
 ```
 
 `service` が `amcp-rust-backend` で返れば、serverモードで起動できています。

@@ -8,8 +8,10 @@ use crate::accelerator::HardwareBackend;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-const DEFAULT_LLAMA_MODEL_ID: &str = "mistralai/Voxtral-Mini-4B-Realtime-2602-GGUF";
+const DEFAULT_LLAMA_MODEL_ID: &str = "acceldium/Voxtral-Mini-4B-Realtime-2602_GGUF";
 const DEFAULT_LLAMA_REPO_ID: &str = DEFAULT_LLAMA_MODEL_ID;
+const DEFAULT_LLAMA_MODEL_FILE: &str = "voxtral-realtime-4b-text-q8_0.gguf";
+const DEFAULT_LLAMA_MMPROJ_FILE: &str = "voxtral-realtime-4b-mmproj-f16.gguf";
 const DEFAULT_CONTEXT_SIZE: u32 = 4096;
 const DEFAULT_BATCH_SIZE: u32 = 512;
 const DEFAULT_MAX_TOKENS: usize = 512;
@@ -55,15 +57,28 @@ pub struct VoxtralLlamaCppTranscription {
 pub fn configure_voxtral_llamacpp(available_backends: &[HardwareBackend]) -> VoxtralLlamaCppConfig {
     let providers = llamacpp_provider_plan(available_backends);
     let use_gpu = env_bool("AMCP_VOXTRAL_LLAMA_USE_GPU").unwrap_or_else(|| {
-        cfg!(feature = "voxtral-llamacpp-vulkan")
+        cfg!(any(
+            feature = "voxtral-llamacpp-vulkan",
+            feature = "voxtral-realtime-vulkan"
+        )) && runtime_vulkan_available()
             && providers
                 .iter()
                 .any(|backend| *backend != HardwareBackend::Cpu)
     });
-    let repo_id = env_string("AMCP_VOXTRAL_LLAMA_REPO_ID")
+    let configured_repo_id = env_string("AMCP_VOXTRAL_LLAMA_REPO_ID");
+    let repo_id = configured_repo_id
+        .clone()
         .unwrap_or_else(|| DEFAULT_LLAMA_REPO_ID.to_string());
-    let model_file = env_string("AMCP_VOXTRAL_LLAMA_MODEL_FILE");
-    let mmproj_file = env_string("AMCP_VOXTRAL_LLAMA_MMPROJ_FILE");
+    let model_file = env_string("AMCP_VOXTRAL_LLAMA_MODEL_FILE").or_else(|| {
+        configured_repo_id
+            .is_none()
+            .then(|| DEFAULT_LLAMA_MODEL_FILE.into())
+    });
+    let mmproj_file = env_string("AMCP_VOXTRAL_LLAMA_MMPROJ_FILE").or_else(|| {
+        configured_repo_id
+            .is_none()
+            .then(|| DEFAULT_LLAMA_MMPROJ_FILE.into())
+    });
     VoxtralLlamaCppConfig {
         model_path: env_path("AMCP_VOXTRAL_LLAMA_MODEL_PATH").or_else(|| {
             resolve_hf_cached_gguf(&repo_id, model_file.as_deref(), LlamaCppGgufKind::TextModel)
@@ -132,12 +147,14 @@ pub fn should_route_to_llamacpp_with_runtime(
 
 pub fn llamacpp_provider_plan(available_backends: &[HardwareBackend]) -> Vec<HardwareBackend> {
     let mut providers = Vec::new();
-    for backend in [
-        HardwareBackend::Vulkan,
-        HardwareBackend::Cuda,
-        HardwareBackend::Metal,
-        HardwareBackend::Cpu,
-    ] {
+    let include_vulkan = cfg!(any(
+        feature = "voxtral-llamacpp-vulkan",
+        feature = "voxtral-realtime-vulkan"
+    )) && runtime_vulkan_available();
+    for backend in [HardwareBackend::Vulkan, HardwareBackend::Cpu] {
+        if backend == HardwareBackend::Vulkan && !include_vulkan {
+            continue;
+        }
         if available_backends.contains(&backend) || backend == HardwareBackend::Cpu {
             providers.push(backend);
         }
@@ -366,7 +383,9 @@ fn run_llamacpp_text_generation(
         }));
     }
     if out_text.is_null() {
-        return Err("Voxtral Realtime patched llama.cpp text generation returned no text.".to_string());
+        return Err(
+            "Voxtral Realtime patched llama.cpp text generation returned no text.".to_string(),
+        );
     }
 
     let text = unsafe { CStr::from_ptr(out_text) }
@@ -810,6 +829,17 @@ fn env_bool(key: &str) -> Option<bool> {
     })
 }
 
+fn runtime_vulkan_available() -> bool {
+    env_bool("AMCP_VOXTRAL_PATCHED_LLAMA_LINK_VULKAN").unwrap_or(false)
+        || std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|dir| dir.join("ggml-vulkan.dll")))
+            .is_some_and(|path| path.is_file())
+        || env_path("AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR")
+            .map(|dir| dir.join("ggml-vulkan.dll").is_file())
+            .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -890,6 +920,8 @@ mod tests {
         std::env::set_var("HF_HUB_CACHE", &cache_root);
         std::env::remove_var("AMCP_VOXTRAL_LLAMA_MODEL_PATH");
         std::env::remove_var("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH");
+        std::env::remove_var("AMCP_VOXTRAL_LLAMA_MODEL_FILE");
+        std::env::remove_var("AMCP_VOXTRAL_LLAMA_MMPROJ_FILE");
         std::env::set_var("AMCP_VOXTRAL_LLAMA_REPO_ID", "example/voxtral-gguf");
         let config = configure_voxtral_llamacpp(&[HardwareBackend::Cpu]);
         std::env::remove_var("HF_HUB_CACHE");

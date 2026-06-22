@@ -9,7 +9,7 @@
     "beforeBuildCommand": "npm --prefix ../frontend run build",
     "frontendDist": "../../frontend/dist",
     "features": [
-      "desktop"
+      "full-runtime"
     ]
   },
   "app": {

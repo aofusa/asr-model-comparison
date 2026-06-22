@@ -81,6 +81,18 @@ fn whisper_status(
     let configured = cfg!(feature = "whisper");
     let artifacts = whisper_artifacts(model_id);
     let real_inference_available = configured;
+    let mut selected_accelerators = Vec::new();
+    if cfg!(feature = "whisper-cuda") {
+        selected_accelerators.push(HardwareBackend::Cuda);
+    }
+    if cfg!(feature = "whisper-vulkan") {
+        selected_accelerators.push(HardwareBackend::Vulkan);
+    }
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
+        selected_accelerators.push(HardwareBackend::Metal);
+    }
+    selected_accelerators.push(HardwareBackend::Cpu);
+    let selected_accelerators = filter_backends(available_backends, &selected_accelerators);
     RuntimeBackendStatus {
         model_id: model_id.to_string(),
         family,
@@ -91,15 +103,7 @@ fn whisper_status(
         },
         real_inference_available,
         configured,
-        selected_accelerators: filter_backends(
-            available_backends,
-            &[
-                HardwareBackend::Cuda,
-                HardwareBackend::Vulkan,
-                HardwareBackend::Metal,
-                HardwareBackend::Cpu,
-            ],
-        ),
+        selected_accelerators,
         artifacts,
         reason: if configured {
             "whisper-rs is compiled in; model path or auto-download is resolved at load time."
@@ -181,7 +185,10 @@ fn voxtral_llamacpp_status(
             format!(
                 "voxtral-llamacpp feature is enabled and Voxtral GGUF/mmproj files are configured for {}. Vulkan acceleration is {}. Patched Voxtral Realtime bridge is {}.",
                 config.model_id,
-                if cfg!(feature = "voxtral-llamacpp-vulkan") {
+                if cfg!(any(
+                    feature = "voxtral-llamacpp-vulkan",
+                    feature = "voxtral-realtime-vulkan"
+                )) {
                     "compiled in"
                 } else {
                     "not compiled in"
@@ -195,7 +202,12 @@ fn voxtral_llamacpp_status(
         } else if configured && cfg!(feature = "voxtral-llamacpp-realtime-patched") {
             "voxtral-llamacpp-realtime-patched feature is enabled, but AMCP_VOXTRAL_LLAMA_MODEL_PATH and AMCP_VOXTRAL_LLAMA_MMPROJ_PATH are not fully configured."
                 .to_string()
-        } else if configured && cfg!(feature = "voxtral-llamacpp-vulkan") {
+        } else if configured
+            && cfg!(any(
+                feature = "voxtral-llamacpp-vulkan",
+                feature = "voxtral-realtime-vulkan"
+            ))
+        {
             "voxtral-llamacpp-vulkan feature is enabled, but AMCP_VOXTRAL_LLAMA_MODEL_PATH and AMCP_VOXTRAL_LLAMA_MMPROJ_PATH are not fully configured."
                 .to_string()
         } else if configured {
@@ -449,7 +461,10 @@ fn voxtral_llamacpp_artifacts(
             )),
             env_var: Some("AMCP_VOXTRAL_LLAMA_GPU_LAYERS".to_string()),
             required: false,
-            exists: cfg!(feature = "voxtral-llamacpp-vulkan"),
+            exists: cfg!(any(
+                feature = "voxtral-llamacpp-vulkan",
+                feature = "voxtral-realtime-vulkan"
+            )),
             note: Some("llama-cpp-4 Vulkan feature requires Vulkan SDK at build time".to_string()),
         },
         RuntimeArtifactStatus {
@@ -574,9 +589,11 @@ mod tests {
         );
 
         assert_eq!(status.family, ModelFamily::Whisper);
-        assert!(status
-            .selected_accelerators
-            .contains(&HardwareBackend::Vulkan));
+        if cfg!(feature = "whisper-vulkan") {
+            assert!(status
+                .selected_accelerators
+                .contains(&HardwareBackend::Vulkan));
+        }
         assert!(status.selected_accelerators.contains(&HardwareBackend::Cpu));
         assert!(status
             .artifacts
@@ -596,8 +613,10 @@ mod tests {
         assert!(status
             .artifacts
             .iter()
-            .any(|artifact| artifact.name == "voxtral_audio_encoder"
-                || artifact.env_var.as_deref() == Some("AMCP_VOXTRAL_MODEL_DIR")));
+            .any(
+                |artifact| artifact.env_var.as_deref() == Some("AMCP_VOXTRAL_LLAMA_MODEL_PATH")
+                    || artifact.env_var.as_deref() == Some("AMCP_VOXTRAL_LLAMA_REPO_ID")
+            ));
         assert!(status.artifacts.iter().any(|artifact| artifact.required));
     }
 
@@ -607,15 +626,22 @@ mod tests {
         std::env::set_var("AMCP_VOXTRAL_RUNTIME", "llamacpp");
         std::env::set_var("AMCP_VOXTRAL_LLAMA_MODEL_PATH", "missing-model.gguf");
         std::env::set_var("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH", "missing-mmproj.gguf");
+        std::env::set_var("AMCP_VOXTRAL_PATCHED_LLAMA_LINK_VULKAN", "1");
         let status = runtime_backend_status("voxtral-mini-4b", &[HardwareBackend::Vulkan]);
         std::env::remove_var("AMCP_VOXTRAL_RUNTIME");
         std::env::remove_var("AMCP_VOXTRAL_LLAMA_MODEL_PATH");
         std::env::remove_var("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH");
+        std::env::remove_var("AMCP_VOXTRAL_PATCHED_LLAMA_LINK_VULKAN");
 
         assert_eq!(status.backend, RuntimeBackendKind::Placeholder);
-        assert!(status
-            .selected_accelerators
-            .contains(&HardwareBackend::Vulkan));
+        if cfg!(any(
+            feature = "voxtral-llamacpp-vulkan",
+            feature = "voxtral-realtime-vulkan"
+        )) {
+            assert!(status
+                .selected_accelerators
+                .contains(&HardwareBackend::Vulkan));
+        }
         assert!(status
             .artifacts
             .iter()

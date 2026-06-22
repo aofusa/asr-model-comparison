@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::net::{IpAddr, Ipv4Addr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -118,9 +118,48 @@ impl From<ServerArgs> for AppConfig {
             host: args.host,
             port: args.port,
             accelerator: args.accelerator.into(),
-            static_dir: args.static_dir,
+            static_dir: args.static_dir.or_else(default_server_static_dir),
         }
     }
+}
+
+pub fn default_server_static_dir() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidates.push(exe_dir.join("web"));
+            candidates.push(exe_dir.join("frontend").join("dist"));
+        }
+    }
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir.join("dist").join("web"));
+        candidates.push(current_dir.join("web"));
+        candidates.push(current_dir.join("frontend").join("dist"));
+        candidates.push(current_dir.join("..").join("frontend").join("dist"));
+    }
+
+    option_env!("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .into_iter()
+        .for_each(|manifest_dir| {
+            candidates.push(
+                manifest_dir
+                    .join("..")
+                    .join("..")
+                    .join("frontend")
+                    .join("dist"),
+            );
+        });
+
+    candidates
+        .into_iter()
+        .find(|candidate| is_frontend_dist(candidate))
+}
+
+fn is_frontend_dist(path: &Path) -> bool {
+    path.is_dir() && path.join("index.html").is_file()
 }
 
 #[cfg(test)]

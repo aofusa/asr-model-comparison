@@ -141,14 +141,16 @@ pub fn select_accelerator(
     preference: AcceleratorPreference,
     available: &[HardwareBackend],
 ) -> AcceleratorSelection {
-    let plan = prioritized_plan(family, preference);
+    let requested_plan = prioritized_plan(family, preference);
+    let requested_preferred = requested_plan[0];
+    let plan = runtime_supported_plan(family, requested_plan);
     let selected = plan
         .iter()
         .copied()
         .find(|candidate| available.contains(candidate))
         .unwrap_or(HardwareBackend::Cpu);
 
-    let fallback_used = selected != plan[0];
+    let fallback_used = preference != AcceleratorPreference::Cpu && selected != requested_preferred;
     let reason = if preference == AcceleratorPreference::Cpu {
         "CPU was explicitly requested.".to_string()
     } else if fallback_used {
@@ -287,7 +289,11 @@ fn push_unique(backends: &mut Vec<HardwareBackend>, backend: HardwareBackend) {
 }
 
 fn command_exists(command: &str) -> bool {
-    command_exists_in_path(command, std::env::var_os("PATH"), std::env::var_os("PATHEXT"))
+    command_exists_in_path(
+        command,
+        std::env::var_os("PATH"),
+        std::env::var_os("PATHEXT"),
+    )
 }
 
 fn command_exists_in_path(
@@ -312,10 +318,7 @@ fn command_exists_in_path(
     })
 }
 
-fn executable_extensions(
-    command: &str,
-    path_ext: Option<std::ffi::OsString>,
-) -> Vec<String> {
+fn executable_extensions(command: &str, path_ext: Option<std::ffi::OsString>) -> Vec<String> {
     if std::path::Path::new(command).extension().is_some() {
         return vec![String::new()];
     }
@@ -409,6 +412,50 @@ fn prioritized_plan_for_os(
     plan
 }
 
+fn runtime_supported_plan(family: ModelFamily, plan: Vec<HardwareBackend>) -> Vec<HardwareBackend> {
+    let supported = runtime_supported_backends(family);
+    let mut filtered = plan
+        .into_iter()
+        .filter(|backend| supported.contains(backend))
+        .collect::<Vec<_>>();
+    if !filtered.contains(&HardwareBackend::Cpu) {
+        filtered.push(HardwareBackend::Cpu);
+    }
+    filtered
+}
+
+fn runtime_supported_backends(family: ModelFamily) -> Vec<HardwareBackend> {
+    let mut supported = Vec::new();
+    match family {
+        ModelFamily::Whisper => {
+            if cfg!(feature = "whisper-cuda") {
+                supported.push(HardwareBackend::Cuda);
+            }
+            if cfg!(feature = "whisper-vulkan") {
+                supported.push(HardwareBackend::Vulkan);
+            }
+            if cfg!(any(target_os = "macos", target_os = "ios")) {
+                supported.push(HardwareBackend::Metal);
+            }
+        }
+        ModelFamily::Qwen3 => {
+            if cfg!(feature = "qwen-cuda") {
+                supported.push(HardwareBackend::Cuda);
+            }
+        }
+        ModelFamily::Voxtral => {
+            if cfg!(any(
+                feature = "voxtral-llamacpp-vulkan",
+                feature = "voxtral-realtime-vulkan"
+            )) {
+                supported.push(HardwareBackend::Vulkan);
+            }
+        }
+    }
+    supported.push(HardwareBackend::Cpu);
+    supported
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +480,19 @@ mod tests {
         assert_eq!(selected.selected, HardwareBackend::Cpu);
         assert!(selected.fallback_used);
         assert!(selected.attempted.contains(&HardwareBackend::Cpu));
+    }
+
+    #[cfg(not(any(feature = "whisper-cuda", feature = "whisper-vulkan")))]
+    #[test]
+    fn whisper_uses_cpu_when_gpu_runtime_features_are_not_compiled() {
+        let selected = select_accelerator(
+            ModelFamily::Whisper,
+            AcceleratorPreference::Auto,
+            &[HardwareBackend::Vulkan, HardwareBackend::Cpu],
+        );
+
+        assert_eq!(selected.selected, HardwareBackend::Cpu);
+        assert_eq!(selected.attempted, vec![HardwareBackend::Cpu]);
     }
 
     #[test]
@@ -513,10 +573,8 @@ mod tests {
 
     #[test]
     fn command_lookup_does_not_require_external_where_command() {
-        let temp_root = std::env::temp_dir().join(format!(
-            "amcp-command-lookup-{}",
-            std::process::id()
-        ));
+        let temp_root =
+            std::env::temp_dir().join(format!("amcp-command-lookup-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp_root);
         std::fs::create_dir_all(&temp_root).unwrap();
 

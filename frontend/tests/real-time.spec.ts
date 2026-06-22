@@ -33,6 +33,38 @@ test('model selection works', async ({ page }) => {
   await expect(voxtralRadio).toBeChecked();
 });
 
+test('current accelerator reflects selected model capability', async ({ page }) => {
+  await page.route('**/api/status', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        service: 'amcp-rust-backend',
+        available_backends: ['vulkan', 'cpu'],
+        loaded_backend: null,
+        model_preparation: [
+          {
+            model_id: 'whisper-tiny',
+            selected_accelerators: ['cpu'],
+          },
+          {
+            model_id: 'voxtral-mini-4b',
+            selected_accelerators: ['vulkan', 'cpu'],
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await openAdvancedSettings(page);
+
+  await page.locator('input[value="voxtral-mini-4b"]').check();
+  await expect(page.getByTestId('current-accelerator')).toContainText('VULKAN, CPU');
+
+  await page.locator('input[value="whisper-tiny"]').check();
+  await expect(page.getByTestId('current-accelerator')).toContainText('CPU');
+});
+
 test('hardware acceleration setting is sent in websocket config', async ({ page }) => {
   await page.addInitScript(() => {
     (window as any).__lastWsConfig = null;
@@ -1797,6 +1829,124 @@ test.describe('Backlog 1-4 - silence, history, and model progress', () => {
 
     expect(await page.evaluate(() => (window as any).__binarySends)).toBe(0);
     await expect(page.getByTestId('status')).toContainText(/silent|Recording|Ready/i);
+  });
+
+  test('audible PCM input is sent after model ready', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as any).__binarySends = 0;
+
+      class MockWebSocket {
+        static OPEN = 1;
+        readyState = MockWebSocket.OPEN;
+        onopen: ((ev: Event) => void) | null = null;
+        onmessage: ((ev: MessageEvent) => void) | null = null;
+        onclose: ((ev: CloseEvent) => void) | null = null;
+
+        constructor(public url: string) {
+          setTimeout(() => this.onopen?.(new Event('open')), 0);
+        }
+
+        send(data: any) {
+          if (typeof data === 'string') {
+            const parsed = JSON.parse(data);
+            if (parsed.type === 'config') {
+              setTimeout(() => {
+                this.onmessage?.(new MessageEvent('message', {
+                  data: JSON.stringify({ type: 'ready', model_id: parsed.model_id }),
+                }));
+              }, 0);
+            }
+            return;
+          }
+          (window as any).__binarySends += 1;
+          setTimeout(() => {
+            this.onmessage?.(new MessageEvent('message', {
+              data: JSON.stringify({
+                type: 'transcription',
+                model_id: 'whisper-tiny',
+                text: 'テスト',
+                is_final: true,
+                processing_time_seconds: 0.1,
+                had_speech: true,
+                chunk_index: (window as any).__binarySends,
+                chunk_size_bytes: typeof data?.size === 'number' ? data.size : 0,
+              }),
+            }));
+          }, 0);
+        }
+
+        close() {
+          this.onclose?.(new CloseEvent('close'));
+        }
+        addEventListener() {}
+        removeEventListener() {}
+        dispatchEvent() { return true; }
+      }
+
+      class MockAudioContext {
+        sampleRate = 4096;
+        destination = {};
+        state = 'suspended';
+        resume() {
+          this.state = 'running';
+          return Promise.resolve();
+        }
+        createMediaStreamSource() {
+          return { connect() {}, disconnect() {} };
+        }
+        createAnalyser() {
+          return {
+            fftSize: 64,
+            minDecibels: -90,
+            maxDecibels: -10,
+            smoothingTimeConstant: 0.7,
+            frequencyBinCount: 32,
+            getByteFrequencyData(data: Uint8Array) { data.fill(24); },
+          };
+        }
+        createScriptProcessor() {
+          const processor: any = {
+            onaudioprocess: null,
+            connect() {
+              [20, 40, 60, 80].forEach((delay) => {
+                setTimeout(() => {
+                  processor.onaudioprocess?.({
+                    inputBuffer: {
+                      getChannelData: () => new Float32Array(4096).fill(0.003),
+                    },
+                  });
+                }, delay);
+              });
+            },
+            disconnect() {},
+          };
+          return processor;
+        }
+        close() { return Promise.resolve(); }
+      }
+
+      // @ts-ignore
+      (window as any).WebSocket = MockWebSocket;
+      // @ts-ignore
+      (window as any).AudioContext = MockAudioContext;
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: {
+          getUserMedia: async () => ({
+            getTracks: () => [{ stop: () => {} }],
+          }),
+        },
+      });
+    });
+
+    await page.goto('/');
+    await page.locator('html[data-amcp-controls-wired="true"]').waitFor({ timeout: 10000 });
+    await page.getByTestId('start-recording').click();
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__binarySends), {
+      timeout: 5000,
+    }).toBeGreaterThan(0);
+    await expect(page.getByTestId('chunk-feedback')).toContainText(/Last chunk #1:/, { timeout: 5000 });
   });
 
   test('older finalized transcription segments move to history while latest stays in live view', async ({ page }) => {

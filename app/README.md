@@ -244,13 +244,15 @@ npm run validate:windows:voxtral:llamacpp:realtime -- --audio "..\backend\tests\
 
 ### Windows配布用の単一exeを作成
 
-Windows向けに配布する場合は、Tauriのリリースビルドで生成されるデスクトップ実行ファイルを `app/dist/AMCP.exe` にコピーします。Voxtral Realtimeを有効にしたビルドでは、パッチ済み `llama.cpp` のsource/build/binディレクトリを同じPowerShellセッションで指定してから実行してください。
+Windows向けに配布する場合は、Tauriのリリースビルドで生成されるデスクトップ実行ファイルを `app/dist/AMCP.exe` にコピーします。`full-runtime` は Whisper Vulkan、Qwen3-ASR、Voxtral Realtime patched llama.cpp Vulkan を含みます。Whisper Vulkan のWindowsビルドは深いtargetパスで失敗しやすいため、`build:windows:exe` は既定で `CARGO_TARGET_DIR=C:\t` と `CMAKE_BUILD_PARALLEL_LEVEL=1` を設定します。
+
+Qwen3-ASR のGPU実行はCandle CUDA featureが必要です。CUDAがないWindows/AMD環境ではQwenはCPUへフォールバックします。CUDA環境でQwenもGPU化する場合は `full-runtime-cuda` featureを使ってください。
 
 ```powershell
 cd app
 
 $patchedRoot="C:\Users\5000e\Documents\aofusa\ai\asr-model-comparison-project\.tmp\llama-cpp-voxtral-pr20638"
-$patchedBuild="$patchedRoot\build-amcp-cpu-release"
+$patchedBuild="C:\amcp-build\llama-vulkan"
 $env:AMCP_VOXTRAL_PATCHED_LLAMA_DIR=$patchedRoot
 $env:AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR=$patchedBuild
 $env:AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR="$patchedBuild\bin"
@@ -261,7 +263,7 @@ npm run build:windows:exe
 Tauri CLIの一次出力:
 
 ```text
-app\src-tauri\target\release\amcp-desktop.exe
+C:\t\release\amcp-desktop.exe
 ```
 
 配布用コピー:
@@ -274,14 +276,14 @@ app\dist\AMCP.exe
 コード変更がなくTauriの出力バイナリが同一の場合、SHA256は前回と同じになります。このラッパーは配布コピーを実行したことが分かるように、コピー後の `app\dist\AMCP.exe` の更新時刻を実行時刻へ更新します。
 
 ```powershell
-Get-Item .\dist\AMCP.exe, .\src-tauri\target\release\amcp-desktop.exe | Select-Object FullName, LastWriteTime, Length
-Get-FileHash .\dist\AMCP.exe, .\src-tauri\target\release\amcp-desktop.exe -Algorithm SHA256
+Get-Item .\dist\AMCP.exe, C:\t\release\amcp-desktop.exe | Select-Object FullName, LastWriteTime, Length
+Get-FileHash .\dist\AMCP.exe, C:\t\release\amcp-desktop.exe -Algorithm SHA256
 ```
 
-この `AMCP.exe` はフロントエンド資産とRust APIサーバーを同梱した単一の実行ファイルです。実行時はアプリ内でRust APIサーバーを `127.0.0.1:8765` に起動し、Tauri WebViewから接続します。
+この `AMCP.exe` はフロントエンド資産とRust APIサーバーを同梱したTauriアプリです。実行時はアプリ内でRust APIサーバーを `127.0.0.1:8765` に起動し、Tauri WebViewから接続します。
 必ず `npm run build:windows:exe` または `npm run build` のようにTauri CLI経由でビルドしてください。`cargo build --bin amcp-desktop` で直接作ったexeは、Tauriの本番Webアセット埋め込みが行われず、開発用の `localhost:5173` に接続しようとします。
 
-同じ `AMCP.exe` は、明示的に `--server` を付けた場合だけHTTP serverモードで起動します。serverモードの既定hostは `0.0.0.0` なので、同一ネットワーク上の別端末からも接続できます。ローカル専用にしたい場合は `--host 127.0.0.1` を指定してください。
+同じ `AMCP.exe` は、明示的に `--server` を付けた場合だけHTTP serverモードで起動します。`npm run build:windows:exe` は `frontend/dist` を `app/dist/web` にコピーし、serverモードはこの静的ファイルを自動配信します。serverモードの既定hostは `0.0.0.0` なので、同一ネットワーク上の別端末からも接続できます。ローカル専用にしたい場合は `--host 127.0.0.1` を指定してください。
 
 ```powershell
 .\dist\AMCP.exe --server --port 8000
@@ -291,6 +293,7 @@ Get-FileHash .\dist\AMCP.exe, .\src-tauri\target\release\amcp-desktop.exe -Algor
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/api/status
+Invoke-WebRequest http://127.0.0.1:8000/
 ```
 
 別端末から接続できない場合は、サーバ起動ログに表示されるLAN IPのURLを使っているか、Windows Defender FirewallでAMCPの受信通信が許可されているかを確認してください。管理者PowerShellでは以下のようにPrivateネットワーク向けに許可できます。
@@ -299,14 +302,15 @@ Invoke-RestMethod http://127.0.0.1:8000/api/status
 New-NetFirewallRule -DisplayName "AMCP Rust Server 8000" -Direction Inbound -Program (Resolve-Path .\dist\AMCP.exe) -Action Allow -Protocol TCP -LocalPort 8000 -Profile Private
 ```
 
-引数なしでダブルクリックした場合は、通常のTauriデスクトップアプリとして起動します。
+引数なしでダブルクリックした場合は、通常のTauriデスクトップアプリとしてウィンドウを表示します。serverモードではブラウザで `http://127.0.0.1:8000/` または起動ログに表示されるLAN URLを開くと、Python版と同様にフロントエンド画面から操作できます。
 
 配布時の注意:
 
 - Windows 10/11 を対象にしています。
 - Microsoft Edge WebView2 Runtime が必要です。通常のWindows 10/11環境には入っていますが、未導入環境ではMicrosoft公式のWebView2 Runtimeを導入してください。
-- Whisper / Qwen3-ASR / Voxtral のモデルファイルはexeに同梱しません。必要に応じて `AMCP_MODEL_DIR`、`AMCP_QWEN_MODEL_DIR`、`AMCP_VOXTRAL_LLAMA_MODEL_PATH`、`AMCP_VOXTRAL_LLAMA_MMPROJ_PATH`、またはHugging Face共通キャッシュ用の `AMCP_VOXTRAL_LLAMA_REPO_ID` / `AMCP_VOXTRAL_LLAMA_MODEL_FILE` / `AMCP_VOXTRAL_LLAMA_MMPROJ_FILE` を指定してください。
-- 単一exe配布では、必ず `app\dist\AMCP.exe` を渡してください。インストーラー形式が必要になった場合は、`.ico` アイコンを追加し、Tauriの `bundle.active` と `bundle.targets` を有効化してください。
+- `AMCP.exe` は `full-runtime` featureでビルドされ、Whisper Vulkan、Qwen3-ASR、Voxtral Realtime patched llama.cpp Vulkan の実推論経路を含みます。Qwen3-ASR のGPU実行はCUDA環境で `full-runtime-cuda` を使う場合のみ有効です。
+- Whisper / Qwen3-ASR / Voxtral のモデルファイルはexeに同梱しません。必要に応じて `AMCP_MODEL_DIR`、`AMCP_QWEN_MODEL_DIR`、`AMCP_VOXTRAL_LLAMA_MODEL_PATH`、`AMCP_VOXTRAL_LLAMA_MMPROJ_PATH`、またはHugging Face共通キャッシュを指定してください。Voxtralは既定で `acceldium/Voxtral-Mini-4B-Realtime-2602_GGUF` の `voxtral-realtime-4b-text-q8_0.gguf` と `voxtral-realtime-4b-mmproj-f16.gguf` を探します。
+- 配布では `app\dist\AMCP.exe` と `app\dist\web\` を同じ `dist` ディレクトリに置いてください。インストーラー形式が必要になった場合は、`.ico` アイコンを追加し、Tauriの `bundle.active` と `bundle.targets` を有効化してください。
 
 ### Tauriアプリをビルド
 

@@ -305,7 +305,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         .unwrap_or(state.accelerator);
 
                     match state.manager.prepare_model(&options).await {
-                        Ok((_accelerator, progress)) => {
+                        Ok((accelerator, progress)) => {
                             for event in progress {
                                 tracing::info!(
                                     model_id = %event.model_id,
@@ -326,7 +326,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             let ready = json!({
                                 "type": "ready",
                                 "model_id": options.model_id,
-                                "accelerator": options.accelerator,
+                                "accelerator": accelerator,
                                 "runtime_backend": state
                                     .manager
                                     .status()
