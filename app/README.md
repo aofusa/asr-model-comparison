@@ -244,10 +244,17 @@ npm run validate:windows:voxtral:llamacpp:realtime -- --audio "..\backend\tests\
 
 ### Windows配布用の単一exeを作成
 
-Windows向けに配布する場合は、Tauriのリリースビルドで生成されるデスクトップ実行ファイルを `app/dist/AMCP.exe` にコピーします。
+Windows向けに配布する場合は、Tauriのリリースビルドで生成されるデスクトップ実行ファイルを `app/dist/AMCP.exe` にコピーします。Voxtral Realtimeを有効にしたビルドでは、パッチ済み `llama.cpp` のsource/build/binディレクトリを同じPowerShellセッションで指定してから実行してください。
 
 ```powershell
 cd app
+
+$patchedRoot="C:\Users\5000e\Documents\aofusa\ai\asr-model-comparison-project\.tmp\llama-cpp-voxtral-pr20638"
+$patchedBuild="$patchedRoot\build-amcp-cpu-release"
+$env:AMCP_VOXTRAL_PATCHED_LLAMA_DIR=$patchedRoot
+$env:AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR=$patchedBuild
+$env:AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR="$patchedBuild\bin"
+
 npm run build:windows:exe
 ```
 
@@ -274,10 +281,16 @@ Get-FileHash .\dist\AMCP.exe, .\src-tauri\target\release\amcp-desktop.exe -Algor
 この `AMCP.exe` はフロントエンド資産とRust APIサーバーを同梱した単一の実行ファイルです。実行時はアプリ内でRust APIサーバーを `127.0.0.1:8765` に起動し、Tauri WebViewから接続します。
 必ず `npm run build:windows:exe` または `npm run build` のようにTauri CLI経由でビルドしてください。`cargo build --bin amcp-desktop` で直接作ったexeは、Tauriの本番Webアセット埋め込みが行われず、開発用の `localhost:5173` に接続しようとします。
 
-同じ `AMCP.exe` は、明示的に `--server` を付けた場合だけHTTP serverモードで起動します。
+同じ `AMCP.exe` は、明示的に `--server` を付けた場合だけHTTP serverモードで起動します。外部端末から接続できるようにする場合は `--host 0.0.0.0` を指定します。
 
 ```powershell
-.\dist\AMCP.exe --server --host 127.0.0.1 --port 8000
+.\dist\AMCP.exe --server --host 0.0.0.0 --port 8000
+```
+
+起動確認は別PowerShellから以下のように行えます。
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/status
 ```
 
 引数なしでダブルクリックした場合は、通常のTauriデスクトップアプリとして起動します。
@@ -286,7 +299,7 @@ Get-FileHash .\dist\AMCP.exe, .\src-tauri\target\release\amcp-desktop.exe -Algor
 
 - Windows 10/11 を対象にしています。
 - Microsoft Edge WebView2 Runtime が必要です。通常のWindows 10/11環境には入っていますが、未導入環境ではMicrosoft公式のWebView2 Runtimeを導入してください。
-- Whisper / Qwen3-ASR / Voxtral のモデルファイルはexeに同梱しません。必要に応じて `AMCP_MODEL_DIR`、`AMCP_QWEN_MODEL_DIR`、`AMCP_VOXTRAL_MODEL_DIR` などで配置先を指定するか、対応実装の自動ダウンロードを利用します。
+- Whisper / Qwen3-ASR / Voxtral のモデルファイルはexeに同梱しません。必要に応じて `AMCP_MODEL_DIR`、`AMCP_QWEN_MODEL_DIR`、`AMCP_VOXTRAL_LLAMA_MODEL_PATH`、`AMCP_VOXTRAL_LLAMA_MMPROJ_PATH`、またはHugging Face共通キャッシュ用の `AMCP_VOXTRAL_LLAMA_REPO_ID` / `AMCP_VOXTRAL_LLAMA_MODEL_FILE` / `AMCP_VOXTRAL_LLAMA_MMPROJ_FILE` を指定してください。
 - 単一exe配布では、必ず `app\dist\AMCP.exe` を渡してください。インストーラー形式が必要になった場合は、`.ico` アイコンを追加し、Tauriの `bundle.active` と `bundle.targets` を有効化してください。
 
 ### Tauriアプリをビルド
@@ -389,8 +402,7 @@ Voxtral patched llama.cpp featureのコンパイル確認:
 
 ```powershell
 npm run test:voxtral:compile
-npm run test:voxtral:directml:compile
-npm run test:voxtral:cuda:compile
+npm run test:voxtral:llamacpp:realtime:compile
 ```
 
 主に以下を検証します。
@@ -431,8 +443,16 @@ npm run validate:windows:qwen -- --audio "..\backend\tests\audio_samples\ja_01.m
 Voxtral:
 
 ```powershell
-$env:AMCP_VOXTRAL_MODEL_DIR="C:\models\voxtral"
-npm run validate:windows:voxtral:directml -- --audio "..\backend\tests\audio_samples\ja_01.mp3" --model-id voxtral-mini-4b --language ja --expected-text "期待する文字起こし" --json
+$patchedRoot="C:\Users\5000e\Documents\aofusa\ai\asr-model-comparison-project\.tmp\llama-cpp-voxtral-pr20638"
+$patchedBuild="$patchedRoot\build-amcp-cpu-release"
+$env:AMCP_VOXTRAL_PATCHED_LLAMA_DIR=$patchedRoot
+$env:AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR=$patchedBuild
+$env:AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR="$patchedBuild\bin"
+$env:AMCP_VOXTRAL_LLAMA_REPO_ID="acceldium/Voxtral-Mini-4B-Realtime-2602_GGUF"
+$env:AMCP_VOXTRAL_LLAMA_MODEL_FILE="voxtral-realtime-4b-text-q8_0.gguf"
+$env:AMCP_VOXTRAL_LLAMA_MMPROJ_FILE="voxtral-realtime-4b-mmproj-f16.gguf"
+
+npm run validate:windows:voxtral -- --audio "..\backend\tests\audio_samples\ja_01.mp3" --model-id voxtral-mini-4b --language ja --expected-text "期待する文字起こし" --json
 ```
 
 出力には `audio_duration_seconds`、`wall_time_seconds`、`realtime_factor`、`runtime_backend`、`accelerator`、`character_error_rate` が含まれます。`realtime_factor` は 1.0 未満なら実時間より高速です。

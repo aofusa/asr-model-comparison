@@ -17,7 +17,7 @@ ASR Model Comparison Platform (AMCP) — 同一の音声サンプルに対して
 
 ## 現在の状態
 
-プロジェクト本体はリポジトリルートにあります。FastAPI バックエンド、Pure Qwik + Vite フロントエンド、WebSocket リアルタイム文字起こし、詳細な再接続UX、音量メーター、チャンク処理フィードバック、履歴表示、Qwen3-ASR / Voxtral / Whisper の単一モデル運用が実装済みです。
+プロジェクト本体はリポジトリルートにあります。FastAPI バックエンド、Rust/Tauri 版 `app/`、Pure Qwik + Vite フロントエンド、WebSocket リアルタイム文字起こし、詳細な再接続UX、音量メーター、チャンク処理フィードバック、履歴表示、Qwen3-ASR / Voxtral / Whisper の単一モデル運用が実装済みです。
 
 `docs/` には仕様とバックログを置きます。公開ユーザー向けの起動方法、WebSocket利用方法、日本語リアルタイム推奨設定は `README.md` に集約します。AI生成の修正指示書、調査メモ、実行ログ、ビルド成果物は Git 管理外にしてください。
 
@@ -41,6 +41,11 @@ repository root/
     public/
     package.json
     playwright.config.ts # E2Eテスト
+  app/
+    src-tauri/           # Rust/Tauri アプリ、serverモード、AMCP.exeビルド
+    scripts/
+      build-windows-exe.ps1
+    dist/                # app\dist\AMCP.exe（生成物、Git管理外）
   run.sh / run.bat       # 統合起動スクリプト
   docs/
     specs.md
@@ -75,6 +80,36 @@ npm run test:e2e:prod
 # コード品質
 black .
 ruff check .
+```
+
+### Rust/Tauri版 AMCP.exe
+
+Windows向けの配布用exeは `app/` でTauri CLI経由でビルドする。`cargo build --bin amcp-desktop` だけで直接ビルドすると、本番Webアセットの埋め込みが行われず開発用localhostへ接続しようとするため避けること。
+
+Voxtral Realtime込みでビルドする場合は、同じPowerShellセッションでパッチ済み `llama.cpp` のsource/build/binを指定する。
+
+```powershell
+cd app
+
+$patchedRoot="C:\Users\5000e\Documents\aofusa\ai\asr-model-comparison-project\.tmp\llama-cpp-voxtral-pr20638"
+$patchedBuild="$patchedRoot\build-amcp-cpu-release"
+$env:AMCP_VOXTRAL_PATCHED_LLAMA_DIR=$patchedRoot
+$env:AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR=$patchedBuild
+$env:AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR="$patchedBuild\bin"
+
+npm run build:windows:exe
+```
+
+成果物は `app\dist\AMCP.exe`。serverモードは起動用PowerShellで以下を実行して確認する。
+
+```powershell
+.\dist\AMCP.exe --server --host 0.0.0.0 --port 8000
+```
+
+別PowerShellから以下を実行し、`service=amcp-rust-backend` が返れば成功。検証後は起動したプロセスを停止すること。
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/status
 ```
 
 ## アーキテクチャ
@@ -142,7 +177,7 @@ Frontend: `qwik`, `playwright` (Vite)
 **Phase 進行**:
 - Phase 1（WebSocket安定化 + 詳細再接続UI + ドキュメント + TDD）完了。
 - Phase 2（音量メーター、チャンク処理フィードバック、is_final区別、設定パネル、日本語プリセット）も主要項目は実装済み。
-- 次の大きな候補は入力元音声の選択機能、または Rust/Tauri 化。
+- Rust/Tauri 化は `app/` に実装済み。Windowsでは `npm run build:windows:exe` で `app\dist\AMCP.exe` を作成し、同一exeをデスクトップモードまたは `--server` 付きHTTP serverモードで起動できる。
 
 **制約の継続遵守**:
 - 単一モデルメモリ制約厳守。

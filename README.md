@@ -116,6 +116,44 @@ run.bat --build-only
 ./run.sh --build-only
 ```
 
+### Rust/Tauri版 AMCP.exe をビルドする場合
+
+現行のWindows向けRust/Tauri版は `app/` 配下でビルドします。Tauri CLI経由でフロントエンド資産を埋め込み、配布用コピーとして `app\dist\AMCP.exe` を作成します。
+
+Voxtral Realtimeを有効にしたビルドでは、パッチ済み `llama.cpp` のsource/build/binディレクトリを同じPowerShellセッションで指定してからビルドしてください。
+
+```powershell
+cd app
+
+$patchedRoot="C:\Users\5000e\Documents\aofusa\ai\asr-model-comparison-project\.tmp\llama-cpp-voxtral-pr20638"
+$patchedBuild="$patchedRoot\build-amcp-cpu-release"
+$env:AMCP_VOXTRAL_PATCHED_LLAMA_DIR=$patchedRoot
+$env:AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR=$patchedBuild
+$env:AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR="$patchedBuild\bin"
+
+npm run build:windows:exe
+```
+
+ビルド成果物:
+
+```text
+app\dist\AMCP.exe
+```
+
+`AMCP.exe` は引数なしではTauriデスクトップアプリとして起動します。HTTP serverモードで起動する場合は `--server` を付けます。
+
+```powershell
+.\dist\AMCP.exe --server --host 0.0.0.0 --port 8000
+```
+
+別PowerShellから起動確認する場合:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/status
+```
+
+`service` が `amcp-rust-backend` で返れば、serverモードで起動できています。
+
 ## リアルタイム利用のための推奨設定（日本語）
 
 日本語で高精度なリアルタイム認識を行う場合、Qwen3-ASR または Voxtral を選択し、以下の設定を推奨します。Whisper は軽量検証や比較用として有用ですが、本プロジェクトでは Qwen3-ASR / Voxtral を主軸にしています。
