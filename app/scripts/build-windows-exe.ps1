@@ -2,13 +2,79 @@ $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $appRoot = Split-Path -Parent $scriptDir
+$repoRoot = Split-Path -Parent $appRoot
 $sourceExe = Join-Path $appRoot "src-tauri\target\release\amcp-desktop.exe"
 $distDir = Join-Path $appRoot "dist"
 $distExe = Join-Path $distDir "AMCP.exe"
+$distWebDir = Join-Path $distDir "web"
+$frontendDistDir = Join-Path $repoRoot "frontend\dist"
+
+function Set-DefaultEnvPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    if (-not [Environment]::GetEnvironmentVariable($Name, "Process") -and (Test-Path $Path)) {
+        [Environment]::SetEnvironmentVariable($Name, (Resolve-Path $Path).Path, "Process")
+    }
+}
+
+function Initialize-VoxtralPatchedLlamaEnv {
+    $patchedRoot = Join-Path $repoRoot ".tmp\llama-cpp-voxtral-pr20638"
+    $patchedBuild = Join-Path $patchedRoot "build-amcp-cpu-release"
+    $patchedBin = Join-Path $patchedBuild "bin"
+
+    Set-DefaultEnvPath -Name "AMCP_VOXTRAL_PATCHED_LLAMA_DIR" -Path $patchedRoot
+    Set-DefaultEnvPath -Name "AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR" -Path $patchedBuild
+    Set-DefaultEnvPath -Name "AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR" -Path $patchedBin
+}
+
+function Invoke-WithRetry {
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$Action,
+        [Parameter(Mandatory = $true)][string]$Description,
+        [int]$Attempts = 10,
+        [int]$DelayMilliseconds = 1000
+    )
+
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        try {
+            & $Action
+            return
+        }
+        catch {
+            if ($attempt -eq $Attempts) {
+                throw
+            }
+            Write-Warning "$Description failed on attempt $attempt/$Attempts; retrying in $DelayMilliseconds ms. $($_.Exception.Message)"
+            Start-Sleep -Milliseconds $DelayMilliseconds
+        }
+    }
+}
 
 Push-Location $appRoot
 try {
-    Remove-Item -Force -ErrorAction SilentlyContinue -Path $sourceExe, $distExe
+    Initialize-VoxtralPatchedLlamaEnv
+    if (Test-Path $sourceExe) {
+        Invoke-WithRetry -Description "Removing old release executable" -Action {
+            Remove-Item -Force -Path $sourceExe
+        }
+    }
+    if (Test-Path $distExe) {
+        try {
+            Invoke-WithRetry -Description "Removing old distributable executable" -Action {
+                Remove-Item -Force -Path $distExe
+            }
+        }
+        catch {
+            $backupExe = Join-Path $distDir ("AMCP.old-{0}.exe" -f (Get-Date -Format "yyyyMMddHHmmss"))
+            Write-Warning "Could not remove old distributable executable; moving it aside to $backupExe. $($_.Exception.Message)"
+            Invoke-WithRetry -Description "Moving old distributable executable aside" -Action {
+                Move-Item -Force -Path $distExe -Destination $backupExe
+            }
+        }
+    }
 
     npm run build
     if ($LASTEXITCODE -ne 0) {
@@ -20,7 +86,16 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $distDir | Out-Null
-    Copy-Item -Force -Path $sourceExe -Destination $distExe
+    Invoke-WithRetry -Description "Copying distributable executable" -Action {
+        Copy-Item -Force -Path $sourceExe -Destination $distExe
+    }
+    if (Test-Path $distWebDir) {
+        Remove-Item -Recurse -Force -Path $distWebDir
+    }
+    if (-not (Test-Path (Join-Path $frontendDistDir "index.html"))) {
+        throw "Frontend build output was not found: $frontendDistDir"
+    }
+    Copy-Item -Recurse -Force -Path $frontendDistDir -Destination $distWebDir
 
     $item = Get-Item $distExe
     $item.LastWriteTime = Get-Date
@@ -29,6 +104,7 @@ try {
     Write-Host "  Source: $sourceExe"
     Write-Host "  $($item.FullName)"
     Write-Host "  $([Math]::Round($item.Length / 1MB, 2)) MB"
+    Write-Host "  Frontend: $distWebDir"
 }
 finally {
     Pop-Location

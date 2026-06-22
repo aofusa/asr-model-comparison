@@ -21,6 +21,7 @@ path = "src/main.rs"
 [features]
 default = []
 desktop = ["dep:tauri"]
+full-runtime = ["desktop", "whisper", "qwen", "voxtral"]
 whisper = ["dep:hf-hub", "dep:reqwest", "dep:whisper-rs"]
 whisper-cuda = ["whisper", "whisper-rs/cuda"]
 whisper-vulkan = ["whisper", "whisper-rs/vulkan"]

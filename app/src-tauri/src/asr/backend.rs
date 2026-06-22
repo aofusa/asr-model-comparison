@@ -596,8 +596,10 @@ mod tests {
         assert!(status
             .artifacts
             .iter()
-            .any(|artifact| artifact.name == "voxtral_audio_encoder"
-                || artifact.env_var.as_deref() == Some("AMCP_VOXTRAL_MODEL_DIR")));
+            .any(
+                |artifact| artifact.env_var.as_deref() == Some("AMCP_VOXTRAL_LLAMA_MODEL_PATH")
+                    || artifact.env_var.as_deref() == Some("AMCP_VOXTRAL_LLAMA_REPO_ID")
+            ));
         assert!(status.artifacts.iter().any(|artifact| artifact.required));
     }
 
