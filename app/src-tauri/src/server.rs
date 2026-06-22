@@ -66,6 +66,7 @@ pub fn router(config: AppConfig) -> Router {
 
 pub async fn run(config: AppConfig) -> anyhow::Result<()> {
     let addr = SocketAddr::new(config.host, config.port);
+    let remote_urls = remote_access_urls(config.host, config.port);
     tracing::info!(
         mode = ?config.mode,
         host = %config.host,
@@ -73,12 +74,58 @@ pub async fn run(config: AppConfig) -> anyhow::Result<()> {
         accelerator = %config.accelerator,
         static_dir = ?config.static_dir,
         available_backends = ?default_available_backends(),
+        remote_urls = ?remote_urls,
         "starting AMCP Rust backend"
     );
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("AMCP Rust server listening on http://{addr}");
+    if config.host.is_unspecified() {
+        tracing::info!(
+            remote_urls = ?remote_urls,
+            "AMCP is listening on all interfaces; remote clients can use one of these URLs if Windows Firewall allows inbound TCP traffic"
+        );
+        #[cfg(target_os = "windows")]
+        tracing::info!(
+            port = config.port,
+            "If remote clients cannot connect, allow AMCP.exe or inbound TCP port {} in Windows Defender Firewall for the active network profile",
+            config.port
+        );
+    } else if config.host.is_loopback() {
+        tracing::warn!(
+            host = %config.host,
+            "AMCP is bound to a loopback address; remote clients cannot connect unless --host 0.0.0.0 is used"
+        );
+    }
     axum::serve(listener, router(config)).await?;
     Ok(())
+}
+
+fn remote_access_urls(host: IpAddr, port: u16) -> Vec<String> {
+    if !host.is_unspecified() {
+        return vec![format!("http://{host}:{port}")];
+    }
+
+    let mut urls = local_ipv4_addresses()
+        .into_iter()
+        .map(|ip| format!("http://{ip}:{port}"))
+        .collect::<Vec<_>>();
+    urls.sort();
+    urls.dedup();
+    urls
+}
+
+fn local_ipv4_addresses() -> Vec<Ipv4Addr> {
+    let bind_addr = std::net::SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
+    let Ok(socket) = std::net::UdpSocket::bind(bind_addr) else {
+        return Vec::new();
+    };
+
+    // No packets are sent; connect only lets the OS choose the outbound interface.
+    let _ = socket.connect("8.8.8.8:80");
+    match socket.local_addr().map(|addr| addr.ip()) {
+        Ok(IpAddr::V4(ip)) if !ip.is_loopback() => vec![ip],
+        _ => Vec::new(),
+    }
 }
 
 pub fn spawn_embedded_server(
