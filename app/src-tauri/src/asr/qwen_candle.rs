@@ -150,15 +150,15 @@ fn default_user_cache_dir() -> PathBuf {
 
 pub fn qwen_backend_plan(available_backends: &[HardwareBackend]) -> Vec<HardwareBackend> {
     let mut backends = Vec::new();
-    for backend in [
-        HardwareBackend::Cuda,
-        HardwareBackend::Metal,
-        HardwareBackend::Cpu,
-    ] {
-        if available_backends.contains(&backend) || backend == HardwareBackend::Cpu {
-            backends.push(backend);
-        }
+    if cfg!(feature = "qwen-cuda") && available_backends.contains(&HardwareBackend::Cuda) {
+        backends.push(HardwareBackend::Cuda);
     }
+    if cfg!(any(target_os = "macos", target_os = "ios"))
+        && available_backends.contains(&HardwareBackend::Metal)
+    {
+        backends.push(HardwareBackend::Metal);
+    }
+    backends.push(HardwareBackend::Cpu);
     backends
 }
 
@@ -617,14 +617,17 @@ mod tests {
             HardwareBackend::Cpu,
         ]);
 
-        assert_eq!(
-            backends,
-            vec![
-                HardwareBackend::Cuda,
-                HardwareBackend::Metal,
-                HardwareBackend::Cpu
-            ]
-        );
+        if cfg!(feature = "qwen-cuda") {
+            assert!(backends.contains(&HardwareBackend::Cuda));
+        } else {
+            assert!(!backends.contains(&HardwareBackend::Cuda));
+        }
+        if cfg!(any(target_os = "macos", target_os = "ios")) {
+            assert!(backends.contains(&HardwareBackend::Metal));
+        } else {
+            assert!(!backends.contains(&HardwareBackend::Metal));
+        }
+        assert_eq!(backends.last(), Some(&HardwareBackend::Cpu));
     }
 
     #[test]

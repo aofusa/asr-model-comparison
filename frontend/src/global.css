@@ -134,6 +134,19 @@ button:disabled {
   font-size: 0.78rem;
 }
 
+.model-option-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.model-option-text small {
+  color: #93c5fd;
+  font-size: 0.68rem;
+  line-height: 1.1;
+}
+
 .audio-source-selector {
   display: flex;
   flex-wrap: wrap;

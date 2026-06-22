@@ -444,7 +444,10 @@ fn runtime_supported_backends(family: ModelFamily) -> Vec<HardwareBackend> {
             }
         }
         ModelFamily::Voxtral => {
-            if cfg!(feature = "voxtral-llamacpp-vulkan") {
+            if cfg!(any(
+                feature = "voxtral-llamacpp-vulkan",
+                feature = "voxtral-realtime-vulkan"
+            )) {
                 supported.push(HardwareBackend::Vulkan);
             }
         }

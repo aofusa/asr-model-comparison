@@ -30,6 +30,19 @@ type HardwareAcceleratorKind = 'auto' | 'gpu' | 'cpu';
 type BackendStatus = {
   available_backends?: unknown;
   loaded_backend?: unknown;
+  model_preparation?: ModelPreparationStatus[];
+};
+
+type ModelPreparationStatus = {
+  model_id: string;
+  runtime_backend?: string;
+  configured?: boolean;
+  model_assets_ready?: boolean;
+  loaded_in_memory?: boolean;
+  ready_for_transcription?: boolean;
+  loaded_backend?: string | null;
+  selected_accelerators?: string[];
+  message?: string;
 };
 
 declare global {
@@ -137,6 +150,50 @@ function formatCurrentAccelerator(status: BackendStatus | null): string {
   }
 
   return formatBackendLabel(status.loaded_backend) ?? 'No model loaded yet';
+}
+
+function getModelPreparationStatus(
+  status: BackendStatus | null,
+  modelId: string,
+): ModelPreparationStatus | null {
+  const states = status?.model_preparation;
+  if (!Array.isArray(states)) {
+    return null;
+  }
+  return states.find((state) => state.model_id === modelId) ?? null;
+}
+
+function formatModelPreparationBadge(state: ModelPreparationStatus | null): string {
+  if (!state) {
+    return 'Status unknown';
+  }
+  if (state.ready_for_transcription) {
+    return 'Ready';
+  }
+  if (state.loaded_in_memory) {
+    return 'Loaded';
+  }
+  if (state.model_assets_ready) {
+    return 'Files ready';
+  }
+  if (state.configured) {
+    return 'Needs model files';
+  }
+  return 'Placeholder';
+}
+
+function formatSelectedModelPreparation(status: BackendStatus | null, modelId: string): string {
+  const state = getModelPreparationStatus(status, modelId);
+  if (!state) {
+    return 'Model preparation status is not reported by this backend yet.';
+  }
+  const backend = state.runtime_backend ? `Runtime: ${state.runtime_backend}. ` : '';
+  const accelerator = state.loaded_backend
+    ? `Loaded accelerator: ${String(state.loaded_backend).toUpperCase()}. `
+    : state.selected_accelerators?.length
+      ? `Available for this model: ${state.selected_accelerators.map((value) => value.toUpperCase()).join(', ')}. `
+      : '';
+  return `${backend}${accelerator}${state.message || formatModelPreparationBadge(state)}`;
 }
 
 function selectedAcceleratorFromMessage(data: unknown): string | null {
@@ -1673,7 +1730,12 @@ export default component$(() => {
                       checked={selectedModel.value === model.id}
                       onChange$={() => { selectedModel.value = model.id; saveSettings(); }}
                     />
-                    {model.label}
+                    <span class="model-option-text">
+                      <span>{model.label}</span>
+                      <small data-testid={`model-preparation-${model.id}`}>
+                        {formatModelPreparationBadge(getModelPreparationStatus(acceleratorStatus.value, model.id))}
+                      </small>
+                    </span>
                   </label>
                 ))}
               </div>
@@ -1793,6 +1855,9 @@ export default component$(() => {
             ? 'Idle'
             : `${modelProgress.phase}: ${modelProgress.message}`}
           {modelProgress.elapsedSeconds !== null ? ` (${modelProgress.elapsedSeconds.toFixed(2)}s)` : ''}
+        </div>
+        <div class="model-progress-message" data-testid="selected-model-preparation">
+          {formatSelectedModelPreparation(acceleratorStatus.value, selectedModel.value)}
         </div>
         <div class="model-progress-bar-bg">
           <div

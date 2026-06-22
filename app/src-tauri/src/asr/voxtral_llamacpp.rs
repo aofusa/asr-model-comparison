@@ -57,7 +57,10 @@ pub struct VoxtralLlamaCppTranscription {
 pub fn configure_voxtral_llamacpp(available_backends: &[HardwareBackend]) -> VoxtralLlamaCppConfig {
     let providers = llamacpp_provider_plan(available_backends);
     let use_gpu = env_bool("AMCP_VOXTRAL_LLAMA_USE_GPU").unwrap_or_else(|| {
-        cfg!(feature = "voxtral-llamacpp-vulkan")
+        cfg!(any(
+            feature = "voxtral-llamacpp-vulkan",
+            feature = "voxtral-realtime-vulkan"
+        )) && runtime_vulkan_available()
             && providers
                 .iter()
                 .any(|backend| *backend != HardwareBackend::Cpu)
@@ -144,12 +147,14 @@ pub fn should_route_to_llamacpp_with_runtime(
 
 pub fn llamacpp_provider_plan(available_backends: &[HardwareBackend]) -> Vec<HardwareBackend> {
     let mut providers = Vec::new();
-    for backend in [
-        HardwareBackend::Vulkan,
-        HardwareBackend::Cuda,
-        HardwareBackend::Metal,
-        HardwareBackend::Cpu,
-    ] {
+    let include_vulkan = cfg!(any(
+        feature = "voxtral-llamacpp-vulkan",
+        feature = "voxtral-realtime-vulkan"
+    )) && runtime_vulkan_available();
+    for backend in [HardwareBackend::Vulkan, HardwareBackend::Cpu] {
+        if backend == HardwareBackend::Vulkan && !include_vulkan {
+            continue;
+        }
         if available_backends.contains(&backend) || backend == HardwareBackend::Cpu {
             providers.push(backend);
         }
@@ -822,6 +827,17 @@ fn env_bool(key: &str) -> Option<bool> {
         "0" | "false" | "no" | "off" => Some(false),
         _ => None,
     })
+}
+
+fn runtime_vulkan_available() -> bool {
+    env_bool("AMCP_VOXTRAL_PATCHED_LLAMA_LINK_VULKAN").unwrap_or(false)
+        || std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|dir| dir.join("ggml-vulkan.dll")))
+            .is_some_and(|path| path.is_file())
+        || env_path("AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR")
+            .map(|dir| dir.join("ggml-vulkan.dll").is_file())
+            .unwrap_or(false)
 }
 
 #[cfg(test)]

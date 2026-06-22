@@ -96,8 +96,22 @@ pub struct ManagerStatus {
     pub loaded_backend: Option<HardwareBackend>,
     pub available_backends: Vec<HardwareBackend>,
     pub runtime_backends: Vec<backend::RuntimeBackendStatus>,
+    pub model_preparation: Vec<ModelPreparationStatus>,
     pub translation: translation::TranslationRuntimeStatus,
     pub service: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelPreparationStatus {
+    pub model_id: String,
+    pub runtime_backend: backend::RuntimeBackendKind,
+    pub configured: bool,
+    pub model_assets_ready: bool,
+    pub loaded_in_memory: bool,
+    pub ready_for_transcription: bool,
+    pub loaded_backend: Option<HardwareBackend>,
+    pub selected_accelerators: Vec<HardwareBackend>,
+    pub message: String,
 }
 
 pub type SharedModelManager = Arc<HybridModelManager>;
@@ -124,11 +138,39 @@ impl HybridModelManager {
 
     pub async fn status(&self) -> ManagerStatus {
         let inner = self.inner.lock().await;
+        let runtime_backends = backend::runtime_backend_statuses(&self.available_backends);
+        let model_preparation = runtime_backends
+            .iter()
+            .map(|runtime| {
+                let loaded_in_memory =
+                    inner.loaded_model_id.as_deref() == Some(runtime.model_id.as_str());
+                let model_assets_ready = model_assets_ready(runtime);
+                let ready_for_transcription =
+                    runtime.real_inference_available && model_assets_ready && loaded_in_memory;
+                ModelPreparationStatus {
+                    model_id: runtime.model_id.clone(),
+                    runtime_backend: runtime.backend,
+                    configured: runtime.configured,
+                    model_assets_ready,
+                    loaded_in_memory,
+                    ready_for_transcription,
+                    loaded_backend: loaded_in_memory.then_some(inner.loaded_backend).flatten(),
+                    selected_accelerators: runtime.selected_accelerators.clone(),
+                    message: model_preparation_message(
+                        runtime,
+                        model_assets_ready,
+                        loaded_in_memory,
+                        ready_for_transcription,
+                    ),
+                }
+            })
+            .collect();
         ManagerStatus {
             loaded_model_id: inner.loaded_model_id.clone(),
             loaded_backend: inner.loaded_backend,
             available_backends: self.available_backends.clone(),
-            runtime_backends: backend::runtime_backend_statuses(&self.available_backends),
+            runtime_backends,
+            model_preparation,
             translation: translation::runtime_status(),
             service: "amcp-rust-backend",
         }
@@ -397,6 +439,56 @@ impl HybridModelManager {
         );
         Ok(result)
     }
+}
+
+fn model_assets_ready(runtime: &backend::RuntimeBackendStatus) -> bool {
+    if !runtime.configured || !runtime.real_inference_available {
+        return false;
+    }
+
+    let asset_artifacts = runtime.artifacts.iter().filter(|artifact| {
+        artifact.required
+            || matches!(
+                artifact.kind,
+                backend::RuntimeArtifactKind::File
+                    | backend::RuntimeArtifactKind::Directory
+                    | backend::RuntimeArtifactKind::Download
+            )
+    });
+
+    let mut saw_asset = false;
+    for artifact in asset_artifacts {
+        saw_asset = true;
+        if !artifact.exists {
+            return false;
+        }
+    }
+
+    saw_asset || runtime.artifacts.is_empty()
+}
+
+fn model_preparation_message(
+    runtime: &backend::RuntimeBackendStatus,
+    model_assets_ready: bool,
+    loaded_in_memory: bool,
+    ready_for_transcription: bool,
+) -> String {
+    if ready_for_transcription {
+        return "Model files are available and this model is prepared in memory.".to_string();
+    }
+    if loaded_in_memory {
+        return "This model is selected in memory, but runtime files are not fully ready."
+            .to_string();
+    }
+    if model_assets_ready {
+        return "Model files are available. Start recording to load and prepare it in memory."
+            .to_string();
+    }
+    if runtime.configured {
+        return "Runtime is compiled in, but model files still need to be downloaded or configured."
+            .to_string();
+    }
+    "Runtime feature is not enabled; this model will use placeholder behavior.".to_string()
 }
 
 fn log_model_progress(event: &ModelProgress) {

@@ -8,6 +8,7 @@ $distDir = Join-Path $appRoot "dist"
 $distExe = Join-Path $distDir "AMCP.exe"
 $distWebDir = Join-Path $distDir "web"
 $frontendDistDir = Join-Path $repoRoot "frontend\dist"
+$voxtralPatchedBinDir = $null
 
 function Set-DefaultEnvPath {
     param(
@@ -21,13 +22,48 @@ function Set-DefaultEnvPath {
 }
 
 function Initialize-VoxtralPatchedLlamaEnv {
+    $script:voxtralPatchedBinDir = $null
     $patchedRoot = Join-Path $repoRoot ".tmp\llama-cpp-voxtral-pr20638"
-    $patchedBuild = Join-Path $patchedRoot "build-amcp-cpu-release"
+    $patchedVulkanBuild = Join-Path $patchedRoot "build-amcp-vulkan-release"
+    $patchedCpuBuild = Join-Path $patchedRoot "build-amcp-cpu-release"
+    $patchedBuild = if (Test-Path (Join-Path $patchedVulkanBuild "bin\ggml-vulkan.dll")) {
+        $patchedVulkanBuild
+    } else {
+        $patchedCpuBuild
+    }
     $patchedBin = Join-Path $patchedBuild "bin"
 
     Set-DefaultEnvPath -Name "AMCP_VOXTRAL_PATCHED_LLAMA_DIR" -Path $patchedRoot
     Set-DefaultEnvPath -Name "AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR" -Path $patchedBuild
     Set-DefaultEnvPath -Name "AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR" -Path $patchedBin
+    if (Test-Path $patchedBin) {
+        $script:voxtralPatchedBinDir = (Resolve-Path $patchedBin).Path
+    }
+    if (Test-Path (Join-Path $patchedBin "ggml-vulkan.dll")) {
+        [Environment]::SetEnvironmentVariable("AMCP_VOXTRAL_PATCHED_LLAMA_LINK_VULKAN", "1", "Process")
+    }
+}
+
+function Copy-VoxtralPatchedLlamaDlls {
+    if (-not $script:voxtralPatchedBinDir) {
+        return
+    }
+
+    $dlls = @(
+        "llama.dll",
+        "mtmd.dll",
+        "ggml.dll",
+        "ggml-base.dll",
+        "ggml-cpu.dll",
+        "ggml-vulkan.dll"
+    )
+
+    foreach ($dll in $dlls) {
+        $source = Join-Path $script:voxtralPatchedBinDir $dll
+        if (Test-Path $source) {
+            Copy-Item -Force -Path $source -Destination (Join-Path $distDir $dll)
+        }
+    }
 }
 
 function Invoke-WithRetry {
@@ -89,6 +125,7 @@ try {
     Invoke-WithRetry -Description "Copying distributable executable" -Action {
         Copy-Item -Force -Path $sourceExe -Destination $distExe
     }
+    Copy-VoxtralPatchedLlamaDlls
     if (Test-Path $distWebDir) {
         Remove-Item -Recurse -Force -Path $distWebDir
     }
