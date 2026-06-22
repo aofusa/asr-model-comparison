@@ -86,7 +86,7 @@ pub fn runtime_status() -> TranslationRuntimeStatus {
             "qwen3-asr:speech->target-language".to_string(),
             "voxtral:speech->target-language".to_string(),
         ],
-        reason: "external translation commands are disabled; Qwen3-ASR uses Rust/Candle language-prompt translation and Voxtral uses Rust/ORT model-native speech translation when target_language is set".to_string(),
+        reason: "external translation commands are disabled; Qwen3-ASR uses Rust/Candle language-prompt translation and Voxtral uses patched llama.cpp model-native text generation when target_language is set".to_string(),
     }
 }
 

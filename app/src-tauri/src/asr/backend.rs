@@ -1,7 +1,6 @@
 use crate::accelerator::{HardwareBackend, ModelFamily};
 use crate::asr::qwen_candle;
 use crate::asr::voxtral_llamacpp;
-use crate::asr::voxtral_onnx;
 use crate::models::{available_models, family_for_model};
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +9,6 @@ use serde::{Deserialize, Serialize};
 pub enum RuntimeBackendKind {
     WhisperRs,
     QwenNative,
-    VoxtralOnnx,
     VoxtralLlamaCpp,
     Placeholder,
 }
@@ -152,64 +150,7 @@ fn voxtral_status(
     family: ModelFamily,
     available_backends: &[HardwareBackend],
 ) -> RuntimeBackendStatus {
-    if voxtral_llamacpp::is_llamacpp_requested() {
-        return voxtral_llamacpp_status(model_id, family, available_backends);
-    }
-
-    let configured = cfg!(feature = "voxtral");
-    let onnx_config = voxtral_onnx::configure_voxtral_onnx(available_backends);
-    let artifacts = voxtral_artifacts(onnx_config.as_ref());
-    let split_files_available = onnx_config
-        .as_ref()
-        .map(|config| {
-            [
-                config.audio_encoder_path.as_ref(),
-                config.embed_tokens_path.as_ref(),
-                config.decoder_path.as_ref(),
-                config.tokenizer_path.as_ref(),
-            ]
-            .into_iter()
-            .all(|path| path.map(|path| path.is_file()).unwrap_or(false))
-        })
-        .unwrap_or(false);
-    let real_inference_available = configured && split_files_available;
-    RuntimeBackendStatus {
-        model_id: model_id.to_string(),
-        family,
-        backend: if real_inference_available {
-            RuntimeBackendKind::VoxtralOnnx
-        } else {
-            RuntimeBackendKind::Placeholder
-        },
-        real_inference_available,
-        configured,
-        selected_accelerators: onnx_config
-            .as_ref()
-            .map(|config| config.providers.clone())
-            .unwrap_or_else(|| {
-                filter_backends(
-                    available_backends,
-                    &[
-                        HardwareBackend::Cuda,
-                        HardwareBackend::DirectMl,
-                        HardwareBackend::CoreMl,
-                        HardwareBackend::NnApi,
-                        HardwareBackend::Vulkan,
-                        HardwareBackend::Cpu,
-                    ],
-                )
-            }),
-        artifacts,
-        reason: if real_inference_available {
-            "voxtral feature is enabled and Voxtral split ONNX/tokenizer files are configured."
-                .to_string()
-        } else if configured {
-            "voxtral feature is enabled, but audio_encoder.onnx, embed_tokens.onnx, decoder_model_merged.onnx, and tokenizer.json are not fully configured."
-                .to_string()
-        } else {
-            "voxtral feature is not enabled; using placeholder inference.".to_string()
-        },
-    }
+    voxtral_llamacpp_status(model_id, family, available_backends)
 }
 
 fn voxtral_llamacpp_status(
@@ -462,44 +403,6 @@ fn default_user_cache_dir() -> std::path::PathBuf {
         .join(".cache")
 }
 
-fn voxtral_artifacts(
-    config: Option<&voxtral_onnx::VoxtralOnnxConfig>,
-) -> Vec<RuntimeArtifactStatus> {
-    let Some(config) = config else {
-        return vec![missing_env(
-            "voxtral_model_dir",
-            RuntimeArtifactKind::Directory,
-            "AMCP_VOXTRAL_MODEL_DIR",
-        )];
-    };
-    vec![
-        optional_file_artifact(
-            "voxtral_audio_encoder",
-            config.audio_encoder_path.as_ref(),
-            Some("AMCP_VOXTRAL_AUDIO_ENCODER_PATH"),
-            true,
-        ),
-        optional_file_artifact(
-            "voxtral_embed_tokens",
-            config.embed_tokens_path.as_ref(),
-            Some("AMCP_VOXTRAL_EMBED_TOKENS_PATH"),
-            true,
-        ),
-        optional_file_artifact(
-            "voxtral_decoder",
-            config.decoder_path.as_ref(),
-            Some("AMCP_VOXTRAL_DECODER_PATH"),
-            true,
-        ),
-        optional_file_artifact(
-            "voxtral_tokenizer",
-            config.tokenizer_path.as_ref(),
-            Some("AMCP_VOXTRAL_TOKENIZER_PATH"),
-            true,
-        ),
-    ]
-}
-
 fn voxtral_llamacpp_artifacts(
     config: &voxtral_llamacpp::VoxtralLlamaCppConfig,
 ) -> Vec<RuntimeArtifactStatus> {
@@ -615,18 +518,6 @@ fn optional_file_artifact(
             exists: false,
             note: Some("path is not configured".to_string()),
         },
-    }
-}
-
-fn missing_env(name: &str, kind: RuntimeArtifactKind, env_var: &str) -> RuntimeArtifactStatus {
-    RuntimeArtifactStatus {
-        name: name.to_string(),
-        kind,
-        path: None,
-        env_var: Some(env_var.to_string()),
-        required: true,
-        exists: false,
-        note: Some("environment variable is not configured".to_string()),
     }
 }
 

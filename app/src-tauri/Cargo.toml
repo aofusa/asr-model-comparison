@@ -37,10 +37,8 @@ qwen = [
     "dep:tokenizers",
 ]
 qwen-cuda = ["qwen", "candle-core/cuda", "candle-nn/cuda"]
-voxtral = ["dep:hf-hub", "dep:ndarray", "dep:ort", "dep:rustfft", "dep:tokenizers"]
-voxtral-directml = ["voxtral", "ort/directml"]
-voxtral-cuda = ["voxtral", "ort/cuda"]
-voxtral-llamacpp = []
+voxtral = ["voxtral-llamacpp-realtime-patched"]
+voxtral-llamacpp = ["dep:hf-hub"]
 voxtral-llamacpp-native = ["voxtral-llamacpp", "dep:llama-cpp-4"]
 voxtral-llamacpp-vulkan = ["voxtral-llamacpp-native", "llama-cpp-4/vulkan"]
 voxtral-llamacpp-realtime-patched = ["voxtral-llamacpp"]
@@ -60,8 +58,6 @@ libc = "0.2.186"
 llama-cpp-4 = { version = "0.3.2", default-features = false, features = ["dynamic-link", "mtmd"], optional = true }
 log = { version = "0.4", optional = true }
 mime_guess = "2"
-ndarray = { version = "0.17.2", optional = true }
-ort = { version = "2.0.0-rc.12", optional = true }
 reqwest = { version = "0.13.4", features = ["blocking", "json", "rustls"], optional = true }
 rubato = { version = "0.15", optional = true }
 rustfft = { version = "6.4.1", optional = true }

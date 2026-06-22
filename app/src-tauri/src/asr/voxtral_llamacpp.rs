@@ -118,23 +118,16 @@ pub fn is_llamacpp_requested() -> bool {
         .is_some_and(is_llamacpp_runtime)
 }
 
-pub fn should_route_to_llamacpp(language: Option<&str>, target_language: Option<&str>) -> bool {
-    should_route_to_llamacpp_with_runtime(
-        language,
-        target_language,
-        voxtral_runtime_preference().as_deref(),
-    )
+pub fn should_route_to_llamacpp(_language: Option<&str>, _target_language: Option<&str>) -> bool {
+    true
 }
 
 pub fn should_route_to_llamacpp_with_runtime(
-    language: Option<&str>,
-    target_language: Option<&str>,
-    runtime: Option<&str>,
+    _language: Option<&str>,
+    _target_language: Option<&str>,
+    _runtime: Option<&str>,
 ) -> bool {
-    if runtime.is_some_and(is_llamacpp_runtime) {
-        return true;
-    }
-    is_japanese_language(language) || is_japanese_language(target_language)
+    true
 }
 
 pub fn llamacpp_provider_plan(available_backends: &[HardwareBackend]) -> Vec<HardwareBackend> {
@@ -175,14 +168,13 @@ pub fn transcribe_voxtral_audio(
         ));
     }
 
-    let transcript_prompt = transcription_prompt(language, previous_text);
-    let transcript_text = run_llamacpp_generation(audio, &config, &transcript_prompt)?;
+    let transcript_text = run_llamacpp_transcription(audio, &config)?;
     let target_language = normalize_target_language(target_language);
     let translated_text = if let Some(target_language) = target_language.as_deref() {
         let instruction =
             translation_prompt(language, target_language, &transcript_text, previous_text);
-        let translated = run_llamacpp_generation(audio, &config, &instruction)?;
-        if translated.is_empty() {
+        let translated = run_llamacpp_text_generation(&config, &instruction)?;
+        if translated.is_empty() || is_low_quality_translation(&translated) {
             None
         } else {
             Some(translated)
@@ -217,16 +209,15 @@ pub fn transcribe_voxtral_audio(
     _available_backends: &[HardwareBackend],
 ) -> Result<Option<VoxtralLlamaCppTranscription>, String> {
     Err(
-        "Voxtral llama.cpp runtime is selected, but the voxtral-llamacpp-native feature is not enabled."
+        "Voxtral llama.cpp runtime is selected, but the voxtral feature is not enabled with a native llama.cpp backend."
             .to_string(),
     )
 }
 
 #[cfg(feature = "voxtral-llamacpp-realtime-patched")]
-fn run_llamacpp_generation(
+fn run_llamacpp_transcription(
     audio: &PreprocessedAudio,
     config: &VoxtralLlamaCppConfig,
-    _instruction: &str,
 ) -> Result<String, String> {
     use std::ffi::{CStr, CString};
     use std::os::raw::{c_char, c_float, c_int};
@@ -301,6 +292,81 @@ fn run_llamacpp_generation(
     }
     if out_text.is_null() {
         return Err("Voxtral Realtime patched llama.cpp bridge returned no text.".to_string());
+    }
+
+    let text = unsafe { CStr::from_ptr(out_text) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe { amcp_voxtral_realtime_free(out_text) };
+    Ok(clean_model_output(&text))
+}
+
+#[cfg(feature = "voxtral-llamacpp-realtime-patched")]
+fn run_llamacpp_text_generation(
+    config: &VoxtralLlamaCppConfig,
+    instruction: &str,
+) -> Result<String, String> {
+    use std::ffi::{CStr, CString};
+    use std::os::raw::{c_char, c_int};
+
+    extern "C" {
+        fn amcp_voxtral_realtime_generate_text(
+            model_path: *const c_char,
+            prompt: *const c_char,
+            context_size: u32,
+            batch_size: u32,
+            max_tokens: u32,
+            n_gpu_layers: c_int,
+            out_text: *mut *mut c_char,
+            out_error: *mut *mut c_char,
+        ) -> c_int;
+        fn amcp_voxtral_realtime_free(value: *mut c_char);
+    }
+
+    let model_path = config
+        .model_path
+        .as_ref()
+        .ok_or_else(|| "AMCP_VOXTRAL_LLAMA_MODEL_PATH is not configured.".to_string())?;
+    let model_path = CString::new(model_path.to_string_lossy().as_bytes())
+        .map_err(|_| "Voxtral Realtime model path contains an embedded NUL byte.".to_string())?;
+    let prompt = CString::new(build_text_generation_prompt(instruction))
+        .map_err(|_| "Voxtral Realtime text prompt contains an embedded NUL byte.".to_string())?;
+
+    let mut out_text: *mut c_char = std::ptr::null_mut();
+    let mut out_error: *mut c_char = std::ptr::null_mut();
+    let result = unsafe {
+        amcp_voxtral_realtime_generate_text(
+            model_path.as_ptr(),
+            prompt.as_ptr(),
+            config.context_size,
+            config.batch_size,
+            u32::try_from(config.max_tokens).unwrap_or(u32::MAX),
+            i32::try_from(config.n_gpu_layers).unwrap_or(i32::MAX),
+            &mut out_text,
+            &mut out_error,
+        )
+    };
+
+    let error = if out_error.is_null() {
+        None
+    } else {
+        let error = unsafe { CStr::from_ptr(out_error) }
+            .to_string_lossy()
+            .into_owned();
+        unsafe { amcp_voxtral_realtime_free(out_error) };
+        Some(error)
+    };
+
+    if result != 0 {
+        if !out_text.is_null() {
+            unsafe { amcp_voxtral_realtime_free(out_text) };
+        }
+        return Err(error.unwrap_or_else(|| {
+            format!("Voxtral Realtime patched llama.cpp text generation failed with code {result}.")
+        }));
+    }
+    if out_text.is_null() {
+        return Err("Voxtral Realtime patched llama.cpp text generation returned no text.".to_string());
     }
 
     let text = unsafe { CStr::from_ptr(out_text) }
@@ -437,6 +503,11 @@ fn build_llamacpp_prompt(marker: &str, instruction: &str) -> String {
     format!("[INST] {marker}\n{} [/INST]", instruction.trim())
 }
 
+#[cfg(feature = "voxtral-llamacpp-realtime-patched")]
+fn build_text_generation_prompt(instruction: &str) -> String {
+    instruction.trim().to_string()
+}
+
 #[cfg(any(
     feature = "voxtral-llamacpp-native",
     feature = "voxtral-llamacpp-realtime-patched",
@@ -452,22 +523,6 @@ Set AMCP_VOXTRAL_LLAMA_MODEL_PATH and AMCP_VOXTRAL_LLAMA_MMPROJ_PATH, or cache t
 model_path={:?} model_exists={} mmproj_path={:?} mmproj_exists={}",
         config.model_path, validation.model_exists, config.mmproj_path, validation.mmproj_exists
     )
-}
-
-#[cfg(any(
-    feature = "voxtral-llamacpp-native",
-    feature = "voxtral-llamacpp-realtime-patched"
-))]
-fn transcription_prompt(language: Option<&str>, previous_text: Option<&str>) -> String {
-    let language = language_name(language)
-        .map(|language| format!(" in {language}"))
-        .unwrap_or_else(|| " in the spoken language".to_string());
-    let previous = previous_text
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(|text| format!(" Previous transcript context: {text}"))
-        .unwrap_or_default();
-    format!("Transcribe this audio{language}. Return only the transcription.{previous}")
 }
 
 #[cfg(any(
@@ -491,7 +546,7 @@ fn translation_prompt(
         .unwrap_or_default();
     let target =
         language_name(Some(target_language)).unwrap_or_else(|| target_language.to_string());
-    format!("{source}{previous}Original transcript: {transcript_text}\nTranslate the audio and original transcript into {target}. Return only the translated text.")
+    format!("{source}{previous}Original transcript: {transcript_text}\nTranslate the transcript into {target}. Return only the translated text.\nTranslation:")
 }
 
 #[cfg(any(
@@ -528,16 +583,6 @@ fn language_name(language: Option<&str>) -> Option<String> {
         "pt" | "portuguese" => Some("Portuguese".to_string()),
         other => Some(other.to_string()),
     }
-}
-
-fn is_japanese_language(language: Option<&str>) -> bool {
-    matches!(
-        language
-            .map(str::trim)
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("ja" | "japanese")
-    )
 }
 
 fn is_llamacpp_runtime(runtime: &str) -> bool {
@@ -674,6 +719,32 @@ fn clean_model_output(text: &str) -> String {
         .to_string()
 }
 
+#[cfg(any(
+    feature = "voxtral-llamacpp-native",
+    feature = "voxtral-llamacpp-realtime-patched"
+))]
+fn is_low_quality_translation(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() || text.contains('\u{fffd}') {
+        return true;
+    }
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() < 8 {
+        return false;
+    }
+    let repeated_small_words = words
+        .windows(4)
+        .filter(|window| {
+            let first = window[0].to_ascii_lowercase();
+            first.len() <= 3
+                && window
+                    .iter()
+                    .all(|word| word.eq_ignore_ascii_case(first.as_str()))
+        })
+        .count();
+    repeated_small_words >= 2
+}
+
 fn max_tokens() -> usize {
     std::env::var("AMCP_VOXTRAL_LLAMA_MAX_TOKENS")
         .ok()
@@ -721,7 +792,7 @@ mod tests {
     }
 
     #[test]
-    fn routes_japanese_requests_to_llamacpp() {
+    fn routes_all_voxtral_requests_to_llamacpp() {
         assert!(should_route_to_llamacpp_with_runtime(
             Some("ja"),
             None,
@@ -737,7 +808,7 @@ mod tests {
             None,
             Some("llamacpp")
         ));
-        assert!(!should_route_to_llamacpp_with_runtime(
+        assert!(should_route_to_llamacpp_with_runtime(
             Some("en"),
             None,
             None
