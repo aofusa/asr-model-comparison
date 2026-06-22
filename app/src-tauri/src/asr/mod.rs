@@ -144,6 +144,14 @@ impl HybridModelManager {
         let runtime_backend =
             backend::runtime_backend_status(&options.model_id, &self.available_backends);
         let started = Instant::now();
+        tracing::info!(
+            model_id = %options.model_id,
+            family = %family,
+            requested_accelerator = %options.accelerator,
+            selected_accelerator = %accelerator.selected,
+            runtime_backend = ?runtime_backend.backend,
+            "preparing ASR model"
+        );
         let mut inner = self.inner.lock().await;
         let mut progress = Vec::new();
 
@@ -151,6 +159,12 @@ impl HybridModelManager {
             || inner.loaded_backend != Some(accelerator.selected)
         {
             if inner.loaded_model_id.is_some() {
+                tracing::info!(
+                    previous_model_id = ?inner.loaded_model_id,
+                    previous_backend = ?inner.loaded_backend,
+                    next_model_id = %options.model_id,
+                    "unloading previous ASR model"
+                );
                 progress.push(ModelProgress {
                     r#type: "model_progress",
                     model_id: options.model_id.clone(),
@@ -174,11 +188,14 @@ impl HybridModelManager {
                 total_bytes: None,
                 elapsed_seconds: Some(started.elapsed().as_secs_f64()),
             });
+            if let Some(event) = progress.last() {
+                log_model_progress(event);
+            }
 
             for event in hybrid::prepare_real_model_assets(&options, &self.available_backends)
                 .map_err(AsrError::Backend)?
             {
-                progress.push(ModelProgress {
+                let event = ModelProgress {
                     r#type: "model_progress",
                     model_id: options.model_id.clone(),
                     phase: event.phase,
@@ -187,7 +204,9 @@ impl HybridModelManager {
                     bytes_downloaded: event.bytes_downloaded,
                     total_bytes: event.total_bytes,
                     elapsed_seconds: Some(started.elapsed().as_secs_f64()),
-                });
+                };
+                log_model_progress(&event);
+                progress.push(event);
             }
 
             progress.push(ModelProgress {
@@ -203,9 +222,18 @@ impl HybridModelManager {
                 total_bytes: None,
                 elapsed_seconds: Some(started.elapsed().as_secs_f64()),
             });
+            if let Some(event) = progress.last() {
+                log_model_progress(event);
+            }
 
             inner.loaded_model_id = Some(options.model_id.clone());
             inner.loaded_backend = Some(accelerator.selected);
+        } else {
+            tracing::info!(
+                model_id = %options.model_id,
+                selected_accelerator = %accelerator.selected,
+                "ASR model is already prepared"
+            );
         }
 
         progress.push(ModelProgress {
@@ -218,6 +246,9 @@ impl HybridModelManager {
             total_bytes: None,
             elapsed_seconds: Some(started.elapsed().as_secs_f64()),
         });
+        if let Some(event) = progress.last() {
+            log_model_progress(event);
+        }
 
         Ok((accelerator, progress))
     }
@@ -232,8 +263,32 @@ impl HybridModelManager {
         }
 
         let started = Instant::now();
+        tracing::info!(
+            model_id = %options.model_id,
+            language = ?options.language,
+            target_language = ?options.target_language,
+            requested_accelerator = %options.accelerator,
+            input_bytes = audio.len(),
+            previous_text_chars = options
+                .previous_text
+                .as_ref()
+                .map(|text| text.chars().count())
+                .unwrap_or(0),
+            "starting ASR transcription"
+        );
         let (accelerator, _) = self.prepare_model(&options).await?;
         let preprocessed = audio::load_and_preprocess_wav(audio)?;
+        tracing::info!(
+            model_id = %options.model_id,
+            input_sample_rate = preprocessed.original_sample_rate,
+            output_sample_rate = preprocessed.sample_rate,
+            channels = preprocessed.channels,
+            duration_seconds = preprocessed.duration_seconds,
+            rms = preprocessed.rms,
+            peak = preprocessed.peak,
+            had_speech = preprocessed.had_speech,
+            "preprocessed ASR audio"
+        );
         let previous = options.previous_text.as_deref().unwrap_or("").trim();
         let backend_result = if preprocessed.had_speech {
             hybrid::try_transcribe_real(&preprocessed, &options, &self.available_backends)
@@ -289,7 +344,7 @@ impl HybridModelManager {
                 backend::runtime_backend_kind(&options.model_id, &self.available_backends)
             });
 
-        Ok(TranscriptionResult {
+        let result = TranscriptionResult {
             model_id: options.model_id,
             text: display_text,
             transcript_text: translation.transcript_text,
@@ -325,8 +380,36 @@ impl HybridModelManager {
             translation_note: translation.note,
             runtime_backend,
             accelerator,
-        })
+        };
+        tracing::info!(
+            model_id = %result.model_id,
+            runtime_backend = ?result.runtime_backend,
+            accelerator = %result.accelerator.selected,
+            processing_seconds = result.processing_time_seconds,
+            had_speech = result.had_speech,
+            transcript_chars = result.transcript_text.chars().count(),
+            translated_chars = result
+                .translated_text
+                .as_ref()
+                .map(|text| text.chars().count())
+                .unwrap_or(0),
+            "finished ASR transcription"
+        );
+        Ok(result)
     }
+}
+
+fn log_model_progress(event: &ModelProgress) {
+    tracing::info!(
+        model_id = %event.model_id,
+        phase = %event.phase,
+        progress = ?event.progress,
+        bytes_downloaded = ?event.bytes_downloaded,
+        total_bytes = ?event.total_bytes,
+        elapsed_seconds = ?event.elapsed_seconds,
+        message = %event.message,
+        "model preparation progress"
+    );
 }
 
 fn artifact_validation_message(status: &backend::RuntimeBackendStatus) -> String {

@@ -31,6 +31,12 @@ pub fn default_available_backends() -> Vec<HardwareBackend> {
 }
 
 pub fn router(config: AppConfig) -> Router {
+    tracing::info!(
+        mode = ?config.mode,
+        accelerator = %config.accelerator,
+        static_dir = ?config.static_dir,
+        "building AMCP API router"
+    );
     let state = AppState {
         manager: Arc::new(HybridModelManager::new(default_available_backends())),
         accelerator: config.accelerator,
@@ -50,6 +56,7 @@ pub fn router(config: AppConfig) -> Router {
         .layer(TraceLayer::new_for_http());
 
     if let Some(static_dir) = config.static_dir {
+        tracing::info!(static_dir = %static_dir.display(), "serving frontend static files");
         let index_file = static_dir.join("index.html");
         app.fallback_service(ServeDir::new(static_dir).fallback(ServeFile::new(index_file)))
     } else {
@@ -59,6 +66,15 @@ pub fn router(config: AppConfig) -> Router {
 
 pub async fn run(config: AppConfig) -> anyhow::Result<()> {
     let addr = SocketAddr::new(config.host, config.port);
+    tracing::info!(
+        mode = ?config.mode,
+        host = %config.host,
+        port = config.port,
+        accelerator = %config.accelerator,
+        static_dir = ?config.static_dir,
+        available_backends = ?default_available_backends(),
+        "starting AMCP Rust backend"
+    );
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("AMCP Rust server listening on http://{addr}");
     axum::serve(listener, router(config)).await?;
@@ -70,6 +86,11 @@ pub fn spawn_embedded_server(
     accelerator: AcceleratorPreference,
 ) -> anyhow::Result<SocketAddr> {
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    tracing::info!(
+        %addr,
+        accelerator = %accelerator,
+        "spawning embedded AMCP Rust backend"
+    );
     std::thread::Builder::new()
         .name("amcp-embedded-server".to_string())
         .spawn(move || {
@@ -119,6 +140,12 @@ async fn transcribe(
         match name.as_str() {
             "audio" => {
                 audio = Some(field.bytes().await.map_err(multipart_error)?.to_vec());
+                if let Some(audio) = audio.as_ref() {
+                    tracing::info!(
+                        bytes = audio.len(),
+                        "received HTTP transcription audio payload"
+                    );
+                }
             }
             "model_id" => options.model_id = field.text().await.map_err(multipart_error)?,
             "language" => options.language = Some(field.text().await.map_err(multipart_error)?),
@@ -142,7 +169,30 @@ async fn transcribe(
 
     let audio =
         audio.ok_or_else(|| AppError::InvalidInput("No audio file provided".to_string()))?;
+    tracing::info!(
+        model_id = %options.model_id,
+        language = ?options.language,
+        target_language = ?options.target_language,
+        accelerator = %options.accelerator,
+        bytes = audio.len(),
+        "starting HTTP transcription"
+    );
     let result = state.manager.transcribe(&audio, options).await?;
+    tracing::info!(
+        model_id = %result.model_id,
+        backend = ?result.runtime_backend,
+        accelerator = %result.accelerator.selected,
+        duration_seconds = result.audio_duration_seconds,
+        processing_seconds = result.processing_time_seconds,
+        had_speech = result.had_speech,
+        transcript_chars = result.transcript_text.chars().count(),
+        translated_chars = result
+            .translated_text
+            .as_ref()
+            .map(|text| text.chars().count())
+            .unwrap_or(0),
+        "finished HTTP transcription"
+    );
     Ok(Json(json!(result)))
 }
 
@@ -165,6 +215,10 @@ struct WsConfig {
 
 async fn handle_socket(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
+    tracing::info!(
+        accelerator = %state.accelerator,
+        "WebSocket transcription client connected"
+    );
     let mut options = TranscriptionOptions {
         accelerator: state.accelerator,
         ..Default::default()
@@ -176,6 +230,18 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         match message {
             Message::Text(text) => {
                 if let Ok(config) = serde_json::from_str::<WsConfig>(&text) {
+                    tracing::info!(
+                        model_id = ?config.model_id,
+                        language = ?config.language,
+                        target_language = ?config.target_language,
+                        accelerator = ?config.hardware_accelerator.or(config.accelerator),
+                        previous_text_chars = config
+                            .previous_text
+                            .as_ref()
+                            .map(|text| text.chars().count())
+                            .unwrap_or(0),
+                        "received WebSocket transcription config"
+                    );
                     if let Some(model_id) = config.model_id {
                         options.model_id = model_id;
                     }
@@ -194,6 +260,14 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     match state.manager.prepare_model(&options).await {
                         Ok((_accelerator, progress)) => {
                             for event in progress {
+                                tracing::info!(
+                                    model_id = %event.model_id,
+                                    phase = %event.phase,
+                                    progress = ?event.progress,
+                                    elapsed_seconds = ?event.elapsed_seconds,
+                                    message = %event.message,
+                                    "model preparation progress"
+                                );
                                 if sender
                                     .send(Message::Text(json!(event).to_string().into()))
                                     .await
@@ -221,8 +295,18 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             {
                                 return;
                             }
+                            tracing::info!(
+                                model_id = %options.model_id,
+                                accelerator = %options.accelerator,
+                                "WebSocket transcription model ready"
+                            );
                         }
                         Err(error) => {
+                            tracing::error!(
+                                model_id = %options.model_id,
+                                error = %error,
+                                "failed to prepare WebSocket transcription model"
+                            );
                             let _ = sender
                                 .send(Message::Text(
                                     json!({ "type": "error", "message": error.to_string() })
@@ -237,11 +321,36 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             }
             Message::Binary(audio) => {
                 chunk_index += 1;
+                tracing::info!(
+                    chunk_index,
+                    bytes = audio.len(),
+                    model_id = %options.model_id,
+                    language = ?options.language,
+                    target_language = ?options.target_language,
+                    previous_text_chars = accumulated_text.chars().count(),
+                    "received WebSocket audio chunk"
+                );
                 let mut chunk_options = options.clone();
                 chunk_options.previous_text = Some(accumulated_text.clone());
                 match state.manager.transcribe(&audio, chunk_options).await {
                     Ok(result) => {
                         accumulated_text = result.transcript_text.clone();
+                        tracing::info!(
+                            chunk_index,
+                            model_id = %result.model_id,
+                            backend = ?result.runtime_backend,
+                            accelerator = %result.accelerator.selected,
+                            duration_seconds = result.audio_duration_seconds,
+                            processing_seconds = result.processing_time_seconds,
+                            had_speech = result.had_speech,
+                            transcript_chars = result.transcript_text.chars().count(),
+                            translated_chars = result
+                                .translated_text
+                                .as_ref()
+                                .map(|text| text.chars().count())
+                                .unwrap_or(0),
+                            "finished WebSocket audio chunk"
+                        );
                         let response = json!({
                             "type": "transcription",
                             "model_id": result.model_id,
@@ -277,6 +386,12 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         }
                     }
                     Err(error) => {
+                        tracing::error!(
+                            chunk_index,
+                            model_id = %options.model_id,
+                            error = %error,
+                            "failed to process WebSocket audio chunk"
+                        );
                         let _ = sender
                             .send(Message::Text(
                                 json!({ "type": "error", "message": error.to_string() })
@@ -288,10 +403,20 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }
                 }
             }
-            Message::Close(_) => return,
+            Message::Close(_) => {
+                tracing::info!(
+                    chunks = chunk_index,
+                    "WebSocket transcription client closed"
+                );
+                return;
+            }
             _ => {}
         }
     }
+    tracing::info!(
+        chunks = chunk_index,
+        "WebSocket transcription client disconnected"
+    );
 }
 
 #[derive(Debug)]

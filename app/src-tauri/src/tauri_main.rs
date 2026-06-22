@@ -1,4 +1,3 @@
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 #![cfg(feature = "desktop")]
 
 use amcp_tauri::accelerator::{AcceleratorPreference, HardwareBackend};
@@ -87,10 +86,7 @@ fn desktop_args_os() -> Vec<OsString> {
 
     #[link(name = "shell32")]
     extern "system" {
-        fn CommandLineToArgvW(
-            lp_cmd_line: *const u16,
-            p_num_args: *mut i32,
-        ) -> *mut *mut u16;
+        fn CommandLineToArgvW(lp_cmd_line: *const u16, p_num_args: *mut i32) -> *mut *mut u16;
     }
 
     unsafe {
@@ -133,9 +129,8 @@ fn run_cli<F>(future: F)
 where
     F: std::future::Future<Output = anyhow::Result<()>>,
 {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    amcp_tauri::logging::init_cli();
+    tracing::info!("starting AMCP.exe CLI command");
 
     tokio::runtime::Runtime::new()
         .expect("failed to create AMCP CLI runtime")
@@ -144,9 +139,15 @@ where
 }
 
 fn run_desktop() {
+    amcp_tauri::logging::init_desktop();
+    tracing::info!(
+        port = EMBEDDED_SERVER_PORT,
+        "starting AMCP.exe desktop mode"
+    );
     let embedded_addr = spawn_embedded_server(EMBEDDED_SERVER_PORT, AcceleratorPreference::Auto)
         .expect("failed to start embedded AMCP Rust API server");
     let api_base_url = format!("http://{embedded_addr}");
+    tracing::info!(api_base_url = %api_base_url, "embedded AMCP API server is ready");
 
     tauri::Builder::default()
         .manage(DesktopState {
@@ -155,11 +156,14 @@ fn run_desktop() {
         })
         .invoke_handler(tauri::generate_handler![backend_status, accelerator_plan])
         .setup(|app| {
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("ASR Model Comparison Platform")
                 .inner_size(1240.0, 900.0)
                 .resizable(true)
+                .visible(true)
                 .build()?;
+            window.show()?;
+            window.set_focus()?;
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -1,6 +1,7 @@
 pub mod accelerator;
 pub mod asr;
 pub mod config;
+pub mod logging;
 pub mod models;
 #[cfg(feature = "qwen")]
 pub mod qwen_native;
