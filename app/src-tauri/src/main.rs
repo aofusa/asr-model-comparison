@@ -1,18 +1,41 @@
 use amcp_tauri::config::{normalize_cli_args, Cli, Command};
 use amcp_tauri::{server, validation, AppConfig};
 use clap::Parser;
-use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    amcp_tauri::logging::init_cli();
 
     let cli = Cli::parse_from(normalize_cli_args(std::env::args_os()));
     match cli.command {
-        Some(Command::Server(args)) => server::run(AppConfig::from(args)).await,
-        Some(Command::Validate(args)) => validation::run(args).await,
-        None => server::run(AppConfig::default()).await,
+        Some(Command::Server(args)) => {
+            let config = AppConfig::from(args);
+            tracing::info!(
+                host = %config.host,
+                port = config.port,
+                accelerator = %config.accelerator,
+                "starting AMCP CLI server mode"
+            );
+            server::run(config).await
+        }
+        Some(Command::Validate(args)) => {
+            tracing::info!(
+                model_id = %args.model_id,
+                language = %args.language,
+                target_language = ?args.target_language,
+                "starting AMCP validation mode"
+            );
+            validation::run(args).await
+        }
+        None => {
+            let config = AppConfig::default();
+            tracing::info!(
+                host = %config.host,
+                port = config.port,
+                accelerator = %config.accelerator,
+                "starting AMCP CLI default server mode"
+            );
+            server::run(config).await
+        }
     }
 }
