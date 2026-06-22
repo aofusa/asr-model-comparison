@@ -123,15 +123,27 @@ New-NetFirewallRule -DisplayName "AMCP Rust Server 8000" -Direction Inbound -Pro
 
 ### Rust/Tauri版 macOS / Apple Silicon
 
-macOS向けのTauriビルドは `app/` の `npm run build:macos:app` を使う。`full-runtime-macos` featureで Whisper Metal、Qwen3-ASR Candle Metal、Voxtral Realtime patched llama.cpp Metal を優先し、利用できない場合はCPUへ安全にフォールバックする。Windows向け `full-runtime` / `full-runtime-cuda` とはfeatureを分け、WindowsのVulkan/CUDA経路を壊さないこと。
-Whisper Metal / patched llama.cpp のネイティブビルドにはCMakeが必要。`build:macos:app` は `MACOSX_DEPLOYMENT_TARGET=11.0` を既定で設定する。
+macOS向けのTauriビルドは `app/` の `npm run build:macos:app` を使う。`full-runtime-macos` featureで Whisper Metal、Qwen3-ASR Candle Metal、Voxtral ExecuTorch Metal runner を優先する。Windows向け `full-runtime` / `full-runtime-cuda` とはfeatureを分け、WindowsのVulkan/CUDA経路を壊さないこと。
+Whisper MetalのネイティブビルドにはCMakeが必要。`build:macos:app` は `MACOSX_DEPLOYMENT_TARGET=11.0` を既定で設定する。
 
 ```bash
 cd app
 npm run build:macos:app
 ```
 
-Voxtral RealtimeのMetal実推論を含める場合は、パッチ済み `llama.cpp` をMetal有効で共有ライブラリビルドし、同じシェルでsource/buildを指定する。
+Voxtral RealtimeのMetal実推論はmacOSではExecuTorch Metal runnerを優先する。runnerとMetal `.pte` モデル一式を用意し、同じシェルで以下を指定する。
+
+```bash
+export AMCP_VOXTRAL_RUNTIME=executorch
+export AMCP_VOXTRAL_EXECUTORCH_RUNNER_PATH="$HOME/executorch/cmake-out/examples/models/voxtral_realtime/voxtral_realtime_runner"
+export AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH="$HOME/voxtral_realtime_quant_metal/model-metal-int4.pte"
+export AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH="$HOME/voxtral_realtime_quant_metal/preprocessor.pte"
+export AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH="$HOME/voxtral_realtime_quant_metal/tekken.json"
+export AMCP_VOXTRAL_EXECUTORCH_DYLD_LIBRARY_PATH="/usr/lib:$(brew --prefix libomp)/lib"
+npm run validate:macos:voxtral:executorch -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id voxtral-mini-4b --language ja --json
+```
+
+パッチ済み `llama.cpp` Metal経路も代替として維持する。使う場合は、パッチ済み `llama.cpp` をMetal有効で共有ライブラリビルドし、同じシェルでsource/buildを指定する。
 
 ```bash
 cmake -S ../.tmp/llama-cpp-voxtral-pr20638 \
@@ -147,7 +159,7 @@ export AMCP_VOXTRAL_PATCHED_LLAMA_LINK_METAL=1
 npm run build:macos:app
 ```
 
-Whisper/QwenのみをMetalで検証し、Voxtral patched runtimeがまだない場合は以下のfeature overrideを使う。
+Whisper/QwenのみをMetalで検証し、Voxtral ExecuTorch runnerがまだない場合は以下のfeature overrideを使う。
 
 ```bash
 AMCP_MACOS_FEATURES=desktop,whisper-metal,qwen-metal npm run build:macos:app
@@ -158,7 +170,7 @@ AMCP_MACOS_FEATURES=desktop,whisper-metal,qwen-metal npm run build:macos:app
 ```bash
 npm run validate:macos:whisper -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id whisper-tiny --language ja --json
 npm run validate:macos:qwen -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id qwen3-asr-0.6b --language ja --json
-AMCP_VOXTRAL_RUNTIME=llamacpp npm run validate:macos:voxtral -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id voxtral-mini-4b --language ja --json
+AMCP_VOXTRAL_RUNTIME=executorch npm run validate:macos:voxtral:executorch -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id voxtral-mini-4b --language ja --json
 ```
 
 ## アーキテクチャ

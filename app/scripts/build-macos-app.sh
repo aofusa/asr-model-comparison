@@ -22,7 +22,7 @@ set_default_env_path() {
 }
 
 initialize_voxtral_patched_llama_env() {
-  if [[ "${features}" != *"voxtral"* && "${features}" != *"full-runtime-macos"* ]]; then
+  if [[ "${features}" != *"voxtral-llamacpp"* && "${features}" != *"voxtral-realtime-vulkan"* ]]; then
     return
   fi
 

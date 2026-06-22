@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub enum RuntimeBackendKind {
     WhisperRs,
     QwenNative,
+    VoxtralExecuTorch,
     VoxtralLlamaCpp,
     Placeholder,
 }
@@ -163,16 +164,20 @@ fn voxtral_llamacpp_status(
     available_backends: &[HardwareBackend],
 ) -> RuntimeBackendStatus {
     let configured = cfg!(any(
+        feature = "voxtral-executorch",
         feature = "voxtral-llamacpp-native",
         feature = "voxtral-llamacpp-realtime-patched"
     ));
     let config = voxtral_llamacpp::configure_voxtral_llamacpp(available_backends);
     let validation = voxtral_llamacpp::validate_voxtral_llamacpp_config(&config);
-    let real_inference_available = configured && validation.configured;
+    let executorch_configured = voxtral_llamacpp::executorch_configured(&config);
+    let real_inference_available = configured && (validation.configured || executorch_configured);
     RuntimeBackendStatus {
         model_id: model_id.to_string(),
         family,
-        backend: if real_inference_available {
+        backend: if executorch_configured && cfg!(feature = "voxtral-executorch") {
+            RuntimeBackendKind::VoxtralExecuTorch
+        } else if real_inference_available {
             RuntimeBackendKind::VoxtralLlamaCpp
         } else {
             RuntimeBackendKind::Placeholder
@@ -181,7 +186,12 @@ fn voxtral_llamacpp_status(
         configured,
         selected_accelerators: config.providers.clone(),
         artifacts: voxtral_llamacpp_artifacts(&config),
-        reason: if real_inference_available {
+        reason: if executorch_configured && cfg!(feature = "voxtral-executorch") {
+            format!(
+                "voxtral-executorch feature is enabled and ExecuTorch Metal runner is configured for {}.",
+                config.model_id
+            )
+        } else if real_inference_available {
             format!(
                 "voxtral-llamacpp feature is enabled and Voxtral GGUF/mmproj files are configured for {}. Metal acceleration is {}. Vulkan acceleration is {}. Patched Voxtral Realtime bridge is {}.",
                 config.model_id,
@@ -206,6 +216,9 @@ fn voxtral_llamacpp_status(
             )
         } else if configured && cfg!(feature = "voxtral-llamacpp-realtime-patched") {
             "voxtral-llamacpp-realtime-patched feature is enabled, but AMCP_VOXTRAL_LLAMA_MODEL_PATH and AMCP_VOXTRAL_LLAMA_MMPROJ_PATH are not fully configured."
+                .to_string()
+        } else if configured && cfg!(feature = "voxtral-executorch") {
+            "voxtral-executorch feature is enabled, but AMCP_VOXTRAL_EXECUTORCH_RUNNER_PATH, AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH, AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH, and AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH are not fully configured."
                 .to_string()
         } else if configured
             && cfg!(any(
@@ -430,8 +443,11 @@ fn voxtral_llamacpp_artifacts(
             path: voxtral_llamacpp::voxtral_runtime_preference(),
             env_var: Some("AMCP_VOXTRAL_RUNTIME".to_string()),
             required: false,
-            exists: voxtral_llamacpp::is_llamacpp_requested(),
-            note: Some("set to 'llamacpp' to force the embedded llama.cpp runtime".to_string()),
+            exists: voxtral_llamacpp::voxtral_runtime_preference().is_some(),
+            note: Some(
+                "set to 'executorch' for macOS Metal runner or 'llamacpp' for embedded llama.cpp"
+                    .to_string(),
+            ),
         },
         optional_file_artifact(
             "voxtral_llama_model",
@@ -443,6 +459,30 @@ fn voxtral_llamacpp_artifacts(
             "voxtral_llama_mmproj",
             config.mmproj_path.as_ref(),
             Some("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH"),
+            true,
+        ),
+        optional_file_artifact(
+            "voxtral_executorch_runner",
+            config.executorch.runner_path.as_ref(),
+            Some("AMCP_VOXTRAL_EXECUTORCH_RUNNER_PATH"),
+            true,
+        ),
+        optional_file_artifact(
+            "voxtral_executorch_model",
+            config.executorch.model_path.as_ref(),
+            Some("AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH"),
+            true,
+        ),
+        optional_file_artifact(
+            "voxtral_executorch_preprocessor",
+            config.executorch.preprocessor_path.as_ref(),
+            Some("AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH"),
+            true,
+        ),
+        optional_file_artifact(
+            "voxtral_executorch_tokenizer",
+            config.executorch.tokenizer_path.as_ref(),
+            Some("AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH"),
             true,
         ),
         RuntimeArtifactStatus {

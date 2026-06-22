@@ -1,5 +1,6 @@
 use super::audio::PreprocessedAudio;
 #[cfg(any(
+    feature = "voxtral-executorch",
     feature = "voxtral-llamacpp-native",
     feature = "voxtral-llamacpp-realtime-patched"
 ))]
@@ -33,6 +34,17 @@ pub struct VoxtralLlamaCppConfig {
     pub use_gpu: bool,
     pub print_timings: bool,
     pub providers: Vec<HardwareBackend>,
+    pub executorch: VoxtralExecuTorchConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VoxtralExecuTorchConfig {
+    pub runner_path: Option<PathBuf>,
+    pub model_path: Option<PathBuf>,
+    pub preprocessor_path: Option<PathBuf>,
+    pub tokenizer_path: Option<PathBuf>,
+    pub streaming: bool,
+    pub dyld_library_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -48,6 +60,8 @@ pub struct VoxtralLlamaCppTranscription {
     pub transcript_text: String,
     pub translated_text: Option<String>,
     pub target_language: Option<String>,
+    pub runtime: String,
+    pub runner_path: Option<PathBuf>,
     pub model_id: String,
     pub model_path: PathBuf,
     pub mmproj_path: PathBuf,
@@ -103,7 +117,42 @@ pub fn configure_voxtral_llamacpp(available_backends: &[HardwareBackend]) -> Vox
         use_gpu,
         print_timings: env_bool("AMCP_VOXTRAL_LLAMA_PRINT_TIMINGS").unwrap_or(false),
         providers,
+        executorch: configure_executorch(),
     }
+}
+
+fn configure_executorch() -> VoxtralExecuTorchConfig {
+    VoxtralExecuTorchConfig {
+        runner_path: env_path("AMCP_VOXTRAL_EXECUTORCH_RUNNER_PATH"),
+        model_path: env_path("AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH"),
+        preprocessor_path: env_path("AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH"),
+        tokenizer_path: env_path("AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH"),
+        streaming: env_bool("AMCP_VOXTRAL_EXECUTORCH_STREAMING").unwrap_or(false),
+        dyld_library_path: env_string("AMCP_VOXTRAL_EXECUTORCH_DYLD_LIBRARY_PATH"),
+    }
+}
+
+pub fn executorch_configured(config: &VoxtralLlamaCppConfig) -> bool {
+    executorch_runtime_ready(&config.executorch)
+}
+
+fn executorch_runtime_ready(config: &VoxtralExecuTorchConfig) -> bool {
+    config
+        .runner_path
+        .as_ref()
+        .is_some_and(|path| path.is_file())
+        && config
+            .model_path
+            .as_ref()
+            .is_some_and(|path| path.is_file())
+        && config
+            .preprocessor_path
+            .as_ref()
+            .is_some_and(|path| path.is_file())
+        && config
+            .tokenizer_path
+            .as_ref()
+            .is_some_and(|path| path.is_file())
 }
 
 pub fn validate_voxtral_llamacpp_config(
@@ -134,6 +183,13 @@ pub fn is_llamacpp_requested() -> bool {
         .is_some_and(is_llamacpp_runtime)
 }
 
+#[cfg(feature = "voxtral-executorch")]
+fn is_executorch_requested() -> bool {
+    voxtral_runtime_preference()
+        .as_deref()
+        .is_some_and(is_executorch_runtime)
+}
+
 pub fn should_route_to_llamacpp(_language: Option<&str>, _target_language: Option<&str>) -> bool {
     true
 }
@@ -148,7 +204,8 @@ pub fn should_route_to_llamacpp_with_runtime(
 
 pub fn llamacpp_provider_plan(available_backends: &[HardwareBackend]) -> Vec<HardwareBackend> {
     let mut providers = Vec::new();
-    let include_metal = cfg!(feature = "voxtral-realtime-metal") && runtime_metal_available();
+    let include_metal = cfg!(feature = "voxtral-realtime-metal")
+        && (runtime_metal_available() || executorch_runtime_ready(&configure_executorch()));
     let include_vulkan = cfg!(any(
         feature = "voxtral-llamacpp-vulkan",
         feature = "voxtral-realtime-vulkan"
@@ -172,6 +229,7 @@ pub fn llamacpp_provider_plan(available_backends: &[HardwareBackend]) -> Vec<Har
 }
 
 #[cfg(any(
+    feature = "voxtral-executorch",
     feature = "voxtral-llamacpp-native",
     feature = "voxtral-llamacpp-realtime-patched"
 ))]
@@ -184,6 +242,18 @@ pub fn transcribe_voxtral_audio(
 ) -> Result<Option<VoxtralLlamaCppTranscription>, String> {
     let config = configure_voxtral_llamacpp(available_backends);
     let validation = validate_voxtral_llamacpp_config(&config);
+    #[cfg(feature = "voxtral-executorch")]
+    {
+        if is_executorch_requested() || executorch_configured(&config) {
+            return transcribe_voxtral_audio_executorch(
+                audio,
+                language,
+                target_language,
+                previous_text,
+                &config,
+            );
+        }
+    }
     if !validation.configured {
         return Err(missing_config_error(&config, &validation));
     }
@@ -216,6 +286,8 @@ pub fn transcribe_voxtral_audio(
         transcript_text,
         translated_text,
         target_language,
+        runtime: "llamacpp".to_string(),
+        runner_path: None,
         model_id: config.model_id,
         model_path: config.model_path.expect("validated model path exists"),
         mmproj_path: config.mmproj_path.expect("validated mmproj path exists"),
@@ -224,6 +296,7 @@ pub fn transcribe_voxtral_audio(
 }
 
 #[cfg(not(any(
+    feature = "voxtral-executorch",
     feature = "voxtral-llamacpp-native",
     feature = "voxtral-llamacpp-realtime-patched"
 )))]
@@ -238,6 +311,180 @@ pub fn transcribe_voxtral_audio(
         "Voxtral llama.cpp runtime is selected, but the voxtral feature is not enabled with a native llama.cpp backend."
             .to_string(),
     )
+}
+
+#[cfg(feature = "voxtral-executorch")]
+fn transcribe_voxtral_audio_executorch(
+    audio: &PreprocessedAudio,
+    _language: Option<&str>,
+    target_language: Option<&str>,
+    _previous_text: Option<&str>,
+    config: &VoxtralLlamaCppConfig,
+) -> Result<Option<VoxtralLlamaCppTranscription>, String> {
+    if audio.sample_rate != TARGET_SAMPLE_RATE {
+        return Err(format!(
+            "Voxtral ExecuTorch expects {TARGET_SAMPLE_RATE}Hz mono PCM, got {}Hz.",
+            audio.sample_rate
+        ));
+    }
+    if !executorch_configured(config) {
+        return Err(missing_executorch_config_error(config));
+    }
+
+    let audio_path = write_temp_wav(audio)?;
+    let result = run_executorch_runner(config, &audio_path);
+    let _ = std::fs::remove_file(&audio_path);
+    let transcript_text = result?;
+    let target_language = normalize_target_language(target_language);
+
+    Ok(Some(VoxtralLlamaCppTranscription {
+        text: transcript_text.clone(),
+        transcript_text,
+        translated_text: None,
+        target_language,
+        runtime: "executorch-metal".to_string(),
+        runner_path: config.executorch.runner_path.clone(),
+        model_id: config.model_id.clone(),
+        model_path: config
+            .executorch
+            .model_path
+            .clone()
+            .expect("validated ExecuTorch model exists"),
+        mmproj_path: config
+            .executorch
+            .preprocessor_path
+            .clone()
+            .expect("validated ExecuTorch preprocessor exists"),
+        n_gpu_layers: config.n_gpu_layers,
+    }))
+}
+
+#[cfg(feature = "voxtral-executorch")]
+fn run_executorch_runner(
+    config: &VoxtralLlamaCppConfig,
+    audio_path: &std::path::Path,
+) -> Result<String, String> {
+    let runner_path = config
+        .executorch
+        .runner_path
+        .as_ref()
+        .ok_or_else(|| "AMCP_VOXTRAL_EXECUTORCH_RUNNER_PATH is not configured.".to_string())?;
+    let model_path = config
+        .executorch
+        .model_path
+        .as_ref()
+        .ok_or_else(|| "AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH is not configured.".to_string())?;
+    let preprocessor_path = config
+        .executorch
+        .preprocessor_path
+        .as_ref()
+        .ok_or_else(|| {
+            "AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH is not configured.".to_string()
+        })?;
+    let tokenizer_path =
+        config.executorch.tokenizer_path.as_ref().ok_or_else(|| {
+            "AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH is not configured.".to_string()
+        })?;
+
+    let mut command = std::process::Command::new(runner_path);
+    command
+        .arg("--model_path")
+        .arg(model_path)
+        .arg("--tokenizer_path")
+        .arg(tokenizer_path)
+        .arg("--preprocessor_path")
+        .arg(preprocessor_path)
+        .arg("--audio_path")
+        .arg(audio_path);
+    if config.executorch.streaming {
+        command.arg("--streaming");
+    }
+    if let Some(path) = config.executorch.dyld_library_path.as_deref() {
+        command.env("DYLD_LIBRARY_PATH", path);
+    }
+
+    let output = command
+        .output()
+        .map_err(|error| format!("failed to run Voxtral ExecuTorch runner: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        return Err(format!(
+            "Voxtral ExecuTorch runner failed with status {}. stderr: {} stdout: {}",
+            output.status,
+            stderr.trim(),
+            stdout.trim()
+        ));
+    }
+    extract_executorch_transcript(&stdout)
+        .or_else(|| extract_executorch_transcript(&stderr))
+        .ok_or_else(|| "Voxtral ExecuTorch runner returned no transcript text.".to_string())
+}
+
+#[cfg(feature = "voxtral-executorch")]
+fn write_temp_wav(audio: &PreprocessedAudio) -> Result<PathBuf, String> {
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!(
+        "amcp-voxtral-executorch-{}-{suffix}.wav",
+        std::process::id()
+    ));
+    write_pcm16_wav(&path, &audio.samples, audio.sample_rate)?;
+    Ok(path)
+}
+
+#[cfg(feature = "voxtral-executorch")]
+fn write_pcm16_wav(
+    path: &std::path::Path,
+    samples: &[f32],
+    sample_rate: u32,
+) -> Result<(), String> {
+    use std::io::Write as _;
+
+    let mut file = std::fs::File::create(path)
+        .map_err(|error| format!("failed to create temporary Voxtral WAV: {error}"))?;
+    let data_size = samples
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| "temporary Voxtral WAV is too large.".to_string())?;
+    let riff_size = 36_u32
+        .checked_add(u32::try_from(data_size).map_err(|_| "temporary Voxtral WAV is too large.")?)
+        .ok_or_else(|| "temporary Voxtral WAV is too large.".to_string())?;
+
+    file.write_all(b"RIFF").map_err(wav_write_error)?;
+    file.write_all(&riff_size.to_le_bytes())
+        .map_err(wav_write_error)?;
+    file.write_all(b"WAVEfmt ").map_err(wav_write_error)?;
+    file.write_all(&16_u32.to_le_bytes())
+        .map_err(wav_write_error)?;
+    file.write_all(&1_u16.to_le_bytes())
+        .map_err(wav_write_error)?;
+    file.write_all(&1_u16.to_le_bytes())
+        .map_err(wav_write_error)?;
+    file.write_all(&sample_rate.to_le_bytes())
+        .map_err(wav_write_error)?;
+    file.write_all(&(sample_rate * 2).to_le_bytes())
+        .map_err(wav_write_error)?;
+    file.write_all(&2_u16.to_le_bytes())
+        .map_err(wav_write_error)?;
+    file.write_all(&16_u16.to_le_bytes())
+        .map_err(wav_write_error)?;
+    file.write_all(b"data").map_err(wav_write_error)?;
+    file.write_all(&(data_size as u32).to_le_bytes())
+        .map_err(wav_write_error)?;
+    for sample in samples {
+        let pcm = (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
+        file.write_all(&pcm.to_le_bytes())
+            .map_err(wav_write_error)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "voxtral-executorch")]
+fn wav_write_error(error: std::io::Error) -> String {
+    format!("failed to write temporary Voxtral WAV: {error}")
 }
 
 #[cfg(feature = "voxtral-llamacpp-realtime-patched")]
@@ -405,6 +652,34 @@ fn run_llamacpp_text_generation(
 }
 
 #[cfg(all(
+    feature = "voxtral-executorch",
+    not(any(
+        feature = "voxtral-llamacpp-native",
+        feature = "voxtral-llamacpp-realtime-patched"
+    ))
+))]
+fn run_llamacpp_transcription(
+    _audio: &PreprocessedAudio,
+    _config: &VoxtralLlamaCppConfig,
+) -> Result<String, String> {
+    Err("Voxtral llama.cpp runtime is not compiled in; use AMCP_VOXTRAL_RUNTIME=executorch with voxtral-executorch on macOS or enable the patched llama.cpp feature.".to_string())
+}
+
+#[cfg(all(
+    feature = "voxtral-executorch",
+    not(any(
+        feature = "voxtral-llamacpp-native",
+        feature = "voxtral-llamacpp-realtime-patched"
+    ))
+))]
+fn run_llamacpp_text_generation(
+    _config: &VoxtralLlamaCppConfig,
+    _instruction: &str,
+) -> Result<String, String> {
+    Err("Voxtral llama.cpp text generation is not compiled in.".to_string())
+}
+
+#[cfg(all(
     feature = "voxtral-llamacpp-native",
     not(feature = "voxtral-llamacpp-realtime-patched")
 ))]
@@ -537,6 +812,7 @@ fn build_text_generation_prompt(instruction: &str) -> String {
 }
 
 #[cfg(any(
+    feature = "voxtral-executorch",
     feature = "voxtral-llamacpp-native",
     feature = "voxtral-llamacpp-realtime-patched",
     test
@@ -553,7 +829,21 @@ model_path={:?} model_exists={} mmproj_path={:?} mmproj_exists={}",
     )
 }
 
+#[cfg(feature = "voxtral-executorch")]
+fn missing_executorch_config_error(config: &VoxtralLlamaCppConfig) -> String {
+    format!(
+        "Voxtral ExecuTorch runtime is selected, but runner/model/preprocessor/tokenizer files are not configured or missing. \
+Set AMCP_VOXTRAL_EXECUTORCH_RUNNER_PATH, AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH, AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH, and AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH. \
+runner={:?} model={:?} preprocessor={:?} tokenizer={:?}",
+        config.executorch.runner_path,
+        config.executorch.model_path,
+        config.executorch.preprocessor_path,
+        config.executorch.tokenizer_path
+    )
+}
+
 #[cfg(any(
+    feature = "voxtral-executorch",
     feature = "voxtral-llamacpp-native",
     feature = "voxtral-llamacpp-realtime-patched",
     test
@@ -578,6 +868,7 @@ fn translation_prompt(
 }
 
 #[cfg(any(
+    feature = "voxtral-executorch",
     feature = "voxtral-llamacpp-native",
     feature = "voxtral-llamacpp-realtime-patched"
 ))]
@@ -593,6 +884,7 @@ fn normalize_target_language(language: Option<&str>) -> Option<String> {
 }
 
 #[cfg(any(
+    feature = "voxtral-executorch",
     feature = "voxtral-llamacpp-native",
     feature = "voxtral-llamacpp-realtime-patched",
     test
@@ -618,6 +910,67 @@ fn is_llamacpp_runtime(runtime: &str) -> bool {
         runtime.trim().to_ascii_lowercase().as_str(),
         "llamacpp" | "llama.cpp" | "llama-cpp" | "llama_cpp"
     )
+}
+
+#[cfg(any(feature = "voxtral-executorch", test))]
+fn is_executorch_runtime(runtime: &str) -> bool {
+    matches!(
+        runtime.trim().to_ascii_lowercase().as_str(),
+        "executorch" | "execu_torch" | "et" | "metal" | "executorch-metal"
+    )
+}
+
+#[cfg(any(feature = "voxtral-executorch", test))]
+fn extract_executorch_transcript(output: &str) -> Option<String> {
+    let mut fallback = None;
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        for prefix in [
+            "Transcript:",
+            "Transcription:",
+            "Output:",
+            "Result:",
+            "Text:",
+            "transcript:",
+            "text:",
+        ] {
+            if let Some(value) = trimmed.strip_prefix(prefix) {
+                let value = clean_runner_line(value);
+                if !value.is_empty() {
+                    return Some(value);
+                }
+            }
+        }
+        if is_probable_transcript_line(trimmed) {
+            fallback = Some(clean_runner_line(trimmed));
+        }
+    }
+    fallback.filter(|value| !value.is_empty())
+}
+
+#[cfg(any(feature = "voxtral-executorch", test))]
+fn clean_runner_line(line: &str) -> String {
+    line.trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim()
+        .to_string()
+}
+
+#[cfg(any(feature = "voxtral-executorch", test))]
+fn is_probable_transcript_line(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    !lower.starts_with("info")
+        && !lower.starts_with("warning")
+        && !lower.starts_with("error")
+        && !lower.contains("model_path")
+        && !lower.contains("tokenizer")
+        && !lower.contains("preprocessor")
+        && !lower.contains("loaded")
+        && !lower.contains("runner")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -748,6 +1101,7 @@ fn clean_model_output(text: &str) -> String {
 }
 
 #[cfg(any(
+    feature = "voxtral-executorch",
     feature = "voxtral-llamacpp-native",
     feature = "voxtral-llamacpp-realtime-patched"
 ))]
@@ -787,6 +1141,7 @@ fn is_low_quality_translation(text: &str, target_language: &str) -> bool {
 }
 
 #[cfg(any(
+    feature = "voxtral-executorch",
     feature = "voxtral-llamacpp-native",
     feature = "voxtral-llamacpp-realtime-patched"
 ))]
@@ -795,6 +1150,7 @@ fn is_cjk_unified_ideograph(ch: char) -> bool {
 }
 
 #[cfg(any(
+    feature = "voxtral-executorch",
     feature = "voxtral-llamacpp-native",
     feature = "voxtral-llamacpp-realtime-patched"
 ))]
@@ -919,6 +1275,14 @@ mod tests {
             use_gpu: false,
             print_timings: false,
             providers: vec![HardwareBackend::Cpu],
+            executorch: VoxtralExecuTorchConfig {
+                runner_path: None,
+                model_path: None,
+                preprocessor_path: None,
+                tokenizer_path: None,
+                streaming: false,
+                dyld_library_path: None,
+            },
         };
         let validation = validate_voxtral_llamacpp_config(&config);
 
@@ -945,6 +1309,24 @@ mod tests {
         } else {
             assert_eq!(providers, vec![HardwareBackend::Cpu]);
         }
+    }
+
+    #[test]
+    fn parses_executorch_runtime_aliases() {
+        assert!(is_executorch_runtime("executorch"));
+        assert!(is_executorch_runtime("executorch-metal"));
+        assert!(is_executorch_runtime("metal"));
+        assert!(!is_executorch_runtime("llamacpp"));
+    }
+
+    #[test]
+    fn extracts_executorch_transcript_from_runner_output() {
+        let output = "INFO loading model\nTranscript: 本日の東京の天気は晴れ。\n";
+
+        assert_eq!(
+            extract_executorch_transcript(output).as_deref(),
+            Some("本日の東京の天気は晴れ。")
+        );
     }
 
     #[test]

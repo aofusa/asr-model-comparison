@@ -168,8 +168,8 @@ New-NetFirewallRule -DisplayName "AMCP Rust Server 8000" -Direction Inbound -Pro
 
 ### Rust/Tauri版 macOSアプリをビルドする場合
 
-macOS / Apple Silicon向けRust/Tauri版は `full-runtime-macos` featureでビルドします。WhisperはMetal、Qwen3-ASRはCandle Metal、Voxtralはpatched llama.cpp Metalを優先し、利用できない経路はCPUへフォールバックします。既存Windows向けの `full-runtime` / `full-runtime-cuda` とはfeatureを分けています。
-Whisper MetalやVoxtral patched llama.cppのネイティブビルドにはCMakeが必要です。`build:macos:app` は `MACOSX_DEPLOYMENT_TARGET=11.0` を既定で設定します。
+macOS / Apple Silicon向けRust/Tauri版は `full-runtime-macos` featureでビルドします。WhisperはMetal、Qwen3-ASRはCandle Metal、VoxtralはExecuTorch Metal runnerを優先し、利用できない経路はCPUまたは未設定診断へフォールバックします。既存Windows向けの `full-runtime` / `full-runtime-cuda` とはfeatureを分けています。
+Whisper MetalのネイティブビルドにはCMakeが必要です。`build:macos:app` は `MACOSX_DEPLOYMENT_TARGET=11.0` を既定で設定します。
 
 ```bash
 cd app
@@ -184,7 +184,29 @@ app/dist/AMCP.app
 app/dist/web/
 ```
 
-Voxtral RealtimeをMetalで使う場合は、パッチ済み `llama.cpp` をMetal有効で共有ライブラリビルドし、`AMCP_VOXTRAL_PATCHED_LLAMA_DIR` と `AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR` を指定してください。
+Voxtral RealtimeをMetalで使う場合は、ExecuTorchをMetal backend付きでビルドし、Voxtral RealtimeのMetal `.pte` モデル一式を指定してください。`voxtral_realtime_runner` は `--audio_path` で16kHz mono WAVを受け取るrunnerを使います。
+
+```bash
+export EXECUTORCH_PATH="$HOME/executorch"
+git clone https://github.com/pytorch/executorch "$EXECUTORCH_PATH"
+cd "$EXECUTORCH_PATH"
+EXECUTORCH_BUILD_KERNELS_TORCHAO=1 TORCHAO_BUILD_EXPERIMENTAL_MPS=1 ./install_executorch.sh
+make voxtral_realtime-metal
+
+export LOCAL_FOLDER="$HOME/voxtral_realtime_quant_metal"
+hf download mistral-experimental/Voxtral-Mini-4B-Realtime-2602-ExecuTorch --local-dir "$LOCAL_FOLDER"
+
+cd ~/Documents/bi/other/projects/asr-model-comparison/app
+export AMCP_VOXTRAL_RUNTIME=executorch
+export AMCP_VOXTRAL_EXECUTORCH_RUNNER_PATH="$EXECUTORCH_PATH/cmake-out/examples/models/voxtral_realtime/voxtral_realtime_runner"
+export AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH="$LOCAL_FOLDER/model-metal-int4.pte"
+export AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH="$LOCAL_FOLDER/preprocessor.pte"
+export AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH="$LOCAL_FOLDER/tekken.json"
+export AMCP_VOXTRAL_EXECUTORCH_DYLD_LIBRARY_PATH="/usr/lib:$(brew --prefix libomp)/lib"
+npm run validate:macos:voxtral:executorch -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id voxtral-mini-4b --language ja --json
+```
+
+パッチ済み `llama.cpp` Metal経路も代替として残しています。使う場合は、パッチ済み `llama.cpp` をMetal有効で共有ライブラリビルドし、`AMCP_VOXTRAL_PATCHED_LLAMA_DIR` と `AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR` を指定してください。
 
 ```bash
 cd app
@@ -213,7 +235,7 @@ macOSで日本語サンプル音声を使って実モデル検証する例:
 cd app
 npm run validate:macos:whisper -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id whisper-tiny --language ja --json
 npm run validate:macos:qwen -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id qwen3-asr-0.6b --language ja --json
-AMCP_VOXTRAL_RUNTIME=llamacpp npm run validate:macos:voxtral -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id voxtral-mini-4b --language ja --json
+AMCP_VOXTRAL_RUNTIME=executorch npm run validate:macos:voxtral:executorch -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id voxtral-mini-4b --language ja --json
 ```
 
 ## リアルタイム利用のための推奨設定（日本語）

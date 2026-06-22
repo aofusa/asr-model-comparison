@@ -173,9 +173,10 @@ fn prepare_voxtral_assets(
 ) -> Result<Vec<BackendAssetProgress>, String> {
     let config = voxtral_llamacpp::configure_voxtral_llamacpp(available_backends);
     let validation = voxtral_llamacpp::validate_voxtral_llamacpp_config(&config);
+    let executorch_configured = voxtral_llamacpp::executorch_configured(&config);
     let mut events = vec![BackendAssetProgress {
         phase: "voxtral_paths".to_string(),
-        message: "Resolving Voxtral Realtime GGUF and mmproj files.".to_string(),
+        message: "Resolving Voxtral Realtime ExecuTorch and llama.cpp files.".to_string(),
         progress: Some(48),
         bytes_downloaded: None,
         total_bytes: None,
@@ -196,15 +197,49 @@ fn prepare_voxtral_assets(
         });
     }
 
+    for (phase, path) in [
+        (
+            "voxtral_executorch_runner",
+            config.executorch.runner_path.as_ref(),
+        ),
+        (
+            "voxtral_executorch_model",
+            config.executorch.model_path.as_ref(),
+        ),
+        (
+            "voxtral_executorch_preprocessor",
+            config.executorch.preprocessor_path.as_ref(),
+        ),
+        (
+            "voxtral_executorch_tokenizer",
+            config.executorch.tokenizer_path.as_ref(),
+        ),
+    ] {
+        events.push(BackendAssetProgress {
+            phase: phase.to_string(),
+            message: path
+                .map(|path| format!("Checking {phase}: {}.", path.display()))
+                .unwrap_or_else(|| format!("{phase} is not configured.")),
+            progress: Some(54),
+            bytes_downloaded: None,
+            total_bytes: None,
+        });
+    }
+
     events.push(BackendAssetProgress {
         phase: "voxtral_runtime".to_string(),
-        message: if validation.configured {
+        message: if executorch_configured {
+            format!(
+                "Voxtral Realtime ExecuTorch Metal runtime is configured for {}.",
+                config.model_id
+            )
+        } else if validation.configured {
             format!(
                 "Voxtral Realtime patched llama.cpp runtime is configured for {}.",
                 config.model_id
             )
         } else {
-            "Voxtral Realtime GGUF/mmproj files are missing; set AMCP_VOXTRAL_LLAMA_* or use the Hugging Face cache.".to_string()
+            "Voxtral Realtime files are missing; set AMCP_VOXTRAL_EXECUTORCH_* for macOS Metal or AMCP_VOXTRAL_LLAMA_* for patched llama.cpp.".to_string()
         },
         progress: Some(56),
         bytes_downloaded: None,
@@ -311,15 +346,20 @@ fn try_transcribe_voxtral_llamacpp(
         translation_engine: Some("voxtral-llamacpp".to_string()),
         language: options.language.clone(),
         chunks: vec![serde_json::json!({
-            "backend": "voxtral-llamacpp",
+            "backend": result.runtime,
             "model_id": result.model_id,
+            "runner_path": result.runner_path,
             "model_path": result.model_path,
             "mmproj_path": result.mmproj_path,
             "n_gpu_layers": result.n_gpu_layers,
             "sample_rate": audio.sample_rate,
             "duration_seconds": audio.duration_seconds,
         })],
-        runtime_backend: Some(RuntimeBackendKind::VoxtralLlamaCpp),
+        runtime_backend: Some(if result.runtime.starts_with("executorch") {
+            RuntimeBackendKind::VoxtralExecuTorch
+        } else {
+            RuntimeBackendKind::VoxtralLlamaCpp
+        }),
     }))
 }
 

@@ -42,13 +42,14 @@ qwen = [
 ]
 qwen-cuda = ["qwen", "candle-core/cuda", "candle-nn/cuda"]
 qwen-metal = ["qwen", "candle-core/metal", "candle-nn/metal"]
-voxtral = ["voxtral-llamacpp-realtime-patched"]
-voxtral-realtime-metal = ["voxtral"]
-voxtral-realtime-vulkan = ["voxtral"]
+voxtral = []
+voxtral-executorch = ["voxtral"]
+voxtral-realtime-metal = ["voxtral-executorch"]
+voxtral-realtime-vulkan = ["voxtral-llamacpp-realtime-patched"]
 voxtral-llamacpp = ["dep:hf-hub"]
 voxtral-llamacpp-native = ["voxtral-llamacpp", "dep:llama-cpp-4"]
 voxtral-llamacpp-vulkan = ["voxtral-llamacpp-native", "llama-cpp-4/vulkan"]
-voxtral-llamacpp-realtime-patched = ["voxtral-llamacpp"]
+voxtral-llamacpp-realtime-patched = ["voxtral", "voxtral-llamacpp"]
 
 [dependencies]
 anyhow = "1"
