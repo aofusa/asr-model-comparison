@@ -131,14 +131,15 @@ cd app
 npm run build:macos:app
 ```
 
-Voxtral RealtimeのMetal実推論はmacOSではExecuTorch Metal runnerを優先する。runnerとMetal `.pte` モデル一式を用意し、同じシェルで以下を指定する。
+Voxtral RealtimeのMetal実推論はmacOSではExecuTorch Metal runnerを優先する。runnerはローカルビルドし、Metal `.pte` モデル一式はHugging Faceの共通キャッシュへ配置してrepo/file名で解決する。
 
 ```bash
 export AMCP_VOXTRAL_RUNTIME=executorch
 export AMCP_VOXTRAL_EXECUTORCH_RUNNER_PATH="$HOME/executorch/cmake-out/examples/models/voxtral_realtime/voxtral_realtime_runner"
-export AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH="$HOME/voxtral_realtime_quant_metal/model-metal-int4.pte"
-export AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH="$HOME/voxtral_realtime_quant_metal/preprocessor.pte"
-export AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH="$HOME/voxtral_realtime_quant_metal/tekken.json"
+export AMCP_VOXTRAL_EXECUTORCH_REPO_ID="mistral-experimental/Voxtral-Mini-4B-Realtime-2602-ExecuTorch"
+export AMCP_VOXTRAL_EXECUTORCH_MODEL_FILE="model-metal-int4.pte"
+export AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_FILE="preprocessor.pte"
+export AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_FILE="tekken.json"
 export AMCP_VOXTRAL_EXECUTORCH_DYLD_LIBRARY_PATH="/usr/lib:$(brew --prefix libomp)/lib"
 npm run validate:macos:voxtral:executorch -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id voxtral-mini-4b --language ja --json
 ```

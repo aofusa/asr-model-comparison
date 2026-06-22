@@ -13,6 +13,11 @@ const DEFAULT_LLAMA_MODEL_ID: &str = "acceldium/Voxtral-Mini-4B-Realtime-2602_GG
 const DEFAULT_LLAMA_REPO_ID: &str = DEFAULT_LLAMA_MODEL_ID;
 const DEFAULT_LLAMA_MODEL_FILE: &str = "voxtral-realtime-4b-text-q8_0.gguf";
 const DEFAULT_LLAMA_MMPROJ_FILE: &str = "voxtral-realtime-4b-mmproj-f16.gguf";
+const DEFAULT_EXECUTORCH_REPO_ID: &str =
+    "mistral-experimental/Voxtral-Mini-4B-Realtime-2602-ExecuTorch";
+const DEFAULT_EXECUTORCH_MODEL_FILE: &str = "model-metal-int4.pte";
+const DEFAULT_EXECUTORCH_PREPROCESSOR_FILE: &str = "preprocessor.pte";
+const DEFAULT_EXECUTORCH_TOKENIZER_FILE: &str = "tekken.json";
 const DEFAULT_CONTEXT_SIZE: u32 = 4096;
 const DEFAULT_BATCH_SIZE: u32 = 512;
 const DEFAULT_MAX_TOKENS: usize = 512;
@@ -43,6 +48,10 @@ pub struct VoxtralExecuTorchConfig {
     pub model_path: Option<PathBuf>,
     pub preprocessor_path: Option<PathBuf>,
     pub tokenizer_path: Option<PathBuf>,
+    pub repo_id: String,
+    pub model_file: Option<String>,
+    pub preprocessor_file: Option<String>,
+    pub tokenizer_file: Option<String>,
     pub streaming: bool,
     pub dyld_library_path: Option<String>,
 }
@@ -122,11 +131,41 @@ pub fn configure_voxtral_llamacpp(available_backends: &[HardwareBackend]) -> Vox
 }
 
 fn configure_executorch() -> VoxtralExecuTorchConfig {
+    let repo_id = env_string("AMCP_VOXTRAL_EXECUTORCH_REPO_ID")
+        .unwrap_or_else(|| DEFAULT_EXECUTORCH_REPO_ID.to_string());
+    let model_file = env_string("AMCP_VOXTRAL_EXECUTORCH_MODEL_FILE")
+        .or_else(|| Some(DEFAULT_EXECUTORCH_MODEL_FILE.into()));
+    let preprocessor_file = env_string("AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_FILE")
+        .or_else(|| Some(DEFAULT_EXECUTORCH_PREPROCESSOR_FILE.into()));
+    let tokenizer_file = env_string("AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_FILE")
+        .or_else(|| Some(DEFAULT_EXECUTORCH_TOKENIZER_FILE.into()));
     VoxtralExecuTorchConfig {
         runner_path: env_path("AMCP_VOXTRAL_EXECUTORCH_RUNNER_PATH"),
-        model_path: env_path("AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH"),
-        preprocessor_path: env_path("AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH"),
-        tokenizer_path: env_path("AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH"),
+        model_path: env_path("AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH").or_else(|| {
+            resolve_hf_cached_executorch_asset(
+                &repo_id,
+                model_file.as_deref(),
+                ExecuTorchAssetKind::Model,
+            )
+        }),
+        preprocessor_path: env_path("AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH").or_else(|| {
+            resolve_hf_cached_executorch_asset(
+                &repo_id,
+                preprocessor_file.as_deref(),
+                ExecuTorchAssetKind::Preprocessor,
+            )
+        }),
+        tokenizer_path: env_path("AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH").or_else(|| {
+            resolve_hf_cached_executorch_asset(
+                &repo_id,
+                tokenizer_file.as_deref(),
+                ExecuTorchAssetKind::Tokenizer,
+            )
+        }),
+        repo_id,
+        model_file,
+        preprocessor_file,
+        tokenizer_file,
         streaming: env_bool("AMCP_VOXTRAL_EXECUTORCH_STREAMING").unwrap_or(false),
         dyld_library_path: env_string("AMCP_VOXTRAL_EXECUTORCH_DYLD_LIBRARY_PATH"),
     }
@@ -833,12 +872,16 @@ model_path={:?} model_exists={} mmproj_path={:?} mmproj_exists={}",
 fn missing_executorch_config_error(config: &VoxtralLlamaCppConfig) -> String {
     format!(
         "Voxtral ExecuTorch runtime is selected, but runner/model/preprocessor/tokenizer files are not configured or missing. \
-Set AMCP_VOXTRAL_EXECUTORCH_RUNNER_PATH, AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH, AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH, and AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH. \
-runner={:?} model={:?} preprocessor={:?} tokenizer={:?}",
+Set AMCP_VOXTRAL_EXECUTORCH_RUNNER_PATH for the local runner and set explicit AMCP_VOXTRAL_EXECUTORCH_*_PATH values, or cache model assets in Hugging Face Hub under AMCP_VOXTRAL_EXECUTORCH_REPO_ID with optional AMCP_VOXTRAL_EXECUTORCH_MODEL_FILE / AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_FILE / AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_FILE. \
+runner={:?} model={:?} preprocessor={:?} tokenizer={:?} hf_repo={} model_file={:?} preprocessor_file={:?} tokenizer_file={:?}",
         config.executorch.runner_path,
         config.executorch.model_path,
         config.executorch.preprocessor_path,
-        config.executorch.tokenizer_path
+        config.executorch.tokenizer_path,
+        config.executorch.repo_id,
+        config.executorch.model_file,
+        config.executorch.preprocessor_file,
+        config.executorch.tokenizer_file
     )
 }
 
@@ -979,6 +1022,13 @@ enum LlamaCppGgufKind {
     Mmproj,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecuTorchAssetKind {
+    Model,
+    Preprocessor,
+    Tokenizer,
+}
+
 fn resolve_hf_cached_gguf(
     repo_id: &str,
     file_name: Option<&str>,
@@ -999,6 +1049,34 @@ fn resolve_hf_cached_gguf(
         path.file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| is_llamacpp_gguf_name(name, kind))
+    });
+    if candidates.len() == 1 {
+        candidates.into_iter().next()
+    } else {
+        None
+    }
+}
+
+fn resolve_hf_cached_executorch_asset(
+    repo_id: &str,
+    file_name: Option<&str>,
+    kind: ExecuTorchAssetKind,
+) -> Option<PathBuf> {
+    let snapshot = existing_hf_snapshot_dir(repo_id)?;
+    if let Some(file_name) = file_name {
+        return find_hf_cached_file(&snapshot, HF_SNAPSHOT_SEARCH_DEPTH, &|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case(file_name))
+        })
+        .into_iter()
+        .next();
+    }
+
+    let candidates = find_hf_cached_file(&snapshot, HF_SNAPSHOT_SEARCH_DEPTH, &|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| is_executorch_asset_name(name, kind))
     });
     if candidates.len() == 1 {
         candidates.into_iter().next()
@@ -1051,6 +1129,30 @@ fn is_llamacpp_gguf_name(name: &str, kind: LlamaCppGgufKind) -> bool {
     match kind {
         LlamaCppGgufKind::TextModel => !is_mmproj,
         LlamaCppGgufKind::Mmproj => is_mmproj,
+    }
+}
+
+fn is_executorch_asset_name(name: &str, kind: ExecuTorchAssetKind) -> bool {
+    let lower = name.to_ascii_lowercase();
+    match kind {
+        ExecuTorchAssetKind::Model => {
+            lower.ends_with(".pte")
+                && lower.contains("model")
+                && !lower.contains("preprocessor")
+                && !lower.contains("preprocess")
+        }
+        ExecuTorchAssetKind::Preprocessor => {
+            lower.ends_with(".pte")
+                && (lower.contains("preprocessor") || lower.contains("preprocess"))
+        }
+        ExecuTorchAssetKind::Tokenizer => {
+            lower == "tekken.json"
+                || lower == "tokenizer.json"
+                || lower == "tokenizer.model"
+                || lower.ends_with(".tekken")
+                || ((lower.ends_with(".json") || lower.ends_with(".model"))
+                    && lower.contains("tokenizer"))
+        }
     }
 }
 
@@ -1280,6 +1382,10 @@ mod tests {
                 model_path: None,
                 preprocessor_path: None,
                 tokenizer_path: None,
+                repo_id: DEFAULT_EXECUTORCH_REPO_ID.to_string(),
+                model_file: None,
+                preprocessor_file: None,
+                tokenizer_file: None,
                 streaming: false,
                 dyld_library_path: None,
             },
@@ -1358,6 +1464,56 @@ mod tests {
 
         assert_eq!(config.model_path.as_deref(), Some(model_path.as_path()));
         assert_eq!(config.mmproj_path.as_deref(), Some(mmproj_path.as_path()));
+    }
+
+    #[test]
+    fn resolves_executorch_assets_from_hf_cache() {
+        let _guard = env_lock().lock().unwrap();
+        let cache_root = std::env::temp_dir().join(format!(
+            "amcp-voxtral-executorch-hf-cache-{}",
+            std::process::id()
+        ));
+        let repo_dir = cache_root.join("models--example--voxtral-executorch");
+        let snapshot_dir = repo_dir.join("snapshots").join("def456");
+        let _ = std::fs::remove_dir_all(&cache_root);
+        std::fs::create_dir_all(repo_dir.join("refs")).unwrap();
+        std::fs::create_dir_all(&snapshot_dir).unwrap();
+        std::fs::write(repo_dir.join("refs").join("main"), "def456").unwrap();
+        let model_path = snapshot_dir.join("model-metal-int4.pte");
+        let preprocessor_path = snapshot_dir.join("preprocessor.pte");
+        let tokenizer_path = snapshot_dir.join("tekken.json");
+        std::fs::write(&model_path, b"model").unwrap();
+        std::fs::write(&preprocessor_path, b"preprocessor").unwrap();
+        std::fs::write(&tokenizer_path, b"tokenizer").unwrap();
+
+        std::env::set_var("HF_HUB_CACHE", &cache_root);
+        std::env::remove_var("AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH");
+        std::env::remove_var("AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH");
+        std::env::remove_var("AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH");
+        std::env::remove_var("AMCP_VOXTRAL_EXECUTORCH_MODEL_FILE");
+        std::env::remove_var("AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_FILE");
+        std::env::remove_var("AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_FILE");
+        std::env::set_var(
+            "AMCP_VOXTRAL_EXECUTORCH_REPO_ID",
+            "example/voxtral-executorch",
+        );
+        let config = configure_voxtral_llamacpp(&[HardwareBackend::Cpu]);
+        std::env::remove_var("HF_HUB_CACHE");
+        std::env::remove_var("AMCP_VOXTRAL_EXECUTORCH_REPO_ID");
+        let _ = std::fs::remove_dir_all(&cache_root);
+
+        assert_eq!(
+            config.executorch.model_path.as_deref(),
+            Some(model_path.as_path())
+        );
+        assert_eq!(
+            config.executorch.preprocessor_path.as_deref(),
+            Some(preprocessor_path.as_path())
+        );
+        assert_eq!(
+            config.executorch.tokenizer_path.as_deref(),
+            Some(tokenizer_path.as_path())
+        );
     }
 
     #[test]

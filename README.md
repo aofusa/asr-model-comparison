@@ -193,18 +193,20 @@ cd "$EXECUTORCH_PATH"
 EXECUTORCH_BUILD_KERNELS_TORCHAO=1 TORCHAO_BUILD_EXPERIMENTAL_MPS=1 ./install_executorch.sh
 make voxtral_realtime-metal
 
-export LOCAL_FOLDER="$HOME/voxtral_realtime_quant_metal"
-hf download mistral-experimental/Voxtral-Mini-4B-Realtime-2602-ExecuTorch --local-dir "$LOCAL_FOLDER"
+hf download mistral-experimental/Voxtral-Mini-4B-Realtime-2602-ExecuTorch
 
 cd ~/Documents/bi/other/projects/asr-model-comparison/app
 export AMCP_VOXTRAL_RUNTIME=executorch
 export AMCP_VOXTRAL_EXECUTORCH_RUNNER_PATH="$EXECUTORCH_PATH/cmake-out/examples/models/voxtral_realtime/voxtral_realtime_runner"
-export AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH="$LOCAL_FOLDER/model-metal-int4.pte"
-export AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH="$LOCAL_FOLDER/preprocessor.pte"
-export AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH="$LOCAL_FOLDER/tekken.json"
+export AMCP_VOXTRAL_EXECUTORCH_REPO_ID="mistral-experimental/Voxtral-Mini-4B-Realtime-2602-ExecuTorch"
+export AMCP_VOXTRAL_EXECUTORCH_MODEL_FILE="model-metal-int4.pte"
+export AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_FILE="preprocessor.pte"
+export AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_FILE="tekken.json"
 export AMCP_VOXTRAL_EXECUTORCH_DYLD_LIBRARY_PATH="/usr/lib:$(brew --prefix libomp)/lib"
 npm run validate:macos:voxtral:executorch -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id voxtral-mini-4b --language ja --json
 ```
+
+ExecuTorch の model/preprocessor/tokenizer は Hugging Face の共通キャッシュから解決されます。明示pathを使う場合だけ `AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH`、`AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH`、`AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH` を指定してください。
 
 パッチ済み `llama.cpp` Metal経路も代替として残しています。使う場合は、パッチ済み `llama.cpp` をMetal有効で共有ライブラリビルドし、`AMCP_VOXTRAL_PATCHED_LLAMA_DIR` と `AMCP_VOXTRAL_PATCHED_LLAMA_LIB_DIR` を指定してください。
 

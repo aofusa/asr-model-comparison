@@ -498,6 +498,22 @@ fn voxtral_llamacpp_artifacts(
             )),
         },
         RuntimeArtifactStatus {
+            name: "voxtral_executorch_hf_repo".to_string(),
+            kind: RuntimeArtifactKind::Download,
+            path: Some(config.executorch.repo_id.clone()),
+            env_var: Some("AMCP_VOXTRAL_EXECUTORCH_REPO_ID".to_string()),
+            required: false,
+            exists: config.executorch.model_path.is_some()
+                || config.executorch.preprocessor_path.is_some()
+                || config.executorch.tokenizer_path.is_some(),
+            note: Some(format!(
+                "uses the shared Hugging Face cache for ExecuTorch model assets when explicit paths are unset; model_file={:?} preprocessor_file={:?} tokenizer_file={:?}",
+                config.executorch.model_file,
+                config.executorch.preprocessor_file,
+                config.executorch.tokenizer_file
+            )),
+        },
+        RuntimeArtifactStatus {
             name: "voxtral_llama_metal".to_string(),
             kind: RuntimeArtifactKind::Command,
             path: Some(format!(

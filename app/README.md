@@ -186,15 +186,15 @@ cd "$EXECUTORCH_PATH"
 EXECUTORCH_BUILD_KERNELS_TORCHAO=1 TORCHAO_BUILD_EXPERIMENTAL_MPS=1 ./install_executorch.sh
 make voxtral_realtime-metal
 
-export LOCAL_FOLDER="$HOME/voxtral_realtime_quant_metal"
-hf download mistral-experimental/Voxtral-Mini-4B-Realtime-2602-ExecuTorch --local-dir "$LOCAL_FOLDER"
+hf download mistral-experimental/Voxtral-Mini-4B-Realtime-2602-ExecuTorch
 
 cd ~/Documents/bi/other/projects/asr-model-comparison/app
 export AMCP_VOXTRAL_RUNTIME=executorch
 export AMCP_VOXTRAL_EXECUTORCH_RUNNER_PATH="$EXECUTORCH_PATH/cmake-out/examples/models/voxtral_realtime/voxtral_realtime_runner"
-export AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH="$LOCAL_FOLDER/model-metal-int4.pte"
-export AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH="$LOCAL_FOLDER/preprocessor.pte"
-export AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH="$LOCAL_FOLDER/tekken.json"
+export AMCP_VOXTRAL_EXECUTORCH_REPO_ID="mistral-experimental/Voxtral-Mini-4B-Realtime-2602-ExecuTorch"
+export AMCP_VOXTRAL_EXECUTORCH_MODEL_FILE="model-metal-int4.pte"
+export AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_FILE="preprocessor.pte"
+export AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_FILE="tekken.json"
 export AMCP_VOXTRAL_EXECUTORCH_DYLD_LIBRARY_PATH="/usr/lib:$(brew --prefix libomp)/lib"
 npm run validate:macos:voxtral:executorch -- --audio "../backend/tests/audio_samples/ja_01.mp3" --model-id voxtral-mini-4b --language ja --json
 ```
@@ -203,9 +203,11 @@ npm run validate:macos:voxtral:executorch -- --audio "../backend/tests/audio_sam
 
 - `AMCP_VOXTRAL_RUNTIME=executorch`: VoxtralでExecuTorch runnerを明示的に使います。`metal` / `executorch-metal` も同じ扱いです。
 - `AMCP_VOXTRAL_EXECUTORCH_RUNNER_PATH`: `voxtral_realtime_runner` のパスです。
-- `AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH`: Metal向けVoxtral `.pte` modelです。
-- `AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH`: `preprocessor.pte` です。streaming exportの場合は対応するpreprocessorを指定します。
-- `AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH`: `tekken.json` です。
+- `AMCP_VOXTRAL_EXECUTORCH_REPO_ID`: ExecuTorch model assetsを置くHugging Face repoです。未指定時は `mistral-experimental/Voxtral-Mini-4B-Realtime-2602-ExecuTorch` を使います。
+- `AMCP_VOXTRAL_EXECUTORCH_MODEL_FILE`: Metal向けVoxtral `.pte` model名です。未指定時は `model-metal-int4.pte` です。
+- `AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_FILE`: preprocessor `.pte` 名です。未指定時は `preprocessor.pte` です。
+- `AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_FILE`: tokenizer名です。未指定時は `tekken.json` です。
+- `AMCP_VOXTRAL_EXECUTORCH_MODEL_PATH` / `AMCP_VOXTRAL_EXECUTORCH_PREPROCESSOR_PATH` / `AMCP_VOXTRAL_EXECUTORCH_TOKENIZER_PATH`: Hugging Face共通キャッシュを使わず明示pathで上書きする場合だけ指定します。
 - `AMCP_VOXTRAL_EXECUTORCH_STREAMING=1`: streaming exportを使う場合に `--streaming` をrunnerへ渡します。
 - `AMCP_VOXTRAL_EXECUTORCH_DYLD_LIBRARY_PATH`: runnerに必要なdylib検索パスです。
 
