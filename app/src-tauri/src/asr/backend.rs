@@ -1,6 +1,6 @@
 use crate::accelerator::{HardwareBackend, ModelFamily};
 use crate::asr::qwen_candle;
-use crate::asr::voxtral_mistralrs;
+use crate::asr::voxtral_llamacpp;
 use crate::asr::voxtral_onnx;
 use crate::models::{available_models, family_for_model};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ pub enum RuntimeBackendKind {
     WhisperRs,
     QwenNative,
     VoxtralOnnx,
-    VoxtralMistralRs,
+    VoxtralLlamaCpp,
     Placeholder,
 }
 
@@ -152,8 +152,8 @@ fn voxtral_status(
     family: ModelFamily,
     available_backends: &[HardwareBackend],
 ) -> RuntimeBackendStatus {
-    if voxtral_mistralrs::is_mistralrs_requested() {
-        return voxtral_mistralrs_status(model_id, family, available_backends);
+    if voxtral_llamacpp::is_llamacpp_requested() {
+        return voxtral_llamacpp_status(model_id, family, available_backends);
     }
 
     let configured = cfg!(feature = "voxtral");
@@ -212,37 +212,46 @@ fn voxtral_status(
     }
 }
 
-fn voxtral_mistralrs_status(
+fn voxtral_llamacpp_status(
     model_id: &str,
     family: ModelFamily,
     available_backends: &[HardwareBackend],
 ) -> RuntimeBackendStatus {
-    let configured = cfg!(feature = "voxtral");
-    let config = voxtral_mistralrs::configure_voxtral_mistralrs(available_backends);
-    let url_configured = config.url.is_some();
-    let real_inference_available = configured && url_configured;
+    let configured = cfg!(feature = "voxtral-llamacpp-native");
+    let config = voxtral_llamacpp::configure_voxtral_llamacpp(available_backends);
+    let validation = voxtral_llamacpp::validate_voxtral_llamacpp_config(&config);
+    let real_inference_available = configured && validation.configured;
     RuntimeBackendStatus {
         model_id: model_id.to_string(),
         family,
         backend: if real_inference_available {
-            RuntimeBackendKind::VoxtralMistralRs
+            RuntimeBackendKind::VoxtralLlamaCpp
         } else {
             RuntimeBackendKind::Placeholder
         },
         real_inference_available,
         configured,
         selected_accelerators: config.providers.clone(),
-        artifacts: voxtral_mistralrs_artifacts(&config),
+        artifacts: voxtral_llamacpp_artifacts(&config),
         reason: if real_inference_available {
             format!(
-                "voxtral feature is enabled and mistral.rs local server is configured for {}.",
-                config.model_id
+                "voxtral-llamacpp feature is enabled and Voxtral GGUF/mmproj files are configured for {}. Vulkan acceleration is {}.",
+                config.model_id,
+                if cfg!(feature = "voxtral-llamacpp-vulkan") {
+                    "compiled in"
+                } else {
+                    "not compiled in"
+                }
             )
+        } else if configured && cfg!(feature = "voxtral-llamacpp-vulkan") {
+            "voxtral-llamacpp-vulkan feature is enabled, but AMCP_VOXTRAL_LLAMA_MODEL_PATH and AMCP_VOXTRAL_LLAMA_MMPROJ_PATH are not fully configured."
+                .to_string()
         } else if configured {
-            "voxtral feature is enabled, but AMCP_VOXTRAL_MISTRALRS_URL is not configured for the mistral.rs runtime."
+            "voxtral-llamacpp feature is enabled, but AMCP_VOXTRAL_LLAMA_MODEL_PATH and AMCP_VOXTRAL_LLAMA_MMPROJ_PATH are not fully configured. Enable voxtral-llamacpp-vulkan for Vulkan acceleration."
                 .to_string()
         } else {
-            "voxtral feature is not enabled; using placeholder inference.".to_string()
+            "voxtral-llamacpp-native feature is not enabled; using placeholder inference."
+                .to_string()
         },
     }
 }
@@ -480,36 +489,42 @@ fn voxtral_artifacts(
     ]
 }
 
-fn voxtral_mistralrs_artifacts(
-    config: &voxtral_mistralrs::VoxtralMistralRsConfig,
+fn voxtral_llamacpp_artifacts(
+    config: &voxtral_llamacpp::VoxtralLlamaCppConfig,
 ) -> Vec<RuntimeArtifactStatus> {
     vec![
         RuntimeArtifactStatus {
             name: "voxtral_runtime".to_string(),
             kind: RuntimeArtifactKind::Command,
-            path: voxtral_mistralrs::voxtral_runtime_preference(),
+            path: voxtral_llamacpp::voxtral_runtime_preference(),
             env_var: Some("AMCP_VOXTRAL_RUNTIME".to_string()),
             required: false,
-            exists: voxtral_mistralrs::is_mistralrs_requested(),
-            note: Some("set to 'mistralrs' to force the mistral.rs runtime".to_string()),
+            exists: voxtral_llamacpp::is_llamacpp_requested(),
+            note: Some("set to 'llamacpp' to force the embedded llama.cpp runtime".to_string()),
         },
+        optional_file_artifact(
+            "voxtral_llama_model",
+            config.model_path.as_ref(),
+            Some("AMCP_VOXTRAL_LLAMA_MODEL_PATH"),
+            true,
+        ),
+        optional_file_artifact(
+            "voxtral_llama_mmproj",
+            config.mmproj_path.as_ref(),
+            Some("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH"),
+            true,
+        ),
         RuntimeArtifactStatus {
-            name: "voxtral_mistralrs_url".to_string(),
+            name: "voxtral_llama_vulkan".to_string(),
             kind: RuntimeArtifactKind::Command,
-            path: config.url.clone(),
-            env_var: Some("AMCP_VOXTRAL_MISTRALRS_URL".to_string()),
-            required: true,
-            exists: config.url.is_some(),
-            note: Some("local mistral.rs OpenAI-compatible server URL".to_string()),
-        },
-        RuntimeArtifactStatus {
-            name: "voxtral_mistralrs_model".to_string(),
-            kind: RuntimeArtifactKind::Download,
-            path: Some(config.model_id.clone()),
-            env_var: Some("AMCP_VOXTRAL_MISTRALRS_MODEL_ID".to_string()),
+            path: Some(format!(
+                "feature=voxtral-llamacpp-vulkan use_gpu={} n_gpu_layers={}",
+                config.use_gpu, config.n_gpu_layers
+            )),
+            env_var: Some("AMCP_VOXTRAL_LLAMA_GPU_LAYERS".to_string()),
             required: false,
-            exists: true,
-            note: Some("mistral.rs resolves this model in its own cache".to_string()),
+            exists: cfg!(feature = "voxtral-llamacpp-vulkan"),
+            note: Some("llama-cpp-4 Vulkan feature requires Vulkan SDK at build time".to_string()),
         },
     ]
 }
@@ -647,7 +662,8 @@ mod tests {
     fn reports_voxtral_artifact_requirements() {
         let _guard = env_lock().lock().unwrap();
         std::env::remove_var("AMCP_VOXTRAL_RUNTIME");
-        std::env::remove_var("AMCP_VOXTRAL_MISTRALRS_URL");
+        std::env::remove_var("AMCP_VOXTRAL_LLAMA_MODEL_PATH");
+        std::env::remove_var("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH");
         let status = runtime_backend_status("voxtral-mini-4b", &[HardwareBackend::Cpu]);
 
         assert_eq!(status.family, ModelFamily::Voxtral);
@@ -660,25 +676,23 @@ mod tests {
     }
 
     #[test]
-    fn reports_voxtral_mistralrs_runtime_when_requested() {
+    fn reports_voxtral_llamacpp_runtime_when_requested() {
         let _guard = env_lock().lock().unwrap();
-        std::env::set_var("AMCP_VOXTRAL_RUNTIME", "mistralrs");
-        std::env::set_var("AMCP_VOXTRAL_MISTRALRS_URL", "http://127.0.0.1:1234");
+        std::env::set_var("AMCP_VOXTRAL_RUNTIME", "llamacpp");
+        std::env::set_var("AMCP_VOXTRAL_LLAMA_MODEL_PATH", "missing-model.gguf");
+        std::env::set_var("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH", "missing-mmproj.gguf");
         let status = runtime_backend_status("voxtral-mini-4b", &[HardwareBackend::Vulkan]);
         std::env::remove_var("AMCP_VOXTRAL_RUNTIME");
-        std::env::remove_var("AMCP_VOXTRAL_MISTRALRS_URL");
+        std::env::remove_var("AMCP_VOXTRAL_LLAMA_MODEL_PATH");
+        std::env::remove_var("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH");
 
-        if cfg!(feature = "voxtral") {
-            assert_eq!(status.backend, RuntimeBackendKind::VoxtralMistralRs);
-        } else {
-            assert_eq!(status.backend, RuntimeBackendKind::Placeholder);
-        }
+        assert_eq!(status.backend, RuntimeBackendKind::Placeholder);
         assert!(status
             .selected_accelerators
             .contains(&HardwareBackend::Vulkan));
         assert!(status
             .artifacts
             .iter()
-            .any(|artifact| artifact.env_var.as_deref() == Some("AMCP_VOXTRAL_MISTRALRS_URL")));
+            .any(|artifact| artifact.env_var.as_deref() == Some("AMCP_VOXTRAL_LLAMA_MMPROJ_PATH")));
     }
 }

@@ -3,7 +3,7 @@ use super::backend::RuntimeBackendKind;
 use super::TranscriptionOptions;
 use crate::accelerator::HardwareBackend;
 use crate::asr::qwen_candle;
-use crate::asr::voxtral_mistralrs;
+use crate::asr::voxtral_llamacpp;
 use crate::asr::voxtral_onnx;
 use serde::{Deserialize, Serialize};
 
@@ -319,11 +319,11 @@ fn try_transcribe_voxtral(
     options: &TranscriptionOptions,
     available_backends: &[HardwareBackend],
 ) -> Result<Option<BackendTranscription>, String> {
-    if voxtral_mistralrs::should_route_to_mistralrs(
+    if voxtral_llamacpp::should_route_to_llamacpp(
         options.language.as_deref(),
         options.target_language.as_deref(),
     ) {
-        return try_transcribe_voxtral_mistralrs(audio, options, available_backends);
+        return try_transcribe_voxtral_llamacpp(audio, options, available_backends);
     }
 
     let Some(result) = voxtral_onnx::transcribe_voxtral_audio(
@@ -360,12 +360,12 @@ fn try_transcribe_voxtral(
     }))
 }
 
-fn try_transcribe_voxtral_mistralrs(
+fn try_transcribe_voxtral_llamacpp(
     audio: &PreprocessedAudio,
     options: &TranscriptionOptions,
     available_backends: &[HardwareBackend],
 ) -> Result<Option<BackendTranscription>, String> {
-    let Some(result) = voxtral_mistralrs::transcribe_voxtral_audio(
+    let Some(result) = voxtral_llamacpp::transcribe_voxtral_audio(
         audio,
         options.language.as_deref(),
         options.target_language.as_deref(),
@@ -384,16 +384,18 @@ fn try_transcribe_voxtral_mistralrs(
         transcript_text: Some(result.transcript_text),
         translated_text: result.translated_text,
         target_language: result.target_language,
-        translation_engine: Some("voxtral-mistralrs".to_string()),
+        translation_engine: Some("voxtral-llamacpp".to_string()),
         language: options.language.clone(),
         chunks: vec![serde_json::json!({
-            "backend": "voxtral-mistralrs",
+            "backend": "voxtral-llamacpp",
             "model_id": result.model_id,
-            "url": result.url,
+            "model_path": result.model_path,
+            "mmproj_path": result.mmproj_path,
+            "n_gpu_layers": result.n_gpu_layers,
             "sample_rate": audio.sample_rate,
             "duration_seconds": audio.duration_seconds,
         })],
-        runtime_backend: Some(RuntimeBackendKind::VoxtralMistralRs),
+        runtime_backend: Some(RuntimeBackendKind::VoxtralLlamaCpp),
     }))
 }
 

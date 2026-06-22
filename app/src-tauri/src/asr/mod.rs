@@ -13,7 +13,7 @@ pub mod audio;
 pub mod backend;
 pub mod hybrid;
 pub mod qwen_candle;
-pub mod voxtral_mistralrs;
+pub mod voxtral_llamacpp;
 pub mod voxtral_onnx;
 
 #[derive(Debug, Error)]
