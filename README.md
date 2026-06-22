@@ -140,10 +140,10 @@ npm run build:windows:exe
 app\dist\AMCP.exe
 ```
 
-`AMCP.exe` は引数なしではTauriデスクトップアプリとして起動します。HTTP serverモードで起動する場合は `--server` を付けます。
+`AMCP.exe` は引数なしではTauriデスクトップアプリとして起動します。HTTP serverモードで起動する場合は `--server` を付けます。serverモードは既定で `0.0.0.0` に待ち受けるため、同一ネットワーク上の別端末からも接続できます。
 
 ```powershell
-.\dist\AMCP.exe --server --host 0.0.0.0 --port 8000
+.\dist\AMCP.exe --server --port 8000
 ```
 
 別PowerShellから起動確認する場合:
@@ -153,6 +153,12 @@ Invoke-RestMethod http://127.0.0.1:8000/api/status
 ```
 
 `service` が `amcp-rust-backend` で返れば、serverモードで起動できています。
+
+別端末から接続できない場合は、起動ログに表示されるLAN IPのURLを使い、Windows Defender FirewallでAMCP.exeまたはTCP 8000番の受信通信を許可してください。
+
+```powershell
+New-NetFirewallRule -DisplayName "AMCP Rust Server 8000" -Direction Inbound -Program (Resolve-Path .\dist\AMCP.exe) -Action Allow -Protocol TCP -LocalPort 8000 -Profile Private
+```
 
 ## リアルタイム利用のための推奨設定（日本語）
 

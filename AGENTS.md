@@ -100,16 +100,22 @@ $env:AMCP_VOXTRAL_PATCHED_LLAMA_BIN_DIR="$patchedBuild\bin"
 npm run build:windows:exe
 ```
 
-成果物は `app\dist\AMCP.exe`。serverモードは起動用PowerShellで以下を実行して確認する。
+成果物は `app\dist\AMCP.exe`。serverモードは既定で `0.0.0.0` に待ち受ける。起動用PowerShellで以下を実行して確認する。
 
 ```powershell
-.\dist\AMCP.exe --server --host 0.0.0.0 --port 8000
+.\dist\AMCP.exe --server --port 8000
 ```
 
 別PowerShellから以下を実行し、`service=amcp-rust-backend` が返れば成功。検証後は起動したプロセスを停止すること。
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/api/status
+```
+
+リモート端末から接続できない場合は、起動ログに表示されるLAN IPのURLとWindows Defender Firewallの受信許可を確認する。管理者PowerShellで許可する例:
+
+```powershell
+New-NetFirewallRule -DisplayName "AMCP Rust Server 8000" -Direction Inbound -Program (Resolve-Path .\dist\AMCP.exe) -Action Allow -Protocol TCP -LocalPort 8000 -Profile Private
 ```
 
 ## アーキテクチャ

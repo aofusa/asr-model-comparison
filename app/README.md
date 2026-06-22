@@ -94,10 +94,10 @@ cd app
 npm run server:local
 ```
 
-既定では `http://127.0.0.1:8000` で起動します。host、port、アクセラレータを指定したい場合は直接Cargoコマンドを使います。
+既定ではリモート接続できるように `http://0.0.0.0:8000` で起動します。ローカルPCからは `http://127.0.0.1:8000`、同一ネットワーク上の別端末からは起動ログに表示されるLAN IPのURLでアクセスします。ローカル専用にしたい場合は `--host 127.0.0.1` を明示してください。
 
 ```powershell
-cargo run --manifest-path src-tauri/Cargo.toml --bin amcp-server -- server --host 0.0.0.0 --port 8000 --accelerator auto
+cargo run --manifest-path src-tauri/Cargo.toml --bin amcp-server -- server --port 8000 --accelerator auto
 ```
 
 アクセラレータ指定:
@@ -281,16 +281,22 @@ Get-FileHash .\dist\AMCP.exe, .\src-tauri\target\release\amcp-desktop.exe -Algor
 この `AMCP.exe` はフロントエンド資産とRust APIサーバーを同梱した単一の実行ファイルです。実行時はアプリ内でRust APIサーバーを `127.0.0.1:8765` に起動し、Tauri WebViewから接続します。
 必ず `npm run build:windows:exe` または `npm run build` のようにTauri CLI経由でビルドしてください。`cargo build --bin amcp-desktop` で直接作ったexeは、Tauriの本番Webアセット埋め込みが行われず、開発用の `localhost:5173` に接続しようとします。
 
-同じ `AMCP.exe` は、明示的に `--server` を付けた場合だけHTTP serverモードで起動します。外部端末から接続できるようにする場合は `--host 0.0.0.0` を指定します。
+同じ `AMCP.exe` は、明示的に `--server` を付けた場合だけHTTP serverモードで起動します。serverモードの既定hostは `0.0.0.0` なので、同一ネットワーク上の別端末からも接続できます。ローカル専用にしたい場合は `--host 127.0.0.1` を指定してください。
 
 ```powershell
-.\dist\AMCP.exe --server --host 0.0.0.0 --port 8000
+.\dist\AMCP.exe --server --port 8000
 ```
 
 起動確認は別PowerShellから以下のように行えます。
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/api/status
+```
+
+別端末から接続できない場合は、サーバ起動ログに表示されるLAN IPのURLを使っているか、Windows Defender FirewallでAMCPの受信通信が許可されているかを確認してください。管理者PowerShellでは以下のようにPrivateネットワーク向けに許可できます。
+
+```powershell
+New-NetFirewallRule -DisplayName "AMCP Rust Server 8000" -Direction Inbound -Program (Resolve-Path .\dist\AMCP.exe) -Action Allow -Protocol TCP -LocalPort 8000 -Profile Private
 ```
 
 引数なしでダブルクリックした場合は、通常のTauriデスクトップアプリとして起動します。

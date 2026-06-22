@@ -64,7 +64,7 @@ where
 
 #[derive(Debug, Clone, Parser)]
 pub struct ServerArgs {
-    #[arg(long, default_value = "127.0.0.1")]
+    #[arg(long, default_value = "0.0.0.0")]
     pub host: IpAddr,
     #[arg(long, default_value_t = 8000)]
     pub port: u16,
@@ -140,6 +140,19 @@ mod tests {
 
         match cli.command {
             Some(Command::Server(server_args)) => assert_eq!(server_args.port, 8787),
+            _ => panic!("expected server command"),
+        }
+    }
+
+    #[test]
+    fn server_mode_defaults_to_all_interfaces() {
+        let args = normalize_cli_args([OsString::from("AMCP.exe"), OsString::from("--server")]);
+        let cli = Cli::parse_from(args);
+
+        match cli.command {
+            Some(Command::Server(server_args)) => {
+                assert_eq!(server_args.host, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+            }
             _ => panic!("expected server command"),
         }
     }
