@@ -17,7 +17,7 @@
 | 4 | テスト | 完了 | 現在実装済みのテストを確認し、意味のあるテストとして正常に成功するよう修正する。 | pytest/Playwrightで今回機能の契約テストを追加し、既存WebSocketテストを新プロトコルへ追従。 |
 | 5 | 機能 | 完了 | 入力元音声の選択機能。現在のマイクに加えて、スピーカーやイヤホンから流れる音、特定ウィンドウから聞こえる音を選択できるようにする。 | `getUserMedia` / `getDisplayMedia` による選択 UI と WebSocket `audio_source` メタデータを追加。特定ウィンドウ/アプリ音声はブラウザ共有ピッカーとOSの対応範囲に依存。 |
 | 6 | 整理 | 完了 | ディレクトリ構成を整理する。旧ソースコード側の `docs` を親ディレクトリの `docs` に移動し、AI生成ドキュメントを `docs/artifact` にまとめ、gitignoreで除外する。 | 仕様とバックログは `docs/` に残し、リアルタイム利用ガイドは README に統合済み。AI生成物は `docs/artifact` へ退避し、Git管理外にした。 |
-| 7 | 機能 | 進行中 | Rust/Tauriプロジェクトを作成し、Pythonバックエンドと既存フロントエンドを移植する。serverモード、host/port指定、CPU/GPU選択と安全なフォールバックを実装する。 | `app/`にRust/Tauri骨格、serverモード、API/WS互換ルート、アクセラレータ選択、Tauri内API接続、Android/iOSビルド導線、Rust多形式音声前処理/無音判定、Whisper実推論feature/自動ダウンロード、Windows優先の実機アクセラレータ検出、Qwen/Voxtralランタイム境界、Qwen Candle実推論、Voxtral ORT DirectML/CUDA分割モデル実推論、Qwen/Voxtral model-native翻訳、artifact診断、Whisperバイト単位ダウンロード進捗、Qwen/Voxtralの事前ロード進捗、Windows検証CLI/diagnostics-only、単体/E2Eテストを追加。外部ネイティブランナーが独自に出す内部パーセンテージの取り込みと実モデル配置後の測定は継続課題。仕様は `docs/backlog/features/backlog-7-rust-tauri-rewrite.md` に記載。 |
+| 7 | 機能 | 進行中 | Rust/Tauriプロジェクトを作成し、Pythonバックエンドと既存フロントエンドを移植する。serverモード、host/port指定、CPU/GPU選択と安全なフォールバックを実装する。 | `app/`にRust/Tauri骨格、serverモード、API/WS互換ルート、アクセラレータ選択、Tauri内API接続、AMCP.exe配布ビルド、Android/iOSビルド導線、Rust多形式音声前処理/無音判定、Whisper実推論feature/自動ダウンロード、Windows優先の実機アクセラレータ検出、Qwen Candle実推論、Voxtral Realtime patched llama.cpp統一実装、Qwen/Voxtral model-native翻訳、artifact診断、Whisperバイト単位ダウンロード進捗、モデル準備ログ、Windows検証CLI/diagnostics-only、単体/E2Eテストを追加。配布用AMCP.exeの実推論feature同梱、ネイティブランナー内部ロード詳細進捗、モバイル実機検証は継続課題。仕様は `docs/backlog/features/backlog-7-rust-tauri-rewrite.md` に記載。 |
 | 8 | 整理 | 完了 | 内側ディレクトリにあったプロジェクト本体をリポジトリルートへ移動する。 | README/LICENSE/.gitignore の重複を解消し、公開時に自然なルート構成へ整理。 |
 | 9 | 機能 | 完了 | 音声認識精度を向上する。 | Qwen3/Voxtral の原文文脈継続を翻訳文から分離し、モデル別品質パラメータとチャンク処理契約を維持。仕様は `docs/backlog/features/backlog-9-13-asr-translation-ui.md` に記載。 |
 | 10 | 機能 | 完了 | 翻訳有効化時、翻訳前と翻訳後の両方を出力する。 | WebSocket/REST に `transcript_text` と `translated_text` を追加し、UI で Heard Text と Translation を分離表示。 |
@@ -25,4 +25,7 @@
 | 12 | ドキュメント | 完了 | README.md にフロントエンド画面の使い方と、このアプリケーションの機能説明をユーザ向けに作成する。 | 画面の使い方、入力元選択、翻訳有無、結果確認、履歴確認を非エンジニア向けに追記。 |
 | 13 | 機能 | 完了 | フロントエンド画面について、機能はそのままにエンジニアの知識がないユーザでも使いやすいように整理しデザインを修正する。 | 主要ワークフロー、段階的セクション、高度設定、原文/翻訳結果カードを追加し、E2E で機能漏れを確認。 |
 | 14 | 機能 | 完了 | 認識文と翻訳文のライブ表示を直近セグメント中心にし、過去セグメントを履歴へ送って視認性を改善する。 | ASR 文脈用の累積テキストは維持しつつ、ライブ欄は最新セグメントのみ表示。旧セグメントは `Transcript History` へ移動するE2Eを追加。 |
+| 15 | 機能 | 未着手 | 配布用 `AMCP.exe` に実推論featureを同梱し、Whisper/Qwen3-ASR/Voxtralをplaceholderではなく実ランタイムで起動できるビルド構成を整備する。 | 現在の通常 `npm run build:windows:exe` 成果物はfeatureなしビルドのため、サンプル音声は前処理とAPI契約確認は可能だが `runtime_backend=placeholder` になる。実推論配布にはfeature選択、DLL同梱、モデル配置、サイズ/起動時間検証が必要。 |
+| 16 | 機能 | 未着手 | Qwen/Voxtralのネイティブランナー内部ロード詳細進捗をUI/ログへ反映する。 | 現在はRust側のフェーズ進捗とログを出す。外部/ネイティブ実装が独自に出す細かなロード率や内部ログの取り込みは未実装。 |
+| 17 | 検証 | 未着手 | Android/iOS/macOS/Linuxを含むクロスプラットフォーム実機検証を行う。 | モバイル/クロスプラットフォームのビルド導線と優先アクセラレータ設計はあるが、実機でのマイク/共有音声取得、モデル配置、バイナリサイズ、権限設定、GPU/専用アクセラレータ動作確認が必要。 |
 
